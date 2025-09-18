@@ -5,7 +5,7 @@ pandas
 numpy
 
 # Technical analysis
-ta
+pandas_ta
 talib-binary   # use this if normal TA-Lib fails to install on Linux
 
 # Plotting / visualization
@@ -20,3 +20,6 @@ pytz
 
 # HTTP requests
 requests
+
+# HTTP delta-rest-client
+delta-rest-client

@@ -7,7 +7,6 @@ import time as t
 from datetime import datetime, timedelta
 from delta_rest_client import DeltaRestClient, OrderType
 import requests
-from  utility.common_utility import supertrend
 
 # ---------------------------------------
 # SETTINGS
