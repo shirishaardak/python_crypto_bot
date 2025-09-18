@@ -6,7 +6,6 @@ numpy
 
 # Technical analysis
 pandas_ta
-talib-binary   # use this if normal TA-Lib fails to install on Linux
 
 # Plotting / visualization
 matplotlib
