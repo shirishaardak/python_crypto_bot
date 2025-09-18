@@ -1,0 +1,22 @@
+# requirements.txt
+
+# Core data libraries
+pandas
+numpy
+
+# Technical analysis
+ta
+talib-binary   # use this if normal TA-Lib fails to install on Linux
+
+# Plotting / visualization
+matplotlib
+
+# Exchange API wrapper
+ccxt
+
+# Date/time handling
+python-dateutil
+pytz
+
+# HTTP requests
+requests
