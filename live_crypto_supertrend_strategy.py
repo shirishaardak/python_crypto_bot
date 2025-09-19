@@ -79,14 +79,14 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
     # Supertrend
-    df['EMA_21'] = ta.ema(df['HA_close'], length=21)
-    df['EMA_21_UP'] =df['EMA_21'] + 10
-    df['EMA_21_DN'] = df['EMA_21'] - 10
+    df['EMA_21'] = ta.ema(df['HA_close'], length=9)
+    df['EMA_21_UP'] =df['EMA_21'] + 20
+    df['EMA_21_DN'] = df['EMA_21'] - 20
 
     # Trade signal column
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'].shift(1) > df['HA_open']), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'].shift(1) < df['HA_open']), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21_UP']), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21_DN']), 'single'] = -1
 
     # Save CSV for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -143,18 +143,26 @@ while True:
                         print(f"Placing trailing stop loss for BUY on {symbol}")
                         trailing_stop_order_buy = client.place_stop_order(
                             product_id=product_id,
-                            size=10,
+                            size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=STOPLOSS_POINTS,
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21
                         )
 
-                elif renko_param[symbol]['option'] == 1:
+                elif renko_param[symbol]['option'] == 1 and price < EMA_21:
+                    renko_param[symbol]['option'] = 0
+                    buy_order_place = client.place_order(
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='sell',
+                        size=ORDER_QTY,
+                    ) 
                     get_order = client.get_live_orders()
-                    if not get_order:
-                        renko_param[symbol]['option'] = 0                        
-                        print(f"Buy exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
+                    for order in get_order:
+                        if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_buy['id']:
+                            client.cancel_order(product_id=product_id, order_id=trailing_stop_order_buy['id'])
+                            print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
+                    print(f"Buy exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
 
                     
                     
@@ -177,16 +185,24 @@ while True:
                             product_id=product_id,
                             size=10,
                             side='buy',
-                            order_type=OrderType.MARKET,                            
-                            trail_amount=STOPLOSS_POINTS,
-                            isTrailingStopLoss=True,
+                            order_type=OrderType.MARKET,  
+                            stop_price=EMA_21
                         )
 
-                elif renko_param[symbol]['option'] == 2:  
-                    get_order = client.get_live_orders()                   
-                    if not get_order:
-                        renko_param[symbol]['option'] = 0                            
-                        print(f"Sell exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
+                elif renko_param[symbol]['option'] == 2 and price > EMA_21:
+                    renko_param[symbol]['option'] = 0       
+                    sell_order_place = client.place_order(
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='buy',
+                        size=ORDER_QTY,
+                    )  
+                    get_order = client.get_live_orders()
+                    for order in get_order:
+                        if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_sell['id']:
+                            client.cancel_order(product_id=product_id, order_id=trailing_stop_order_sell['id'])
+                            print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
+                    print(f"Sell exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
 
             # Save status & orders
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
