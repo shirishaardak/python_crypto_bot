@@ -139,15 +139,15 @@ while True:
                     )
                    
                    
-                    if buy_order_place.get('state') == 'closed':
-                        print(f"Placing trailing stop loss for BUY on {symbol}")
-                        trailing_stop_order_buy = client.place_stop_order(
-                            product_id=product_id,
-                            size=ORDER_QTY,
-                            side='sell',
-                            order_type=OrderType.MARKET,
-                            stop_price=EMA_21
-                        )
+                    # if buy_order_place.get('state') == 'closed':
+                    #     print(f"Placing trailing stop loss for BUY on {symbol}")
+                    #     trailing_stop_order_buy = client.place_stop_order(
+                    #         product_id=product_id,
+                    #         size=ORDER_QTY,
+                    #         side='sell',
+                    #         order_type=OrderType.MARKET,
+                    #         stop_price=EMA_21
+                    #     )
 
                 elif renko_param[symbol]['option'] == 1 and price < EMA_21:
                     renko_param[symbol]['option'] = 0
@@ -157,11 +157,11 @@ while True:
                         side='sell',
                         size=ORDER_QTY,
                     ) 
-                    get_order = client.get_live_orders()
-                    for order in get_order:
-                        if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_buy['id']:
-                            client.cancel_order(product_id=product_id, order_id=trailing_stop_order_buy['id'])
-                            print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
+                    # get_order = client.get_live_orders()
+                    # # for order in get_order:
+                    # #     if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_buy['id']:
+                    # #         client.cancel_order(product_id=product_id, order_id=trailing_stop_order_buy['id'])
+                    # #         print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
                     print(f"Buy exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
 
                     
@@ -179,15 +179,15 @@ while True:
                     )
                              
                     
-                    if sell_order_place.get('state') == 'closed':
-                        print(f"Placing trailing stop loss for SELL on {symbol}")
-                        trailing_stop_order_sell = client.place_stop_order(
-                            product_id=product_id,
-                            size=10,
-                            side='buy',
-                            order_type=OrderType.MARKET,  
-                            stop_price=EMA_21
-                        )
+                    # if sell_order_place.get('state') == 'closed':
+                    #     print(f"Placing trailing stop loss for SELL on {symbol}")
+                    #     trailing_stop_order_sell = client.place_stop_order(
+                    #         product_id=product_id,
+                    #         size=10,
+                    #         side='buy',
+                    #         order_type=OrderType.MARKET,  
+                    #         stop_price=EMA_21
+                    #     )
 
                 elif renko_param[symbol]['option'] == 2 and price > EMA_21:
                     renko_param[symbol]['option'] = 0       
@@ -197,11 +197,11 @@ while True:
                         side='buy',
                         size=ORDER_QTY,
                     )  
-                    get_order = client.get_live_orders()
-                    for order in get_order:
-                        if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_sell['id']:
-                            client.cancel_order(product_id=product_id, order_id=trailing_stop_order_sell['id'])
-                            print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
+                    # get_order = client.get_live_orders()
+                    # for order in get_order:
+                    #     if order['state'] == 'untriggered' and order['id'] == trailing_stop_order_sell['id']:
+                    #         client.cancel_order(product_id=product_id, order_id=trailing_stop_order_sell['id'])
+                    #         print(f"Untriggered condition met for {symbol}  Cancelling trailing stop loss order...")                     
                     print(f"Sell exit condition met for {symbol} at price {price}. Cancelling trailing stop loss order...")
 
             # Save status & orders
