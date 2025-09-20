@@ -12,13 +12,6 @@ from delta_rest_client import DeltaRestClient, OrderType
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
-
-client = DeltaRestClient(
-    base_url='https://api.india.delta.exchange',  # Use the appropriate base URL
-    api_key='6979WTZlN4vOUf2hOtAJ35A3t6GZc7',
-    api_secret='89Pv4SCxEb5YrX2lbMBNhJPDKFJKHDFqJtXfZ6BKu18M0kMdoV4r8pT8RJsF'
-)
-# ---------------------------------------
 # Get product IDs (futures only)
 # ---------------------------------------
 def get_futures_product_ids(symbols):
