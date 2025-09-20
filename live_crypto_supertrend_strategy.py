@@ -95,7 +95,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df['EMA_21'] = ta.ema(df['HA_close'], length=21)
 
     # Fixed offsets
-    offset = 300 if symbol == "BTCUSD" else 20
+    offset = 200 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
