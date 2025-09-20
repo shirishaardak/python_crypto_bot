@@ -22,7 +22,7 @@ client = DeltaRestClient(
 # Get product IDs (futures only)
 # ---------------------------------------
 def get_futures_product_ids(symbols):
-    url = "https://api.delta.exchange/v2/products"
+    url = "https://api.india.delta.exchange/v2/products"
     r = requests.get(url)
     data = r.json()
 
