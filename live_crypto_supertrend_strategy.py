@@ -12,6 +12,12 @@ from delta_rest_client import DeltaRestClient, OrderType
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
+
+client = DeltaRestClient(
+    base_url='https://api.india.delta.exchange',  # Use the appropriate base URL
+    api_key='6979WTZlN4vOUf2hOtAJ35A3t6GZc7',
+    api_secret='89Pv4SCxEb5YrX2lbMBNhJPDKFJKHDFqJtXfZ6BKu18M0kMdoV4r8pT8RJsF'
+)
 # Get product IDs (futures only)
 # ---------------------------------------
 def get_futures_product_ids(symbols):
@@ -48,7 +54,7 @@ renko_param = {
 # ---------------------------------------
 # Candle Fetch
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
