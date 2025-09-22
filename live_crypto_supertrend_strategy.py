@@ -91,7 +91,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
     # EMA(21)
-    df['EMA_21'] = ta.ema(df['HA_close'], length=21)
+    df['EMA_21'] = ta.ema(df['HA_close'], length=9)
 
     # Fixed offsets
     offset = 200 if symbol == "BTCUSD" else 20
@@ -101,7 +101,9 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     # Trade signals
     df['single'] = 0
     df.loc[df['HA_close'] > df['EMA_21_UP'], 'single'] = 1
+    df.loc[df['HA_close'] < df['EMA_21'], 'single'] = 2
     df.loc[df['HA_close'] < df['EMA_21_DN'], 'single'] = -1
+    df.loc[df['HA_close'] > df['EMA_21'], 'single'] = -2
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -157,7 +159,7 @@ while True:
                         size=ORDER_QTY
                     )
 
-                elif option == 1 and price < EMA_21:
+                elif option == 1 and single == 2:
                     print(f"Exit BUY for {symbol} at {price}")
                     renko_param[symbol]['option'] = 0
                     client.place_order(
@@ -178,7 +180,7 @@ while True:
                         size=ORDER_QTY
                     )
 
-                elif option == 2 and price > EMA_21:
+                elif option == 2 and single == -2:
                     print(f"Exit SELL for {symbol} at {price}")
                     renko_param[symbol]['option'] = 0
                     client.place_order(
