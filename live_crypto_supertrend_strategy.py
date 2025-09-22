@@ -101,9 +101,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     # Trade signals
     df['single'] = 0
     df.loc[df['HA_close'] > df['EMA_21_UP'], 'single'] = 1
-    df.loc[df['HA_close'] < df['EMA_21'], 'single'] = 2
     df.loc[df['HA_close'] < df['EMA_21_DN'], 'single'] = -1
-    df.loc[df['HA_close'] > df['EMA_21'], 'single'] = -2
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -159,7 +157,7 @@ while True:
                         size=ORDER_QTY
                     )
 
-                elif option == 1 and single == 2:
+                elif option == 1 and price < EMA_21:
                     print(f"Exit BUY for {symbol} at {price}")
                     renko_param[symbol]['option'] = 0
                     client.place_order(
@@ -180,7 +178,7 @@ while True:
                         size=ORDER_QTY
                     )
 
-                elif option == 2 and single == -2:
+                elif option == 2 and price > EMA_21:
                     print(f"Exit SELL for {symbol} at {price}")
                     renko_param[symbol]['option'] = 0
                     client.place_order(
