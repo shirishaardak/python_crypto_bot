@@ -82,8 +82,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     df['max_high'] = df.iloc[max_idx]['HA_high']
     df['max_low'] = df.iloc[min_idx]['HA_low']
-    df['max_high'].fillna(method='ffill', inplace=True)
-    df['max_low'].fillna(method='ffill', inplace=True)
+    df[['max_low', 'min_high']] = df[['max_low', 'min_high']].ffill()
+
 
     # Initialize Trendline column with NaN
     df['Trendline'] = np.nan
