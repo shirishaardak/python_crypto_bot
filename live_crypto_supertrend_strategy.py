@@ -123,7 +123,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     # Trade signals
     df['single'] = 0
     df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_UP']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
+    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -291,7 +291,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21 -price,
+                            trail_amount=EMA_21 - price,
                             isTrailingStopLoss=True
                         )
                         
