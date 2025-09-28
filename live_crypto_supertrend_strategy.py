@@ -13,7 +13,7 @@ load_dotenv()
 # ---------------------------------------
 # SETTINGS
 # ---------------------------------------
-symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
+symbols = ["SOLUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
 # Use environment variables for security
@@ -116,7 +116,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df['EMA_21'] = ta.ema(df['HA_close'], length=9)
 
     # Fixed offsets
-    offset = 300 if symbol == "BTCUSD" else 30
+    offset = 0.8 if symbol == "SOLUSD" else 30
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
