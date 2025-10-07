@@ -103,7 +103,7 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
-    df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -116,7 +116,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
     # Fixed offsets
-    offset = 300 if symbol == "BTCUSD" else 30
+    offset = 200 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
