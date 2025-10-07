@@ -261,7 +261,7 @@ while True:
                         renko_param[symbol]['option'] = 1
                         renko_param[symbol]['main_order_id'] = buy_order.get('id')
 
-                        trail_amount = 200 if symbol == "BTCUSD" else 20
+                        trail_amount = 300 if symbol == "BTCUSD" else 30
                         print(f"Placing trailing stop loss for BUY on {symbol} (trail_amount={trail_amount})")
 
                         trailing_stop = place_trailing_stop_order_with_error_handling(
@@ -317,7 +317,7 @@ while True:
                         renko_param[symbol]['option'] = 2
                         renko_param[symbol]['main_order_id'] = sell_order.get('id')
 
-                        trail_amount = 200 if symbol == "BTCUSD" else 20
+                        trail_amount = 300 if symbol == "BTCUSD" else 30
                         print(f"Placing trailing stop loss for SELL on {symbol} (trail_amount={trail_amount})")
 
                         trailing_stop = place_trailing_stop_order_with_error_handling(
