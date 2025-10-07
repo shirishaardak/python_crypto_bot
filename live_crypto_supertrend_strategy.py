@@ -7,16 +7,16 @@ from datetime import datetime, timedelta
 from delta_rest_client import DeltaRestClient, OrderType
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# ---------------------------------------------------
+# LOAD ENVIRONMENT VARIABLES
+# ---------------------------------------------------
 load_dotenv()
 
-# ---------------------------------------
 # SETTINGS
-# ---------------------------------------
-symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
+symbols = ["BTCUSD", "ETHUSD"]   # trading pairs
 ORDER_QTY = 10
 
-# Use environment variables for security
+# API keys (securely loaded)
 api_key = os.getenv('DELTA_API_KEY')
 api_secret = os.getenv('DELTA_API_SECRET')
 
@@ -26,9 +26,9 @@ client = DeltaRestClient(
     api_secret=api_secret
 )
 
-# ---------------------------------------
-# Get product IDs (futures only)
-# ---------------------------------------
+# ---------------------------------------------------
+# GET FUTURES PRODUCT IDS
+# ---------------------------------------------------
 def get_futures_product_ids(symbols):
     url = "https://api.india.delta.exchange/v2/products"
     try:
@@ -51,7 +51,9 @@ if not symbols_map:
     raise ValueError("Could not fetch futures product IDs from Delta API")
 print("Loaded futures product IDs:", symbols_map)
 
-# Status dictionary - Track stop order IDs and main order IDs
+# ---------------------------------------------------
+# INITIALIZE PARAMETERS
+# ---------------------------------------------------
 renko_param = {
     symbol: {
         'Date': '',
@@ -61,15 +63,15 @@ renko_param = {
         'EMA_21': None,
         'EMA_21_UP': None,
         'EMA_21_DN': None,
-        'stop_order_id': None,  # Track stop order IDs
-        'main_order_id': None   # Track main order IDs
+        'stop_order_id': None,
+        'main_order_id': None
     }
     for symbol in symbols_map
 }
 
-# ---------------------------------------
-# Candle Fetch
-# ---------------------------------------
+# ---------------------------------------------------
+# FETCH CANDLE DATA
+# ---------------------------------------------------
 def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
@@ -99,9 +101,9 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
         print(f"Error fetching candles for {symbol}: {e}")
         return None
 
-# ---------------------------------------
-# Process symbol
-# ---------------------------------------
+# ---------------------------------------------------
+# PROCESS SYMBOL (build Heikin-Ashi and signals)
+# ---------------------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
@@ -109,23 +111,22 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     df = df.sort_index()
 
-    # Heikin-Ashi
+    # Heikin-Ashi transformation
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
-    # EMA(21) - Note: Using length=5 as in original
+    # EMA(21) but using length=5 as per original code
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
-    # Fixed offsets
+    # Offsets for upper/lower bands
     offset = 200 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
-    # Trade signals
+    # Generate trade signals
     df['single'] = 0
     df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
     df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
 
-    # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
     df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
 
@@ -146,21 +147,19 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     return renko_param
 
-# ---------------------------------------
-# Helper functions for order management
-# ---------------------------------------
+# ---------------------------------------------------
+# ORDER MANAGEMENT HELPERS
+# ---------------------------------------------------
 def place_order_with_error_handling(client, **kwargs):
     try:
-        response = client.place_order(**kwargs)
-        return response
+        return client.place_order(**kwargs)
     except Exception as e:
         print(f"Error placing order: {e}")
         return None
 
 def place_trailing_stop_order_with_error_handling(client, **kwargs):
     try:
-        response = client.place_stop_order(**kwargs)
-        return response
+        return client.place_stop_order(**kwargs)
     except Exception as e:
         print(f"Error placing trailing stop order: {e}")
         return None
@@ -173,13 +172,12 @@ def cancel_order_with_error_handling(client, product_id, order_id):
     except Exception as e:
         print(f"Error cancelling order {order_id}: {e}")
         return None
-    
+
 def get_history_orders_with_error_handling(client, product_id):
     try:
         query = { "product_id": product_id }
         response = client.order_history(query, page_size=10)
         return response['result']
-    
     except Exception as e:
         print(f"Error getting order history: {e}")
         return []
@@ -187,70 +185,58 @@ def get_history_orders_with_error_handling(client, product_id):
 def get_live_orders_with_error_handling(client):
     try:
         return client.get_live_orders()
-    
     except Exception as e:
         print(f"Error getting live orders: {e}")
         return []
 
-# ---------------------------------------
-# Check if trailing stop was executed
-# ---------------------------------------
+# ---------------------------------------------------
+# CHECK TRAILING STOP STATUS
+# ---------------------------------------------------
 def check_trailing_stop_status(client, product_id, stop_order_id, symbol):
-    """
-    Check if trailing stop order still exists in live orders.
-    If not found, it was likely executed.
-    Returns: True if executed, False if still active
-    """
     try:
         get_orders = get_live_orders_with_error_handling(client)
-        
-        # Look for the stop order in live orders
+
+        # Check live orders
         for order in get_orders:
             if order['id'] == stop_order_id and order['state'] == 'pending':
                 print(f"Trailing stop still active for {symbol}")
                 return False
-        
-        # If not found in live orders, check order history to confirm execution
+
+        # Check order history if not found
         print(f"Trailing stop order {stop_order_id} not found in live orders for {symbol}")
         history_orders = get_history_orders_with_error_handling(client, product_id)
-        
+
         for hist_order in history_orders:
             if hist_order['id'] == stop_order_id:
-                if hist_order['state'] == 'closed':
-                    print(f"Confirmed: Trailing stop {stop_order_id} was executed for {symbol}")
-                    return True
-                elif hist_order['state'] == 'cancelled':
-                    print(f"Trailing stop {stop_order_id} was cancelled for {symbol}")
+                if hist_order['state'] in ('closed', 'cancelled'):
+                    print(f"Trailing stop {stop_order_id} executed/cancelled for {symbol}")
                     return True
                 break
-        
-        # If we reach here, the order status is unclear
+
         print(f"Warning: Could not determine status of trailing stop {stop_order_id} for {symbol}")
-        return True  # Assume executed to reset position
-        
+        return True  # assume executed
     except Exception as e:
         print(f"Error checking trailing stop status: {e}")
-        return True  # Assume executed to reset position
+        return True
 
-# ---------------------------------------
-# Main Loop
-# ---------------------------------------
+# ---------------------------------------------------
+# MAIN LOOP
+# ---------------------------------------------------
 print("Starting live strategy for BTCUSD + ETHUSD with trailing stops...")
 
 while True:
     try:
         now = datetime.now()
 
-        # Run every 5 minutes at second 10
         if now.minute % 5 == 0 and now.second == 10:
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running 5-minute cycle...")
 
-            # Process symbols
+            # Update all symbols
             for symbol in symbols_map:
                 print(f"Processing {symbol}...")
                 renko_param = process_symbol(symbol, renko_param)
 
-            # Trading logic
+            # TRADING LOGIC
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
                 EMA_21 = renko_param[symbol]['EMA_21']
@@ -259,11 +245,11 @@ while True:
                 single = renko_param[symbol]['single']
                 option = renko_param[symbol]['option']
 
-                # --- BUY SIGNAL ---
+                # BUY SIGNAL
                 if single == 1 and option == 0:
                     print(f"BUY signal for {symbol} at {price}")
-                    
-                    buy_order_place = place_order_with_error_handling(
+
+                    buy_order = place_order_with_error_handling(
                         client,
                         product_id=product_id,
                         order_type=OrderType.MARKET,
@@ -271,155 +257,124 @@ while True:
                         size=ORDER_QTY
                     )
 
-                    if buy_order_place and buy_order_place.get('state') == 'closed':
+                    if buy_order and buy_order.get('state') == 'closed':
                         renko_param[symbol]['option'] = 1
-                        renko_param[symbol]['main_order_id'] = buy_order_place.get('id')
-                        
-                        # Calculate trail amount based on your offset
-                        trail_amount = 300 if symbol == "BTCUSD" else 30
-                        
-                        print(f"Placing trailing stop loss for BUY on {symbol} with trail amount: {trail_amount}")
-                        trailing_stop_order_buy = place_trailing_stop_order_with_error_handling(
+                        renko_param[symbol]['main_order_id'] = buy_order.get('id')
+
+                        trail_amount = 200 if symbol == "BTCUSD" else 20
+                        print(f"Placing trailing stop loss for BUY on {symbol} (trail_amount={trail_amount})")
+
+                        trailing_stop = place_trailing_stop_order_with_error_handling(
                             client,
                             product_id=product_id,
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21_DN,
+                            trail_amount=trail_amount,
                             isTrailingStopLoss=True
                         )
-                        
-                        if trailing_stop_order_buy:
-                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_buy.get('id')
-                            print(f"Trailing stop order placed with ID: {trailing_stop_order_buy.get('id')}")
+
+                        if trailing_stop:
+                            renko_param[symbol]['stop_order_id'] = trailing_stop.get('id')
+                            print(f"Trailing stop order placed with ID: {trailing_stop.get('id')}")
                         else:
                             print(f"Failed to place trailing stop order for {symbol}")
 
-                # --- BUY POSITION MANAGEMENT ---
+                # BUY POSITION MANAGEMENT
                 elif option == 1:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    
-                    # Check if trailing stop was executed
+
                     if stop_order_id:
-                        stop_executed = check_trailing_stop_status(client, product_id, stop_order_id, symbol)
-                        
-                        if stop_executed:
+                        if check_trailing_stop_status(client, product_id, stop_order_id, symbol):
                             print(f"Trailing stop executed for BUY position on {symbol}")
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
-                    
-                    # Optional manual exit condition (you can remove this if you want only trailing stops)
+                            renko_param[symbol].update({'option': 0, 'stop_order_id': None, 'main_order_id': None})
                     elif price < EMA_21:
-                        print(f"Manual exit condition triggered for BUY position on {symbol}")
-                        
-                        if stop_order_id:
-                            cancel_order_with_error_handling(client, product_id, stop_order_id)
-                        
-                        buy_exit_order_place = place_order_with_error_handling(
+                        print(f"Manual exit triggered for BUY position on {symbol}")
+                        buy_exit = place_order_with_error_handling(
                             client,
                             product_id=product_id,
                             order_type=OrderType.MARKET,
                             side='sell',
                             size=ORDER_QTY
                         )
-                        
-                        if buy_exit_order_place:
-                            print(f"Manual exit executed for BUY position on {symbol}")
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
+                        if buy_exit:
+                            print(f"Manual exit executed for BUY on {symbol}")
+                            renko_param[symbol].update({'option': 0, 'stop_order_id': None, 'main_order_id': None})
 
-                # --- SELL SIGNAL ---
+                # SELL SIGNAL
                 if single == -1 and option == 0:
                     print(f"SELL signal for {symbol} at {price}")
-                    
-                    sell_order_place = place_order_with_error_handling(
+
+                    sell_order = place_order_with_error_handling(
                         client,
                         product_id=product_id,
                         order_type=OrderType.MARKET,
                         side='sell',
-                        size=ORDER_QTY,                        
+                        size=ORDER_QTY
                     )
-                    
-                    if sell_order_place and sell_order_place.get('state') == 'closed':
+
+                    if sell_order and sell_order.get('state') == 'closed':
                         renko_param[symbol]['option'] = 2
-                        renko_param[symbol]['main_order_id'] = sell_order_place.get('id')
-                        
-                        # Calculate trail amount based on your offset
-                        trail_amount = 300 if symbol == "BTCUSD" else 30
-                        
-                        print(f"Placing trailing stop loss for SELL on {symbol} with trail amount: {trail_amount}")
-                        trailing_stop_order_sell = place_trailing_stop_order_with_error_handling(
+                        renko_param[symbol]['main_order_id'] = sell_order.get('id')
+
+                        trail_amount = 200 if symbol == "BTCUSD" else 20
+                        print(f"Placing trailing stop loss for SELL on {symbol} (trail_amount={trail_amount})")
+
+                        trailing_stop = place_trailing_stop_order_with_error_handling(
                             client,
                             product_id=product_id,
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21_UP,
+                            trail_amount=trail_amount,
                             isTrailingStopLoss=True
                         )
-                        
-                        if trailing_stop_order_sell:
-                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_sell.get('id')
-                            print(f"Trailing stop order placed with ID: {trailing_stop_order_sell.get('id')}")
+
+                        if trailing_stop:
+                            renko_param[symbol]['stop_order_id'] = trailing_stop.get('id')
+                            print(f"Trailing stop order placed with ID: {trailing_stop.get('id')}")
                         else:
                             print(f"Failed to place trailing stop order for {symbol}")
 
-                # --- SELL POSITION MANAGEMENT ---
+                # SELL POSITION MANAGEMENT
                 elif option == 2:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    
-                    # Check if trailing stop was executed
+
                     if stop_order_id:
-                        stop_executed = check_trailing_stop_status(client, product_id, stop_order_id, symbol)
-                        
-                        if stop_executed:
+                        if check_trailing_stop_status(client, product_id, stop_order_id, symbol):
                             print(f"Trailing stop executed for SELL position on {symbol}")
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
-                    
-                    # Optional manual exit condition (you can remove this if you want only trailing stops)
+                            renko_param[symbol].update({'option': 0, 'stop_order_id': None, 'main_order_id': None})
                     elif price > EMA_21:
-                        print(f"Manual exit condition triggered for SELL position on {symbol}")
-                        
-                        if stop_order_id:
-                            cancel_order_with_error_handling(client, product_id, stop_order_id)
-                        
-                        sell_exit_order_place = place_order_with_error_handling(
+                        print(f"Manual exit triggered for SELL position on {symbol}")
+                        sell_exit = place_order_with_error_handling(
                             client,
                             product_id=product_id,
                             order_type=OrderType.MARKET,
                             side='buy',
                             size=ORDER_QTY
                         )
-                        
-                        if sell_exit_order_place:
-                            print(f"Manual exit executed for SELL position on {symbol}")
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
+                        if sell_exit:
+                            print(f"Manual exit executed for SELL on {symbol}")
+                            renko_param[symbol].update({'option': 0, 'stop_order_id': None, 'main_order_id': None})
 
-            # Show status
+            # STATUS SUMMARY
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
             print("\nCurrent Strategy Status:")
             print(df_status[['Date', 'close', 'option', 'single', 'stop_order_id']])
-
             print("Waiting for next 5-minute cycle...\n")
-            t.sleep(295)  # Sleep for 4 minutes 55 seconds
+
+            t.sleep(295)  # wait ~5 minutes
 
     except KeyboardInterrupt:
         print("\nShutting down gracefully...")
-        # Cancel any open stop orders before exiting
         for symbol in symbols_map:
             stop_order_id = renko_param[symbol]['stop_order_id']
             if stop_order_id:
                 print(f"Cancelling stop order {stop_order_id} for {symbol}")
                 cancel_order_with_error_handling(client, symbols_map[symbol], stop_order_id)
         break
-        
+
     except Exception as e:
         print(f"[ERROR] {type(e).__name__}: {e}")
-        t.sleep(30)  # Increased sleep time for 5-minute intervals
+        t.sleep(30)
         continue
