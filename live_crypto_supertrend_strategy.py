@@ -16,11 +16,6 @@ load_dotenv()
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
-TRAIL_AMOUNTS = {
-    "BTCUSD": 300,
-    "ETHUSD": 30
-}
-
 # Use environment variables for security
 api_key = os.getenv('DELTA_API_KEY')
 api_secret = os.getenv('DELTA_API_SECRET')
@@ -75,7 +70,7 @@ renko_param = {
 # ---------------------------------------
 # Candle Fetch
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -108,7 +103,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
-    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -121,7 +116,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
     # Fixed offsets
-    offset = 200 if symbol == "BTCUSD" else 20
+    offset = 300 if symbol == "BTCUSD" else 30
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
@@ -206,7 +201,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every minute at second 10
+        if now.second == 10:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -246,8 +241,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21_DN,
                         )
                         
                         if trailing_stop_order_buy:
@@ -334,8 +328,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21_UP,
                         )
                         
                         if trailing_stop_order_sell:
