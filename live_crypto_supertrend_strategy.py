@@ -241,7 +241,8 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            stop_price=EMA_21_DN,
+                            trail_amount=price- EMA_21_DN,
+                            isTrailingStopLoss=True
                         )
                         
                         if trailing_stop_order_buy:
@@ -328,7 +329,8 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            stop_price=EMA_21_UP,
+                            trail_amount=EMA_21_UP - price,
+                            isTrailingStopLoss=True
                         )
                         
                         if trailing_stop_order_sell:
