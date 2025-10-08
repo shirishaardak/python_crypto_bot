@@ -16,6 +16,11 @@ load_dotenv()
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
+TRAIL_AMOUNTS = {
+    "BTCUSD": 300,
+    "ETHUSD": 30
+}
+
 # Use environment variables for security
 api_key = os.getenv('DELTA_API_KEY')
 api_secret = os.getenv('DELTA_API_SECRET')
@@ -241,7 +246,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=price- EMA_21_DN,
+                            trail_amount=TRAIL_AMOUNTS[symbol],
                             isTrailingStopLoss=True
                         )
                         
@@ -329,7 +334,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21_UP - price,
+                            trail_amount=TRAIL_AMOUNTS[symbol],
                             isTrailingStopLoss=True
                         )
                         
