@@ -127,8 +127,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     # Trade signals
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -206,7 +206,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 5 == 0:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
