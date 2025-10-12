@@ -127,8 +127,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     # Trade signals
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
@@ -259,7 +259,7 @@ while True:
                 # --- BUY POSITION MANAGEMENT ---
                 elif option == 1:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id and price < EMA_21:
+                    if stop_order_id:
                         print(f"Stop loss condition triggered for BUY position on {symbol}")
                         
                         # Get live orders to check stop order status
@@ -272,11 +272,11 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = True
+                                    stop_order_found = False
                                 break
                         
                         # Handle different stop order states
-                        if stop_order_found:
+                        if stop_order_found and price < EMA_21:
                             cancel_result = cancel_order_with_error_handling(client, product_id, stop_order_id)
                             print(f"Cancelled pending stop order {stop_order_id} for {symbol}")
                             
@@ -347,7 +347,7 @@ while True:
                 # --- SELL POSITION MANAGEMENT ---
                 elif option == 2:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id and price > EMA_21:
+                    if stop_order_id:
                         print(f"Stop loss condition triggered for SELL position on {symbol}")
                         
                         # Get live orders to check stop order status
@@ -360,11 +360,11 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = True
+                                    stop_order_found = False
                                 break
                         
                         # Handle different stop order states
-                        if stop_order_found:
+                        if stop_order_found and price > EMA_21:
                             cancel_result = cancel_order_with_error_handling(client, product_id, stop_order_id)
                             print(f"Cancelled pending stop order {stop_order_id} for {symbol}")
                             
