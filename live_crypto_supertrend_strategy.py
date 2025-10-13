@@ -118,7 +118,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
     # EMA(21) - Note: Using length=9 as in original
-    df['EMA_21'] = ta.ema(df['HA_close'], length=5)
+    df['EMA_21'] = ta.ema(df['HA_close'], length=10)
 
     # Fixed offsets
     offset = 300 if symbol == "BTCUSD" else 30
@@ -206,7 +206,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 5 == 0:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -246,7 +246,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
+                            trail_amount= price - EMA_21_DN
                             isTrailingStopLoss=True
                         )
                         
@@ -334,7 +334,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
+                            trail_amount=EMA_21_UP - price
                             isTrailingStopLoss=True
                         )
                         
