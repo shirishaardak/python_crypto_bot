@@ -17,8 +17,8 @@ symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
 TRAIL_AMOUNTS = {
-    "BTCUSD": 300,
-    "ETHUSD": 30
+    "BTCUSD": 400,
+    "ETHUSD": 40
 }
 
 # Use environment variables for security
@@ -206,7 +206,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 30 == 0:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -246,7 +246,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount= price - EMA_21,
+                            trail_amount=TRAIL_AMOUNTS[symbol],
                             isTrailingStopLoss=True
                         )
                         
@@ -334,7 +334,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21 - price,
+                            trail_amount=TRAIL_AMOUNTS[symbol],
                             isTrailingStopLoss=True
                         )
                         
