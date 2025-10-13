@@ -75,7 +75,7 @@ renko_param = {
 # ---------------------------------------
 # Candle Fetch
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -108,7 +108,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
-    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -206,7 +206,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 5 == 0:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
