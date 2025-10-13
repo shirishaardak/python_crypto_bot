@@ -16,11 +16,6 @@ load_dotenv()
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
 
-TRAIL_AMOUNTS = {
-    "BTCUSD": 400,
-    "ETHUSD": 40
-}
-
 # Use environment variables for security
 api_key = os.getenv('DELTA_API_KEY')
 api_secret = os.getenv('DELTA_API_SECRET')
@@ -75,7 +70,7 @@ renko_param = {
 # ---------------------------------------
 # Candle Fetch
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -118,7 +113,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
     # EMA(21) - Note: Using length=9 as in original
-    df['EMA_21'] = ta.ema(df['HA_close'], length=10)
+    df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
     # Fixed offsets
     offset = 300 if symbol == "BTCUSD" else 30
@@ -206,7 +201,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 5 == 0:  # run every minute at second 10
+        if now.second == 10:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -246,8 +241,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21_DN,
                         )
                         
                         if trailing_stop_order_buy:
@@ -259,7 +253,7 @@ while True:
                 # --- BUY POSITION MANAGEMENT ---
                 elif option == 1:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id:
+                    if stop_order_id and price < EMA_21:
                         print(f"Stop loss condition triggered for BUY position on {symbol}")
                         
                         # Get live orders to check stop order status
@@ -272,11 +266,11 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = False
+                                    stop_order_found = True
                                 break
                         
                         # Handle different stop order states
-                        if stop_order_found and price < EMA_21:
+                        if stop_order_found:
                             cancel_result = cancel_order_with_error_handling(client, product_id, stop_order_id)
                             print(f"Cancelled pending stop order {stop_order_id} for {symbol}")
                             
@@ -334,8 +328,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=TRAIL_AMOUNTS[symbol],
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21_UP,
                         )
                         
                         if trailing_stop_order_sell:
@@ -347,7 +340,7 @@ while True:
                 # --- SELL POSITION MANAGEMENT ---
                 elif option == 2:
                     stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id:
+                    if stop_order_id and price > EMA_21:
                         print(f"Stop loss condition triggered for SELL position on {symbol}")
                         
                         # Get live orders to check stop order status
@@ -360,11 +353,11 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = False
+                                    stop_order_found = True
                                 break
                         
                         # Handle different stop order states
-                        if stop_order_found and price > EMA_21:
+                        if stop_order_found:
                             cancel_result = cancel_order_with_error_handling(client, product_id, stop_order_id)
                             print(f"Cancelled pending stop order {stop_order_id} for {symbol}")
                             
