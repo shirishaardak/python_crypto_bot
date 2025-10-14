@@ -201,7 +201,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 30 == 0:  # run every minute at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
