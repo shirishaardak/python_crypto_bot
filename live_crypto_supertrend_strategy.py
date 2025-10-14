@@ -70,7 +70,7 @@ renko_param = {
 # ---------------------------------------
 # Candle Fetch
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -103,7 +103,7 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
-    df = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -241,7 +241,8 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            stop_price=EMA_21_DN,
+                            trail_amount= price - EMA_21,
+                            isTrailingStopLoss=True
                         )
                         
                         if trailing_stop_order_buy:
@@ -266,7 +267,7 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = True
+                                    stop_order_found = False
                                 break
                         
                         # Handle different stop order states
@@ -327,8 +328,8 @@ while True:
                             product_id=product_id,
                             size=ORDER_QTY,
                             side='buy',
-                            order_type=OrderType.MARKET,
-                            stop_price=EMA_21_UP,
+                            trail_amount=EMA_21 - price,
+                            isTrailingStopLoss=True
                         )
                         
                         if trailing_stop_order_sell:
@@ -353,7 +354,7 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = True
+                                    stop_order_found = False
                                 break
                         
                         # Handle different stop order states
