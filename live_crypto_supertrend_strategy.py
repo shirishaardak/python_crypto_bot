@@ -122,8 +122,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
 
     # Trade signals
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_open'].shift(1)), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_UP']) & (df['HA_close'] < df['HA_open'].shift(1)), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_close'].shift(1)) & (df['HA_close'] > df['HA_open']), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21_UP']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']), 'single'] = -1
 
     # Save for debugging/backtest
     os.makedirs(ha_save_dir, exist_ok=True)
