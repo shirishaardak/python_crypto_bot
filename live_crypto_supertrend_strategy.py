@@ -103,7 +103,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
-    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=30, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -241,7 +241,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount= price - EMA_21,
+                            trail_amount= price - EMA_21_DN,
                             isTrailingStopLoss=True
                         )
                         
@@ -267,7 +267,7 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = False
+                                    stop_order_found = True
                                 break
                         
                         # Handle different stop order states
@@ -328,7 +328,7 @@ while True:
                             product_id=product_id,
                             size=ORDER_QTY,
                             side='buy',
-                            trail_amount=EMA_21 - price,
+                            trail_amount=EMA_21_UP - price,
                             isTrailingStopLoss=True
                         )
                         
@@ -354,7 +354,7 @@ while True:
                             if order['id'] == stop_order_id:
                                 stop_order_state = order['state']
                                 if order['state'] == 'pending':
-                                    stop_order_found = False
+                                    stop_order_found = True
                                 break
                         
                         # Handle different stop order states
