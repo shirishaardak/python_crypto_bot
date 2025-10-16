@@ -257,7 +257,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            stop_price=currrent_EMA_21
+                            stop_price=EMA_21
                         )
                         
                         if trailing_stop_order_buy:
@@ -270,9 +270,9 @@ while True:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
                         # Edit the stop order with new EMA_21 price
-                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, currrent_EMA_21)
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
                         if edit_result:
-                            print(f"Updated stop loss for BUY position on {symbol} to {currrent_EMA_21}")
+                            print(f"Updated stop loss for BUY position on {symbol} to {EMA_21}")
                         
                         # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
@@ -312,7 +312,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            stop_price=currrent_EMA_21
+                            stop_price=EMA_21
                         )
                         
                         if trailing_stop_order_sell:
@@ -325,9 +325,9 @@ while True:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
                         # Edit the stop order with new EMA_21 price
-                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, currrent_EMA_21)
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
                         if edit_result:
-                            print(f"Updated stop loss for SELL position on {symbol} to {currrent_EMA_21}")
+                            print(f"Updated stop loss for SELL position on {symbol} to {EMA_21}")
                         
                         # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
