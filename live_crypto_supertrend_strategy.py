@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------
-# SETT
+# SETTINGS
 # ---------------------------------------
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
 ORDER_QTY = 10
@@ -102,7 +102,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # ---------------------------------------
 # Process symbol
 # ---------------------------------------
-def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
+def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
     df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
@@ -112,7 +112,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/crypto"):
     # Heikin-Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
 
-    # EMA(21) - Note: Using length=9 as in original
+    # EMA(21) - Note: Using length=5 as in original
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
     # Fixed offsets
@@ -172,6 +172,20 @@ def cancel_order_with_error_handling(client, order_id, product_id):
     except Exception as e:
         print(f"Error cancelling order {order_id}: {e}")
         return None
+
+def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
+    try:
+        # Delta Exchange edit order endpoint
+        endpoint = f"/v2/orders/{order_id}"
+        payload = {
+            "product_id": product_id,
+            "stop_price": str(new_stop_price)  # Convert to string as API expects
+        }
+        response = client.request("PUT", endpoint, payload, auth=True)
+        return response
+    except Exception as e:
+        print(f"Error editing order {order_id}: {e}")
+        return None
     
 def get_history_orders_with_error_handling(client, product_id):
     try:
@@ -180,8 +194,9 @@ def get_history_orders_with_error_handling(client, product_id):
         return response['result']
     
     except Exception as e:
-        print(f"Error getting live orders: {e}")
+        print(f"Error getting order history: {e}")
         return []
+
 def get_live_orders_with_error_handling(client):
     try:
         return client.get_live_orders()
@@ -199,7 +214,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 30 == 0:  # run every minute at second 10
+        if now.second == 10 and datetime.now().minute % 15 == 0:  # run every 15 minutes at second 10
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -219,7 +234,6 @@ while True:
                 # --- BUY SIGNAL ---
                 if single == 1 and option == 0:
                     print(f"BUY signal for {symbol} at {price}")
-                    renko_param[symbol]['option'] = 1
                     
                     buy_order_place = place_order_with_error_handling(
                         client,
@@ -240,8 +254,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            trail_amount=price - EMA_21,
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21
                         )
                         
                         if trailing_stop_order_buy:
@@ -253,6 +266,12 @@ while True:
                 elif option == 1:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
+                        # Edit the stop order with new EMA_21 price
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
+                        if edit_result:
+                            print(f"Updated stop loss for BUY position on {symbol} to {EMA_21}")
+                        
+                        # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = False
                         
@@ -270,7 +289,6 @@ while True:
                 # --- SELL SIGNAL ---
                 if single == -1 and option == 0:
                     print(f"SELL signal for {symbol} at {price}")
-                    renko_param[symbol]['option'] = 1
                     
                     sell_order_place = place_order_with_error_handling(
                         client,
@@ -281,7 +299,7 @@ while True:
                     )
                     
                     if sell_order_place and sell_order_place.get('state') == 'closed':
-                        renko_param[symbol]['option'] = 2
+                        renko_param[symbol]['option'] = 2  # FIXED: Set to 2 for short position
                         renko_param[symbol]['main_order_id'] = sell_order_place.get('id')
                         
                         print(f"Placing trailing stop loss for SELL on {symbol}")
@@ -291,8 +309,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            trail_amount=EMA_21 -price,
-                            isTrailingStopLoss=True
+                            stop_price=EMA_21
                         )
                         
                         if trailing_stop_order_sell:
@@ -304,12 +321,17 @@ while True:
                 elif option == 2:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
+                        # Edit the stop order with new EMA_21 price
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
+                        if edit_result:
+                            print(f"Updated stop loss for SELL position on {symbol} to {EMA_21}")
+                        
+                        # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = False
                         
                         for order in get_orders:
                             if order['id'] == stop_order_id and order['state'] == 'closed':
-                                print(f"check the state {order['state']}")
                                 stop_triggered = True
                                 break
                         
