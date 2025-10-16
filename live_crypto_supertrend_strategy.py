@@ -133,7 +133,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         print(f"Not enough data for {symbol}")
         return renko_param
 
-    last_row = df.iloc[-2]  # last closed candle
+    last_row = df.iloc[-2] 
+    cur_row = df.iloc[-1]  # last closed candle
 
     renko_param[symbol].update({
         'Date': last_row.name,
@@ -142,6 +143,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         'EMA_21_UP': last_row['EMA_21_UP'],
         'EMA_21_DN': last_row['EMA_21_DN'],
         'EMA_21': last_row['EMA_21'],
+        'currrent_EMA_21':cur_row['EMA_21'],
     })
 
     return renko_param
@@ -226,6 +228,7 @@ while True:
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
                 EMA_21 = renko_param[symbol]['EMA_21']
+                currrent_EMA_21 = renko_param[symbol]['currrent_EMA_21']
                 EMA_21_UP = renko_param[symbol]['EMA_21_UP']
                 EMA_21_DN = renko_param[symbol]['EMA_21_DN']
                 single = renko_param[symbol]['single']
@@ -254,7 +257,7 @@ while True:
                             size=ORDER_QTY,
                             side='sell',
                             order_type=OrderType.MARKET,
-                            stop_price=EMA_21
+                            stop_price=currrent_EMA_21
                         )
                         
                         if trailing_stop_order_buy:
@@ -267,9 +270,9 @@ while True:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
                         # Edit the stop order with new EMA_21 price
-                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, currrent_EMA_21)
                         if edit_result:
-                            print(f"Updated stop loss for BUY position on {symbol} to {EMA_21}")
+                            print(f"Updated stop loss for BUY position on {symbol} to {currrent_EMA_21}")
                         
                         # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
@@ -309,7 +312,7 @@ while True:
                             size=ORDER_QTY,
                             side='buy',
                             order_type=OrderType.MARKET,
-                            stop_price=EMA_21
+                            stop_price=currrent_EMA_21
                         )
                         
                         if trailing_stop_order_sell:
@@ -322,9 +325,9 @@ while True:
                     stop_order_id = renko_param[symbol]['stop_order_id']
                     if stop_order_id:
                         # Edit the stop order with new EMA_21 price
-                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, EMA_21)
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, currrent_EMA_21)
                         if edit_result:
-                            print(f"Updated stop loss for SELL position on {symbol} to {EMA_21}")
+                            print(f"Updated stop loss for SELL position on {symbol} to {currrent_EMA_21}")
                         
                         # Check if stop was triggered
                         get_orders = get_history_orders_with_error_handling(client, product_id)
