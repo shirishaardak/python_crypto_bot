@@ -175,13 +175,13 @@ def cancel_order_with_error_handling(client, order_id, product_id):
 
 def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
     try:
-        # Delta Exchange edit order endpoint
-        endpoint = f"/v2/orders/{order_id}"
+        # Delta Exchange edit order endpoint       
         payload = {
+            "id":order_id,
             "product_id": product_id,
             "stop_price": str(new_stop_price)  # Convert to string as API expects
         }
-        response = client.request("PUT", endpoint, payload, auth=True)
+        response = client.request("PUT", "/v2/orders/", payload, auth=True)
         return response
     except Exception as e:
         print(f"Error editing order {order_id}: {e}")
