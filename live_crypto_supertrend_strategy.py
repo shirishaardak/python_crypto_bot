@@ -133,7 +133,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         print(f"Not enough data for {symbol}")
         return renko_param
 
-    last_row = df.iloc[-2] 
+    last_row = df.iloc[-1] 
     cur_row = df.iloc[-1]  # last closed candle
 
     renko_param[symbol].update({
