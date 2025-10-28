@@ -29,7 +29,7 @@ load_dotenv()
 
 BASE_URL = "https://api.india.delta.exchange"
 SYMBOLS = ["BTCUSD", "ETHUSD"]
-ORDER_QTY = {"BTCUSD": 1, "ETHUSD": 1}
+ORDER_QTY = {"BTCUSD": 10, "ETHUSD": 10}
 TREND_INTERVAL = "15m"
 TREND_DAYS = 3
 DRY_RUN = False  # ⚠️ Set False for live trading
