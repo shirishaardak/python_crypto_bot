@@ -191,7 +191,7 @@ def compute_trend(df):
     except Exception:
         pass
 
-    df["Trendline"].ffill(inplace=True)
+    df["Trendline"] = df["Trendline"].ffill()
     return df
 
 # =========================================================
