@@ -180,7 +180,7 @@ def compute_trend(df):
     df = pd.concat([df, ha], axis=1)
 
     df["Trendline"] = np.nan
-    order = 42
+    order = 96
     try:
         max_idx = argrelextrema(df["HA_high"].values, np.greater_equal, order=order)[0]
         min_idx = argrelextrema(df["HA_low"].values, np.less_equal, order=order)[0]
