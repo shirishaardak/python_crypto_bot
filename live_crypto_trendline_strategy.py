@@ -224,7 +224,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 1 == 0:
+        if now.second == 10 and datetime.now().minute % 15 == 0:
             log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
