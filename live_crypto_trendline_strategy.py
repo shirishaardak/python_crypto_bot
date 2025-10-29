@@ -252,7 +252,7 @@ def run_strategy():
 
     while True:
         now = datetime.now()
-        if now.minute % 15 == 0 and datetime.now().second == 10:
+        if now.minute % 15 == 0:
             log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
             for symbol in SYMBOLS:
                 try:
