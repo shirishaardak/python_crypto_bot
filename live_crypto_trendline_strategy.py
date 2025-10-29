@@ -1,12 +1,13 @@
 """
-Delta Exchange Trendline Strategy (Telegram + Clean Structure)
+Delta Exchange Trendline Strategy (Telegram + Clean Scheduler)
 ---------------------------------------------------------------
 - Heikin-Ashi + Trendline logic
 - HA close > Trendline → Long
 - HA close < Trendline → Short
 - Auto flips positions
 - Telegram Alerts integrated
-- Simplified and readable structure (like first script)
+- Runs exactly at clean 15-min marks (00, 15, 30, 45)
+- Simplified and readable structure
 """
 
 import os
@@ -131,7 +132,6 @@ def place_market_order(symbol, side, size, reduce_only=False):
 
     try:
         res = api_request("POST", "/v2/orders", payload=payload, auth=True)
-        # log(f"✅ Order placed: {res}", alert=True)
         return res
     except Exception as e:
         log(f"❌ Order failed for {symbol}: {e}", alert=True)
@@ -243,26 +243,28 @@ def process_symbol(symbol, positions):
     return positions
 
 # =========================================================
-# ---------------- MAIN LOOP -------------------------------
+# ---------------- MAIN LOOP (CLEAN 15m) -------------------
 # =========================================================
 def run_strategy():
-    """Main loop running every 15 minutes."""
+    """Main loop running exactly every 15 minutes."""
     positions = {s: None for s in SYMBOLS}
     log("🚀 Starting Delta Trendline Strategy (Telegram Enabled)", alert=True)
 
     while True:
         now = datetime.now()
-        if now.minute % 15 == 0:
-            log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
-            for symbol in SYMBOLS:
-                try:
-                    positions = process_symbol(symbol, positions)
-                except Exception as e:
-                    log(f"⚠️ Error in {symbol}: {e}", alert=True)
-            log("✅ Cycle completed. Waiting for next 15-min interval.\n")
-            time.sleep(60)
-        else:
-            time.sleep(5)
+        next_run = (now + timedelta(minutes=15 - now.minute % 15)).replace(second=0, microsecond=0)
+        wait_time = (next_run - now).total_seconds()
+
+        log(f"⏳ Next run at {next_run.strftime('%H:%M:%S')} (waiting {wait_time/60:.1f} mins)")
+        time.sleep(wait_time)
+
+        log(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
+        for symbol in SYMBOLS:
+            try:
+                positions = process_symbol(symbol, positions)
+            except Exception as e:
+                log(f"⚠️ Error in {symbol}: {e}", alert=True)
+        log("✅ Cycle completed.\n")
 
 # =========================================================
 # ---------------- ENTRY POINT -----------------------------
