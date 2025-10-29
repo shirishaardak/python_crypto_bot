@@ -16,7 +16,7 @@ load_dotenv()
 # SETTINGS
 # ---------------------------------------
 symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
-ORDER_QTY = 10
+ORDER_QTY = 30
 
 # Use environment variables for security
 api_key = os.getenv('DELTA_API_KEY')
