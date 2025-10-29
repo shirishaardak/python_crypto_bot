@@ -131,7 +131,7 @@ def place_market_order(symbol, side, size, reduce_only=False):
 
     try:
         res = api_request("POST", "/v2/orders", payload=payload, auth=True)
-        log(f"✅ Order placed: {res}", alert=True)
+        # log(f"✅ Order placed: {res}", alert=True)
         return res
     except Exception as e:
         log(f"❌ Order failed for {symbol}: {e}", alert=True)
