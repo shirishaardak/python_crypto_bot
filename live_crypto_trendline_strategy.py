@@ -1,43 +1,32 @@
-"""
-Delta Exchange Trendline Strategy (Telegram + Clean Scheduler)
----------------------------------------------------------------
-- Heikin-Ashi + Trendline logic
-- HA close > Trendline → Long
-- HA close < Trendline → Short
-- Auto flips positions
-- Telegram Alerts integrated
-- Runs exactly at clean 15-min marks (00, 15, 30, 45)
-- Simplified and readable structure
-"""
-
 import os
-import time
-import json
-import hmac
-import hashlib
+import time as t
 import requests
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from datetime import datetime, timedelta
+from delta_rest_client import DeltaRestClient, OrderType
 from scipy.signal import argrelextrema
 from dotenv import load_dotenv
 
-# =========================================================
-# ---------------- CONFIGURATION ---------------------------
-# =========================================================
+# Load environment variables from .env file
 load_dotenv()
 
-BASE_URL = "https://api.india.delta.exchange"
-SYMBOLS = ["ETHUSD"]
-ORDER_QTY = {"ETHUSD": 50}
-TREND_INTERVAL = "15m"
-TREND_DAYS = 3
-DRY_RUN = False  # ⚠️ Set False for live trading
+# ---------------------------------------
+# SETTINGS
+# ---------------------------------------
+symbols = ["BTCUSD", "ETHUSD"]   # trading pairs you want
+ORDER_QTY = 10
 
-# API Keys
-API_KEY = os.getenv('DELTA_API_KEY')
-API_SECRET = os.getenv('DELTA_API_SECRET')
+# Use environment variables for security
+api_key = os.getenv('DELTA_API_KEY')
+api_secret = os.getenv('DELTA_API_SECRET')
+
+client = DeltaRestClient(
+    base_url='https://api.india.delta.exchange',
+    api_key=api_key,
+    api_secret=api_secret
+)
 
 # Telegram Config
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -61,215 +50,309 @@ def send_telegram_message(msg: str):
 def log(msg, alert=False):
     """Print and optionally send Telegram alert."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
+    full_msg = f"[{timestamp}] {msg}"
+    print(full_msg)
     if alert:
-        send_telegram_message(f"📣 {msg}")
+        send_telegram_message(f"📣 {full_msg}")
 
-# =========================================================
-# ---------------- DELTA API HELPERS -----------------------
-# =========================================================
-def generate_signature(secret, message):
-    return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-
-def api_request(method, path, payload=None, auth=True):
-    """Generic API request for Delta Exchange."""
-    url = BASE_URL + path
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    body = json.dumps(payload) if payload else ""
-
-    if auth:
-        timestamp = str(int(time.time()))
-        message = method.upper() + timestamp + path + body
-        signature = generate_signature(API_SECRET, message)
-        headers.update({
-            "api-key": API_KEY,
-            "timestamp": timestamp,
-            "signature": signature
-        })
-
-    r = requests.request(method, url, headers=headers, data=body, timeout=10)
-    if r.status_code != 200:
-        print("❌ API Error:", r.status_code, r.text)
-        r.raise_for_status()
-    return r.json()
-
-def get_product_map():
-    """Return {symbol: product_id} for futures."""
+# ---------------------------------------
+# Get product IDs (futures only)
+# ---------------------------------------
+def get_futures_product_ids(symbols):
+    url = "https://api.india.delta.exchange/v2/products"
     try:
-        r = requests.get(BASE_URL + "/v2/products", timeout=10)
+        r = requests.get(url, timeout=10)
         r.raise_for_status()
-        products = r.json().get("result", [])
-        return {p["symbol"]: p["id"] for p in products if p.get("contract_type") == "perpetual_futures"}
+        data = r.json()
+
+        product_map = {}
+        if "result" in data:
+            for p in data["result"]:
+                if p["symbol"] in symbols and p.get("contract_type") == "perpetual_futures":
+                    product_map[p["symbol"]] = p["id"]
+        return product_map
     except Exception as e:
-        log(f"⚠️ Product fetch failed: {e}")
+        log(f"Error fetching product IDs: {e}", alert=True)
         return {}
 
-PRODUCT_MAP = get_product_map()
+symbols_map = get_futures_product_ids(symbols)
+if not symbols_map:
+    raise ValueError("Could not fetch futures product IDs from Delta API")
+print("Loaded futures product IDs:", symbols_map)
 
-# =========================================================
-# ---------------- ORDER MANAGEMENT ------------------------
-# =========================================================
-def place_market_order(symbol, side, size, reduce_only=False):
-    """Place market order or simulate if DRY_RUN."""
-    product_id = PRODUCT_MAP.get(symbol)
-    if not product_id:
-        log(f"❌ Unknown symbol: {symbol}")
-        return None
-
-    payload = {
-        "product_id": product_id,
-        "order_type": "market_order",
-        "side": side,
-        "size": size,
-        "reduce_only": reduce_only
+# Status dictionary - FIXED: Added stop_order_id tracking
+renko_param = {
+    symbol: {
+        'Date': '',
+        'close': '',
+        'option': 0,  # 0 = no position, 1 = long, 2 = short
+        'single': 0,
+        'Trendline': None,
+        'stop_order_id': None,
+        'main_order_id': None
     }
+    for symbol in symbols_map
+}
 
-    msg = f"{side.upper()} {symbol} x{size} (reduce_only={reduce_only}, DRY_RUN={DRY_RUN})"
-    log(msg, alert=True)
-
-    if DRY_RUN:
-        return {"mock": True, "side": side, "symbol": symbol}
-
-    try:
-        res = api_request("POST", "/v2/orders", payload=payload, auth=True)
-        return res
-    except Exception as e:
-        log(f"❌ Order failed for {symbol}: {e}", alert=True)
-        return None
-
-# =========================================================
-# ---------------- DATA & TREND ----------------------------
-# =========================================================
-def fetch_candles(symbol, resolution="15m", days=3, tz='Asia/Kolkata'):
-    """Fetch OHLC candles from Delta."""
+# ---------------------------------------
+# Candle Fetch
+# ---------------------------------------
+def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
+    headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
-    url = BASE_URL + "/v2/history/candles"
     params = {
-        "symbol": symbol,
-        "resolution": resolution,
-        "start": str(start),
-        "end": str(int(time.time()))
+        'resolution': resolution,
+        'symbol': symbol,
+        'start': str(start),
+        'end': str(int(t.time())),
     }
-
+    url = 'https://api.india.delta.exchange/v2/history/candles'
+    
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         r.raise_for_status()
-        data = r.json().get("result", [])
-        if not data:
-            log(f"No candle data for {symbol}")
+        data = r.json()
+
+        if 'result' in data and data['result']:
+            df = pd.DataFrame(data['result'], columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+            df['time'] = pd.to_datetime(df['time'], unit='s', utc=True).dt.tz_convert(tz)
+            df.set_index("time", inplace=True)
+            df['symbol'] = symbol
+            return df
+        else:
+            log(f"No data for {symbol}", alert=True)
             return None
-
-        df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume"])
-        t = df["time"].iloc[0]
-        df["time"] = pd.to_datetime(df["time"], unit="ms" if t > 1e12 else "s", utc=True).dt.tz_convert(tz)
-        df.set_index("time", inplace=True)
-        df = df.astype(float)
-        df = df.sort_index()
-        return df
-
     except Exception as e:
-        log(f"⚠️ Candle fetch failed for {symbol}: {e}")
+        log(f"Error fetching candles for {symbol}: {e}", alert=True)
         return None
 
-def compute_trend(df):
-    """Compute Heikin-Ashi and Trendline."""
+# ---------------------------------------
+# Process symbol
+# ---------------------------------------
+def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
+    df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
-        return df
+        return renko_param
 
-    ha = ta.ha(df['open'], df['high'], df['low'], df['close'])
-    df = pd.concat([df, ha], axis=1)
+    df = df.sort_index()
+    order = 96  # local extrema order
 
-    df["Trendline"] = np.nan
-    order = 42
+    # Heikin-Ashi
+    df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
+
+    max_idx = argrelextrema(df["HA_high"].values, np.greater_equal, order=order)[0]
+    min_idx = argrelextrema(df["HA_low"].values, np.less_equal, order=order)[0]
+    if len(max_idx):
+        df.loc[df.index[max_idx], "Trendline"] = df["HA_low"].iloc[max_idx].values
+    if len(min_idx):
+        df.loc[df.index[min_idx], "Trendline"] = df["HA_high"].iloc[min_idx].values
+
+    # Trade signals
+    df['single'] = 0
+    df.loc[(df['HA_close'] > df['Trendline']) & (df['HA_close'] > df['HA_close'].shift(1)) & (df['HA_close'] > df['HA_open']), 'single'] = 1
+    df.loc[(df['HA_close'] < df['Trendline']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']), 'single'] = -1
+
+    # os.makedirs(ha_save_dir, exist_ok=True)
+    # df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
+
+    if len(df) < 2:
+        log(f"Not enough data for {symbol}", alert=True)
+        return renko_param
+
+    last_row = df.iloc[-2]
+
+    renko_param[symbol].update({
+        'Date': last_row.name,
+        'close': last_row['HA_close'],
+        'single': last_row['single'],
+        'Trendline': last_row['Trendline'],
+    })
+
+    return renko_param
+
+# ---------------------------------------
+# Helper functions for order management
+# ---------------------------------------
+def place_order_with_error_handling(client, **kwargs):
     try:
-        max_idx = argrelextrema(df["HA_high"].values, np.greater_equal, order=order)[0]
-        min_idx = argrelextrema(df["HA_low"].values, np.less_equal, order=order)[0]
-        if len(max_idx):
-            df.loc[df.index[max_idx], "Trendline"] = df["HA_low"].iloc[max_idx].values
-        if len(min_idx):
-            df.loc[df.index[min_idx], "Trendline"] = df["HA_high"].iloc[min_idx].values
-    except Exception:
-        pass
+        return client.place_order(**kwargs)
+    except Exception as e:
+        log(f"Error placing order: {e}", alert=True)
+        return None
 
-    df["Trendline"] = df["Trendline"].ffill()
-    return df
+def place_stop_order_with_error_handling(client, **kwargs):
+    try:
+        return client.place_stop_order(**kwargs)
+    except Exception as e:
+        log(f"Error placing stop order: {e}", alert=True)
+        return None
 
-# =========================================================
-# ---------------- STRATEGY LOGIC --------------------------
-# =========================================================
-def process_symbol(symbol, positions):
-    """Process one symbol for trendline-based trade signals."""
-    df = fetch_candles(symbol, TREND_INTERVAL, TREND_DAYS)
-    df = compute_trend(df)
-    if df is None or df.empty:
-        return positions
+def cancel_order_with_error_handling(client, order_id, product_id):
+    try:
+        return client.cancel_order(order_id, product_id)
+    except Exception as e:
+        log(f"Error cancelling order {order_id}: {e}", alert=True)
+        return None
 
-    last = df.iloc[-2]
-    prev = df.iloc[-3]
+def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
+    try:
+        payload = {
+            "id": order_id,
+            "product_id": product_id,
+            "stop_price": str(new_stop_price)
+        }
+        return client.request("PUT", "/v2/orders/", payload, auth=True)
+    except Exception as e:
+        log(f"Error editing order {order_id}: {e}", alert=True)
+        return None
 
-    price = last["HA_close"]
-    trend = last["Trendline"]
-    log(f"{symbol}: | trend @ {trend:.2f} | price @ {price:.2f}")
-    if pd.isna(trend):
-        return positions
+def get_history_orders_with_error_handling(client, product_id):
+    try:
+        query = {"product_id": product_id}
+        response = client.order_history(query, page_size=10)
+        return response['result']
+    except Exception as e:
+        log(f"Error getting order history: {e}", alert=True)
+        return []
 
-    pos = positions[symbol]
-    qty = ORDER_QTY[symbol]
+# ---------------------------------------
+# Main Loop
+# ---------------------------------------
+log("🚀 Starting live strategy for BTCUSD + ETHUSD...", alert=True)
 
-    # Entry logic
-    if pos is None:
-        if price > trend and last["HA_close"] > prev["HA_close"] and last["HA_close"] > last["HA_open"]:
-            place_market_order(symbol, "buy", qty)
-            positions[symbol] = "long"
-            log(f"{symbol}: 🔵 Enter LONG @ {price:.2f}", alert=True)
-        elif price < trend and last["HA_close"] < prev["HA_close"] and last["HA_close"] < last["HA_open"]:
-            place_market_order(symbol, "sell", qty)
-            positions[symbol] = "short"
-            log(f"{symbol}: 🔴 Enter SHORT @ {price:.2f}", alert=True)
-
-    # Flip logic
-    elif pos == "long" and price < trend:
-        place_market_order(symbol, "sell", qty, reduce_only=True)
-        place_market_order(symbol, "sell", qty)
-        positions[symbol] = "short"
-        log(f"{symbol}: 🔁 Flip to SHORT @ {price:.2f}", alert=True)
-
-    elif pos == "short" and price > trend:
-        place_market_order(symbol, "buy", qty, reduce_only=True)
-        place_market_order(symbol, "buy", qty)
-        positions[symbol] = "long"
-        log(f"{symbol}: 🔁 Flip to LONG @ {price:.2f}", alert=True)
-
-    return positions
-
-# =========================================================
-# ---------------- MAIN LOOP (CLEAN 15m) -------------------
-# =========================================================
-def run_strategy():
-    """Main loop running exactly every 15 minutes."""
-    positions = {s: None for s in SYMBOLS}
-    log("🚀 Starting Delta Trendline Strategy (Telegram Enabled)", alert=True)
-
-    while True:
+while True:
+    try:
         now = datetime.now()
-        next_run = (now + timedelta(minutes=15 - now.minute % 15)).replace(second=0, microsecond=0)
-        wait_time = (next_run - now).total_seconds()
 
-        log(f"⏳ Next run at {next_run.strftime('%H:%M:%S')} (waiting {wait_time/60:.1f} mins)")
-        time.sleep(wait_time)
+        if now.second == 10 and datetime.now().minute % 15 == 0:
+            log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
-        log(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
-        for symbol in SYMBOLS:
-            try:
-                positions = process_symbol(symbol, positions)
-            except Exception as e:
-                log(f"⚠️ Error in {symbol}: {e}", alert=True)
-        log("✅ Cycle completed.\n")
+            # Process symbols
+            for symbol in symbols_map:
+                renko_param = process_symbol(symbol, renko_param)
 
-# =========================================================
-# ---------------- ENTRY POINT -----------------------------
-# =========================================================
-if __name__ == "__main__":
-    if not DRY_RUN and (not API_KEY or not API_SECRET):
-        raise RuntimeError("❌ Missing API keys for live trading.")
-    run_strategy()
+            # Trading logic
+            for symbol, product_id in symbols_map.items():
+                price = renko_param[symbol]['close']
+                trendline = renko_param[symbol]['Trendline']
+                single = renko_param[symbol]['single']
+                option = renko_param[symbol]['option']
+
+                # --- BUY SIGNAL ---
+                if single == 1 and option == 0:
+                    log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
+                    
+                    buy_order_place = place_order_with_error_handling(
+                        client,
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='buy',
+                        size=ORDER_QTY
+                    )
+
+                    if buy_order_place and buy_order_place.get('state') == 'closed':
+                        renko_param[symbol]['option'] = 1
+                        renko_param[symbol]['main_order_id'] = buy_order_place.get('id')
+                        log(f"✅ BUY order executed for {symbol} @ {price}", alert=True)
+                        
+                        trailing_stop_order_buy = place_stop_order_with_error_handling(
+                            client,
+                            product_id=product_id,
+                            size=ORDER_QTY,
+                            side='sell',
+                            order_type=OrderType.MARKET,
+                            stop_price=trendline
+                        )
+                        
+                        if trailing_stop_order_buy:
+                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_buy.get('id')
+                            log(f"🔒 Trailing stop-loss placed for BUY on {symbol} at {trendline}", alert=True)
+                        else:
+                            log(f"⚠️ Failed to place stop order for {symbol}", alert=True)
+
+                # --- BUY POSITION MANAGEMENT ---
+                elif option == 1:
+                    stop_order_id = renko_param[symbol]['stop_order_id']
+                    if stop_order_id:
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, trendline)
+                        if edit_result:
+                            log(f"Updated stop loss for BUY position on {symbol} to {trendline}")
+                        
+                        get_orders = get_history_orders_with_error_handling(client, product_id)
+                        for order in get_orders:
+                            if order['id'] == stop_order_id and order['state'] == 'closed':
+                                log(f"🛑 Stop loss triggered for BUY position on {symbol}", alert=True)
+                                renko_param[symbol]['option'] = 0
+                                renko_param[symbol]['stop_order_id'] = None
+                                renko_param[symbol]['main_order_id'] = None
+                                break
+
+                # --- SELL SIGNAL ---
+                if single == -1 and option == 0:
+                    log(f"🔴 SELL signal for {symbol} at {price}", alert=True)
+                    
+                    sell_order_place = place_order_with_error_handling(
+                        client,
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='sell',
+                        size=ORDER_QTY
+                    )
+                    
+                    if sell_order_place and sell_order_place.get('state') == 'closed':
+                        renko_param[symbol]['option'] = 2
+                        renko_param[symbol]['main_order_id'] = sell_order_place.get('id')
+                        log(f"✅ SELL order executed for {symbol} @ {price}", alert=True)
+                        
+                        trailing_stop_order_sell = place_stop_order_with_error_handling(
+                            client,
+                            product_id=product_id,
+                            size=ORDER_QTY,
+                            side='buy',
+                            order_type=OrderType.MARKET,
+                            stop_price=trendline
+                        )
+                        
+                        if trailing_stop_order_sell:
+                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_sell.get('id')
+                            log(f"🔒 Trailing stop-loss placed for SELL on {symbol} at {trendline}", alert=True)
+                        else:
+                            log(f"⚠️ Failed to place stop order for {symbol}", alert=True)
+
+                # --- SELL POSITION MANAGEMENT ---
+                elif option == 2:
+                    stop_order_id = renko_param[symbol]['stop_order_id']
+                    if stop_order_id:
+                        edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, trendline)
+                        if edit_result:
+                            log(f"Updated stop loss for SELL position on {symbol} to {trendline}")
+                        
+                        get_orders = get_history_orders_with_error_handling(client, product_id)
+                        for order in get_orders:
+                            if order['id'] == stop_order_id and order['state'] == 'closed':
+                                log(f"🛑 Stop loss triggered for SELL position on {symbol}", alert=True)
+                                renko_param[symbol]['option'] = 0
+                                renko_param[symbol]['stop_order_id'] = None
+                                renko_param[symbol]['main_order_id'] = None
+                                break
+
+            df_status = pd.DataFrame.from_dict(renko_param, orient='index')
+            print("\nCurrent Strategy Status:")
+            print(df_status[['Date', 'close', 'option', 'single', 'stop_order_id']])
+
+            log("Waiting for next cycle...\n")
+            t.sleep(55)
+
+    except KeyboardInterrupt:
+        log("🧹 Manual shutdown initiated. Cancelling open stop orders...", alert=True)
+        for symbol in symbols_map:
+            stop_order_id = renko_param[symbol]['stop_order_id']
+            if stop_order_id:
+                log(f"Cancelling stop order {stop_order_id} for {symbol}")
+                cancel_order_with_error_handling(client, stop_order_id, symbols_map[symbol])
+        break
+        
+    except Exception as e:
+        log(f"[ERROR] {type(e).__name__}: {e}", alert=True)
+        t.sleep(5)
+        continue
