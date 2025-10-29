@@ -146,12 +146,12 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         df.loc[df.index[max_idx], "Trendline"] = df["HA_low"].iloc[max_idx].values
     if len(min_idx):
         df.loc[df.index[min_idx], "Trendline"] = df["HA_high"].iloc[min_idx].values
-
+    df["Trendline"].ffill(inplace=True)
     # Trade signals
     df['single'] = 0
     df.loc[(df['HA_close'] > df['Trendline']) & (df['HA_close'] > df['HA_close'].shift(1)) & (df['HA_close'] > df['HA_open']), 'single'] = 1
     df.loc[(df['HA_close'] < df['Trendline']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']), 'single'] = -1
-
+    print(df)
     # os.makedirs(ha_save_dir, exist_ok=True)
     # df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
 
@@ -224,7 +224,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 15 == 0:
+        if now.second == 10 and datetime.now().minute % 1 == 0:
             log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
