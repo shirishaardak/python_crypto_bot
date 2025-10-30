@@ -20,8 +20,8 @@ ORDER_QTY = 30
 
 # Trailing stop buffer (symbol-specific)
 TRAIL_BUFFER = {
-    "BTCUSD": 100,   # 100-point buffer for BTC
-    "ETHUSD": 10     # 10-point buffer for ETH
+    "BTCUSD": 30,   # 100-point buffer for BTC
+    "ETHUSD": 3     # 10-point buffer for ETH
 }
 
 # Use environment variables for security
@@ -164,7 +164,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
-    last_row = df.iloc[-2]
+    last_row = df.iloc[-1]
 
     renko_param[symbol].update({
         'Date': last_row.name,
