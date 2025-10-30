@@ -290,10 +290,10 @@ while True:
                             renko_param[symbol]['stop_order_id'] = None
                             renko_param[symbol]['main_order_id'] = None
                         else:
-                            new_stop_price = float(trendline) - buffer
+                            new_stop_price = float(trendline)
                             edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, new_stop_price)
                             if edit_result:
-                                log(f"⬆️ Updated stop loss for BUY on {symbol} to {new_stop_price}")
+                                log(f"⬆️ Updated stop loss for BUY on {symbol} to {new_stop_price}", alert=True)
 
                 # --- SELL SIGNAL ---
                 if single == -1 and option == 0:
@@ -341,10 +341,10 @@ while True:
                             renko_param[symbol]['stop_order_id'] = None
                             renko_param[symbol]['main_order_id'] = None
                         else:
-                            new_stop_price = float(trendline) + buffer
+                            new_stop_price = float(trendline)
                             edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, new_stop_price)
                             if edit_result:
-                                log(f"⬇️ Updated stop loss for SELL on {symbol} to {new_stop_price}")
+                                log(f"⬇️ Updated stop loss for SELL on {symbol} to {new_stop_price}", alert=True)
 
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
             print("\nCurrent Strategy Status:")
