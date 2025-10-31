@@ -317,8 +317,7 @@ while True:
 
                 # --- SELL SIGNAL ---
                 if single == -1 and option == 0:
-                    log(f"🔴 SELL signal for {symbol} at {price}", alert=True)
-                    
+                    log(f"🔴 SELL signal for {symbol} at {price}", alert=True)                    
                     sell_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
