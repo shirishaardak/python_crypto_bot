@@ -143,7 +143,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     df = df.sort_index()
-    order = 96  # local extrema order
+    order =  45  # local extrema order
 
     # Heikin-Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
@@ -246,8 +246,7 @@ while True:
 
                 # --- BUY SIGNAL ---
                 if single == 1 and option == 0:
-                    log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
-                    
+                    log(f"🟢 BUY signal for {symbol} at {price}", alert=True)                    
                     buy_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
@@ -259,46 +258,28 @@ while True:
                     if buy_order_place and buy_order_place.get('state') == 'closed':
                         renko_param[symbol]['option'] = 1
                         renko_param[symbol]['main_order_id'] = buy_order_place.get('id')
-                        log(f"✅ BUY order executed for {symbol} @ {price}", alert=True)
+                        log(f"✅ BUY order executed for {symbol} @ {price}", alert=True)                        
                         
-                        stop_price = float(trendline) - buffer
-                        trailing_stop_order_buy = place_stop_order_with_error_handling(
-                            client,
-                            product_id=product_id,
-                            size=ORDER_QTY,
-                            side='sell',
-                            order_type=OrderType.MARKET,
-                            stop_price=stop_price
-                        )
-                        
-                        if trailing_stop_order_buy:
-                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_buy.get('id')
-                            log(f"🔒 Trailing stop-loss placed for BUY on {symbol} at {stop_price}", alert=True)
-                        else:
-                            log(f"⚠️ Failed to place stop order for {symbol}", alert=True)
 
                 # --- BUY POSITION MANAGEMENT ---
-                elif option == 1:
-                    stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id:
-                        get_orders = get_history_orders_with_error_handling(client, product_id)
-                        order_states = {o['id']: o['state'] for o in get_orders}
-
-                        if order_states.get(stop_order_id) == 'closed':
-                            log(f"🛑 Stop loss triggered for BUY position on {symbol}", alert=True)
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
-                        else:
-                            new_stop_price = float(trendline)
-                            edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, new_stop_price)
-                            if edit_result:
-                                log(f"⬆️ Updated stop loss for BUY on {symbol} to {new_stop_price}", alert=True)
+                elif option == 1 and price < trendline:
+                    log(f"🟢 BUY exit signal for {symbol} at {price}", alert=True)
+                    buy_exit_order_place = place_order_with_error_handling(
+                        client,
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='sell',
+                        size=ORDER_QTY
+                    )
+                    if buy_exit_order_place and buy_exit_order_place.get('state') == 'closed':
+                        log(f"🛑 Stop loss triggered for BUY position on {symbol}", alert=True)
+                        renko_param[symbol]['option'] = 0
+                        renko_param[symbol]['main_order_id'] = None
+                        
 
                 # --- SELL SIGNAL ---
                 if single == -1 and option == 0:
-                    log(f"🔴 SELL signal for {symbol} at {price}", alert=True)
-                    
+                    log(f"🔴 SELL signal for {symbol} at {price}", alert=True)                    
                     sell_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
@@ -312,39 +293,23 @@ while True:
                         renko_param[symbol]['main_order_id'] = sell_order_place.get('id')
                         log(f"✅ SELL order executed for {symbol} @ {price}", alert=True)
                         
-                        stop_price = float(trendline) + buffer
-                        trailing_stop_order_sell = place_stop_order_with_error_handling(
-                            client,
-                            product_id=product_id,
-                            size=ORDER_QTY,
-                            side='buy',
-                            order_type=OrderType.MARKET,
-                            stop_price=stop_price
-                        )
                         
-                        if trailing_stop_order_sell:
-                            renko_param[symbol]['stop_order_id'] = trailing_stop_order_sell.get('id')
-                            log(f"🔒 Trailing stop-loss placed for SELL on {symbol} at {stop_price}", alert=True)
-                        else:
-                            log(f"⚠️ Failed to place stop order for {symbol}", alert=True)
 
                 # --- SELL POSITION MANAGEMENT ---
-                elif option == 2:
-                    stop_order_id = renko_param[symbol]['stop_order_id']
-                    if stop_order_id:
-                        get_orders = get_history_orders_with_error_handling(client, product_id)
-                        order_states = {o['id']: o['state'] for o in get_orders}
-
-                        if order_states.get(stop_order_id) == 'closed':
-                            log(f"🛑 Stop loss triggered for SELL position on {symbol}", alert=True)
-                            renko_param[symbol]['option'] = 0
-                            renko_param[symbol]['stop_order_id'] = None
-                            renko_param[symbol]['main_order_id'] = None
-                        else:
-                            new_stop_price = float(trendline)
-                            edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, new_stop_price)
-                            if edit_result:
-                                log(f"⬇️ Updated stop loss for SELL on {symbol} to {new_stop_price}", alert=True)
+                elif option == 2 and price > trendline:
+                    log(f"🔴 SELL exit signal for {symbol} at {price}", alert=True)
+                    sell_exit_order_place = place_order_with_error_handling(
+                        client,
+                        product_id=product_id,
+                        order_type=OrderType.MARKET,
+                        side='buy',
+                        size=ORDER_QTY
+                    )
+                    if sell_exit_order_place and sell_exit_order_place.get('state') == 'closed':
+                        log(f"🛑 Stop loss triggered for SELL position on {symbol}", alert=True)
+                        renko_param[symbol]['option'] = 0
+                        renko_param[symbol]['main_order_id'] = None
+                        
 
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
             print("\nCurrent Strategy Status:")
