@@ -143,7 +143,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     df = df.sort_index()
-    order =  45  # local extrema order
+    order =  63  # local extrema order
 
     # Heikin-Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
@@ -264,6 +264,7 @@ while True:
                 # --- BUY POSITION MANAGEMENT ---
                 elif option == 1 and price < trendline:
                     log(f"🟢 BUY exit signal for {symbol} at {price}", alert=True)
+                    renko_param[symbol]['option'] = 0
                     buy_exit_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
@@ -273,7 +274,6 @@ while True:
                     )
                     if buy_exit_order_place and buy_exit_order_place.get('state') == 'closed':
                         log(f"🛑 Stop loss triggered for BUY position on {symbol}", alert=True)
-                        renko_param[symbol]['option'] = 0
                         renko_param[symbol]['main_order_id'] = None
                         
 
@@ -298,6 +298,7 @@ while True:
                 # --- SELL POSITION MANAGEMENT ---
                 elif option == 2 and price > trendline:
                     log(f"🔴 SELL exit signal for {symbol} at {price}", alert=True)
+                    renko_param[symbol]['option'] = 0
                     sell_exit_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
@@ -307,7 +308,6 @@ while True:
                     )
                     if sell_exit_order_place and sell_exit_order_place.get('state') == 'closed':
                         log(f"🛑 Stop loss triggered for SELL position on {symbol}", alert=True)
-                        renko_param[symbol]['option'] = 0
                         renko_param[symbol]['main_order_id'] = None
                         
 
