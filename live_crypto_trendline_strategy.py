@@ -254,7 +254,7 @@ def get_history_orders_with_error_handling(client, product_id):
 def get_live_orders_with_error_handling(client):
     try:
         response = client.get_live_orders()
-        return response.get('result', []) if response else []
+        return response if response else []
     except Exception as e:
         log(f"Error getting live orders: {e}", alert=True)
         return []
@@ -263,6 +263,7 @@ def get_live_orders_with_error_handling(client):
 # Main Loop
 # ---------------------------------------
 log("🚀 Starting live strategy for BTCUSD + ETHUSD...", alert=True)
+
 
 while True:
     try:
@@ -327,7 +328,7 @@ while True:
                         if get_live_orders:
                             for order in get_live_orders:
                                 print(order)
-                                if order['id'] == stop_order_id and order['state'] == 'open':
+                                if order['id'] == stop_order_id and order['state'] == 'pending':
                                     
                                     edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, stop_price)
                                     if edit_result:
@@ -388,7 +389,7 @@ while True:
                         if get_live_orders:
                             for order in get_live_orders:
                                 print(order)
-                                if order['id'] == stop_order_id and order['state'] == 'open':
+                                if order['id'] == stop_order_id and order['state'] == 'pending':
                                     edit_result = edit_stop_order_with_error_handling(client, stop_order_id, product_id, stop_price)
                                     if edit_result:
                                         log(f"Updated stop loss for SELL position on {symbol} to {stop_price}", alert=True)
