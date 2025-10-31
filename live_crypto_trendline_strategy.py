@@ -305,7 +305,7 @@ while True:
                         client,
                         product_id=product_id,
                         order_type=OrderType.MARKET,
-                        side='buy',
+                        side='sell',
                         size=ORDER_QTY
                     )
                     if buy_exit_order_place:
