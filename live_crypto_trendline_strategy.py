@@ -187,7 +187,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
-    last_row = df.iloc[-1]
+    last_row = df.iloc[-2]
 
     renko_param[symbol].update({
         'Date': last_row.name,
@@ -269,7 +269,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 15 == 0:
+        if now.second == 10 and datetime.now().minute % 5 == 0:
             log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             for symbol in symbols_map:
@@ -285,8 +285,7 @@ while True:
 
                 # --- BUY SIGNAL ---
                 if single == 1 and option == 0:
-                    log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
-                    
+                    log(f"🟢 BUY signal for {symbol} at {price}", alert=True)                    
                     buy_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
