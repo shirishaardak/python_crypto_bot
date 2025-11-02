@@ -299,7 +299,7 @@ while True:
                         renko_param[symbol]['main_order_id'] = buy_order_place.get('id')
                         log(f"✅ BUY order executed for {symbol} @ {price}", alert=True)
                 # --- BUY POSITION MANAGEMENT ---
-                elif option == 1 and price < down_band:
+                elif option == 1 and price < trendline:
                     buy_exit_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
@@ -331,7 +331,7 @@ while True:
                         
 
                 # --- SELL POSITION MANAGEMENT ---
-                elif option == 2 and price > up_band:
+                elif option == 2 and price > trendline:
                     sell_exit_order_place = place_order_with_error_handling(
                         client,
                         product_id=product_id,
