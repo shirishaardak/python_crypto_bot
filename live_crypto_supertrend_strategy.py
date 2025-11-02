@@ -215,7 +215,7 @@ def get_history_orders_with_error_handling(client, product_id):
 # ---------------------------------------
 # MAIN LOOP
 # ---------------------------------------
-print("Starting live strategy for BTCUSD + ETHUSD...")
+log("🚀 Starting live_crypto_supertrend_strategy for BTCUSD + ETHUSD...", alert=True)
 
 while True:
     try:
