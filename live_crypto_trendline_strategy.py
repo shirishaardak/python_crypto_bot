@@ -187,7 +187,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
-    last_row = df.iloc[-2]
+    last_row = df.iloc[-1]
 
     renko_param[symbol].update({
         'Date': last_row.name,
