@@ -137,7 +137,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     df = df.sort_index()
-    order = 63  # local extrema order
+    order = 96  # local extrema order
 
     # Heikin-Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
@@ -269,7 +269,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and datetime.now().minute % 5 == 0:
+        if now.second == 10 and datetime.now().minute % 15 == 0:
             log(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             for symbol in symbols_map:
