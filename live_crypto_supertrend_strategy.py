@@ -149,8 +149,8 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21_UP'].shift(1)), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_DN'].shift(1)), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21_UP']) and (df['HA_close'] > df['HA_close'].shift(1)), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21_DN']) and (df['HA_close'] < df['HA_close'].shift(1)), 'single'] = -1
 
     os.makedirs(ha_save_dir, exist_ok=True)
     df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
