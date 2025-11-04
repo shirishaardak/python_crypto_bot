@@ -169,7 +169,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
-    last_row = df.iloc[-2]
+    last_row = df.iloc[-1]
     renko_param[symbol].update({
         'Date': last_row.name,
         'close': last_row['HA_close'],
@@ -289,7 +289,8 @@ while True:
                                 size=ORDER_QTY,
                                 side='sell',
                                 order_type=OrderType.MARKET,
-                                stop_price=EMA_21
+                                trail_amount=price - EMA_21,
+                                isTrailingStopLoss=True
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
@@ -305,9 +306,7 @@ while True:
                 # --- BUY MANAGEMENT ---
                 elif option == 1:
                     stop_id = renko_param[symbol]['stop_order_id']
-                    if stop_id:
-                        edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21)
-                        log(f"🔒 update Stop Loss placed for BUY {symbol} and {stop_id} at price :{EMA_21}", alert=True)
+                    if stop_id:                        
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
                         if stop_triggered:
@@ -347,7 +346,8 @@ while True:
                                 size=ORDER_QTY,
                                 side='buy',
                                 order_type=OrderType.MARKET,
-                                stop_price=EMA_21
+                                trail_amount=EMA_21 -price,
+                                isTrailingStopLoss=True
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
