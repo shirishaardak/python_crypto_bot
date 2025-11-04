@@ -33,20 +33,25 @@ client = DeltaRestClient(
 # ---------------------------------------
 # Telegram Utility
 # ---------------------------------------
-def send_telegram_message(msg: str):
-    """Send alert message via Telegram."""
+def send_telegram_message(msg: str) -> bool:
+    """Send alert message via Telegram. Returns True if sent successfully."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram not configured.")
-        return
+        # Make sure to surface this as an alert as well
+        print("⚠️ Telegram not configured. Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID.")
+        return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-        requests.post(url, json=payload, timeout=5)
+        r = requests.post(url, json=payload, timeout=8)
+        r.raise_for_status()
+        return True
     except Exception as e:
-        print(f"⚠️ Telegram Error: {e}")
+        # fallback: print to console
+        print(f"⚠️ Telegram Error: {e} | message was: {msg}")
+        return False
 
 def log(msg, alert=False):
-    """Print and optionally send Telegram alert."""
+    """Print and optionally send Telegram alert. Telegram will receive timestamped message."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     full_msg = f"[{timestamp}] {msg}"
     print(full_msg)
@@ -67,9 +72,11 @@ def get_futures_product_ids(symbols):
             for p in data["result"]:
                 if p["symbol"] in symbols and p.get("contract_type") == "perpetual_futures":
                     product_map[p["symbol"]] = p["id"]
+        if not product_map:
+            log("Could not fetch futures product IDs from Delta API", alert=True)
         return product_map
     except Exception as e:
-        print(f"Error fetching product IDs: {e}")
+        log(f"Error fetching product IDs: {e}", alert=True)
         return {}
 
 symbols_map = get_futures_product_ids(symbols)
@@ -113,7 +120,7 @@ def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', 
     url = 'https://api.india.delta.exchange/v2/history/candles'
 
     try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=12)
         r.raise_for_status()
         data = r.json()
 
@@ -124,10 +131,10 @@ def fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir='.', 
             df['symbol'] = symbol
             return df
         else:
-            print(f"No data for {symbol}")
+            log(f"No candle data returned for {symbol}", alert=True)
             return None
     except Exception as e:
-        print(f"Error fetching candles for {symbol}: {e}")
+        log(f"Error fetching candles for {symbol}: {e}", alert=True)
         return None
 
 # ---------------------------------------
@@ -153,10 +160,13 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']), 'single'] = -1
 
     os.makedirs(ha_save_dir, exist_ok=True)
-    df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
+    try:
+        df.to_csv(f"{ha_save_dir}/supertrend_live_{symbol}.csv")
+    except Exception as e:
+        log(f"Error saving CSV for {symbol}: {e}", alert=True)
 
     if len(df) < 2:
-        print(f"Not enough data for {symbol}")
+        log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
     last_row = df.iloc[-1]
@@ -172,44 +182,62 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     return renko_param
 
 # ---------------------------------------
-# Helper functions
+# Helper functions (with alerts on failures)
 # ---------------------------------------
 def place_order_with_error_handling(client, **kwargs):
     try:
-        return client.place_order(**kwargs)
+        resp = client.place_order(**kwargs)
+        # If response is falsy: alert
+        if not resp:
+            log(f"⚠️ place_order returned empty response for payload: {kwargs}", alert=True)
+            return None
+        return resp
     except Exception as e:
-        log(f"Error placing order: {e}", alert=True)
+        log(f"⚠️ Error placing order: {e} | payload: {kwargs}", alert=True)
         return None
 
 def place_stop_order_with_error_handling(client, **kwargs):
     try:
-        return client.place_stop_order(**kwargs)
+        resp = client.place_stop_order(**kwargs)
+        if not resp:
+            log(f"⚠️ place_stop_order returned empty response for payload: {kwargs}", alert=True)
+            return None
+        return resp
     except Exception as e:
-        log(f"Error placing stop order: {e}" , alert=True)
+        log(f"⚠️ Error placing stop order: {e} | payload: {kwargs}", alert=True)
         return None
 
 def cancel_order_with_error_handling(client, order_id, product_id):
     try:
-        return client.cancel_order(order_id, product_id)
+        resp = client.cancel_order(order_id, product_id)
+        if not resp:
+            log(f"⚠️ cancel_order returned empty response for order {order_id} product {product_id}", alert=True)
+        return resp
     except Exception as e:
-        log(f"Error cancelling order {order_id}: {e}" , alert=True)
+        log(f"⚠️ Error cancelling order {order_id}: {e}", alert=True)
         return None
 
 def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
     try:
         payload = {"id": order_id, "product_id": product_id, "stop_price": str(new_stop_price)}
-        return client.request("PUT", "/v2/orders/", payload, auth=True)
+        resp = client.request("PUT", "/v2/orders/", payload, auth=True)
+        if not resp:
+            log(f"⚠️ edit_stop_order returned empty response for {order_id} payload: {payload}", alert=True)
+        return resp
     except Exception as e:
-        log(f"Error editing order {order_id}: {e}" , alert=True)
+        log(f"⚠️ Error editing order {order_id}: {e}", alert=True)
         return None
 
 def get_history_orders_with_error_handling(client, product_id):
     try:
         query = {"product_id": product_id}
         response = client.order_history(query, page_size=10)
+        if not response or 'result' not in response:
+            log(f"⚠️ Unexpected order_history response for product {product_id}: {response}", alert=True)
+            return []
         return response['result']
     except Exception as e:
-        log(f"Error getting order history: {e}" , alert=True)
+        log(f"⚠️ Error getting order history: {e}", alert=True)
         return []
 
 # ---------------------------------------
@@ -245,24 +273,34 @@ while True:
                         side='buy',
                         size=ORDER_QTY
                     )
-                    if buy_order and buy_order.get('state') == 'closed':
-                        renko_param[symbol].update({
-                            'option': 1,
-                            'main_order_id': buy_order.get('id'),
-                            'entry_price': price
-                        })
-                        log(f"✅ BUY executed on {symbol} — Entry: {price}", alert=True)
-                        stop_order = place_stop_order_with_error_handling(
-                            client,
-                            product_id=product_id,
-                            size=ORDER_QTY,
-                            side='sell',
-                            order_type=OrderType.MARKET,
-                            stop_price=EMA_21
-                        )
-                        if stop_order:
-                            renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                            log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21}", alert=True)
+                    if buy_order:
+                        order_state = buy_order.get('state')
+                        order_id = buy_order.get('id')
+                        if order_state == 'closed':
+                            renko_param[symbol].update({
+                                'option': 1,
+                                'main_order_id': order_id,
+                                'entry_price': price
+                            })
+                            log(f"✅ BUY executed on {symbol} — Entry: {price} | OrderID: {order_id}", alert=True)
+                            stop_order = place_stop_order_with_error_handling(
+                                client,
+                                product_id=product_id,
+                                size=ORDER_QTY,
+                                side='sell',
+                                order_type=OrderType.MARKET,
+                                stop_price=EMA_21
+                            )
+                            if stop_order:
+                                renko_param[symbol]['stop_order_id'] = stop_order.get('id')
+                                log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                            else:
+                                log(f"⚠️ Failed to place stop loss for BUY {symbol} after entry. Check API.", alert=True)
+                        else:
+                            # Order exists but not closed (open/partially filled/etc). Alert and save response.
+                            log(f"⚠️ BUY placed for {symbol} but not filled/closed. State: {order_state} | Order: {buy_order}", alert=True)
+                    else:
+                        log(f"⚠️ BUY order failed to be placed for {symbol}", alert=True)
 
                 # --- BUY MANAGEMENT ---
                 elif option == 1:
@@ -293,24 +331,33 @@ while True:
                         side='sell',
                         size=ORDER_QTY
                     )
-                    if sell_order and sell_order.get('state') == 'closed':
-                        renko_param[symbol].update({
-                            'option': 2,
-                            'main_order_id': sell_order.get('id'),
-                            'entry_price': price
-                        })
-                        log(f"✅ SELL executed on {symbol} — Entry: {price}", alert=True)
-                        stop_order = place_stop_order_with_error_handling(
-                            client,
-                            product_id=product_id,
-                            size=ORDER_QTY,
-                            side='buy',
-                            order_type=OrderType.MARKET,
-                            stop_price=EMA_21
-                        )
-                        if stop_order:
-                            renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                            log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21}", alert=True)
+                    if sell_order:
+                        order_state = sell_order.get('state')
+                        order_id = sell_order.get('id')
+                        if order_state == 'closed':
+                            renko_param[symbol].update({
+                                'option': 2,
+                                'main_order_id': order_id,
+                                'entry_price': price
+                            })
+                            log(f"✅ SELL executed on {symbol} — Entry: {price} | OrderID: {order_id}", alert=True)
+                            stop_order = place_stop_order_with_error_handling(
+                                client,
+                                product_id=product_id,
+                                size=ORDER_QTY,
+                                side='buy',
+                                order_type=OrderType.MARKET,
+                                stop_price=EMA_21
+                            )
+                            if stop_order:
+                                renko_param[symbol]['stop_order_id'] = stop_order.get('id')
+                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                            else:
+                                log(f"⚠️ Failed to place stop loss for SELL {symbol} after entry. Check API.", alert=True)
+                        else:
+                            log(f"⚠️ SELL placed for {symbol} but not filled/closed. State: {order_state} | Order: {sell_order}", alert=True)
+                    else:
+                        log(f"⚠️ SELL order failed to be placed for {symbol}", alert=True)
 
                 # --- SELL MANAGEMENT ---
                 elif option == 2:
@@ -348,6 +395,6 @@ while True:
         break
 
     except Exception as e:
-        print(f"[ERROR] {type(e).__name__}: {e}")
+        log(f"[ERROR] {type(e).__name__}: {e}", alert=True)
         t.sleep(5)
         continue
