@@ -178,21 +178,21 @@ def place_order_with_error_handling(client, **kwargs):
     try:
         return client.place_order(**kwargs)
     except Exception as e:
-        print(f"Error placing order: {e}")
+        log(f"Error placing order: {e}", alert=True)
         return None
 
 def place_stop_order_with_error_handling(client, **kwargs):
     try:
         return client.place_stop_order(**kwargs)
     except Exception as e:
-        print(f"Error placing stop order: {e}")
+        log(f"Error placing stop order: {e}" , alert=True)
         return None
 
 def cancel_order_with_error_handling(client, order_id, product_id):
     try:
         return client.cancel_order(order_id, product_id)
     except Exception as e:
-        print(f"Error cancelling order {order_id}: {e}")
+        log(f"Error cancelling order {order_id}: {e}" , alert=True)
         return None
 
 def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
@@ -200,7 +200,7 @@ def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_p
         payload = {"id": order_id, "product_id": product_id, "stop_price": str(new_stop_price)}
         return client.request("PUT", "/v2/orders/", payload, auth=True)
     except Exception as e:
-        print(f"Error editing order {order_id}: {e}")
+        log(f"Error editing order {order_id}: {e}" , alert=True)
         return None
 
 def get_history_orders_with_error_handling(client, product_id):
@@ -209,7 +209,7 @@ def get_history_orders_with_error_handling(client, product_id):
         response = client.order_history(query, page_size=10)
         return response['result']
     except Exception as e:
-        print(f"Error getting order history: {e}")
+        log(f"Error getting order history: {e}" , alert=True)
         return []
 
 # ---------------------------------------
@@ -269,6 +269,7 @@ while True:
                     stop_id = renko_param[symbol]['stop_order_id']
                     if stop_id:
                         edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21)
+                        log(f"🔒 update Stop Loss placed for BUY {symbol} and {stop_id} at price :{EMA_21}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
                         if stop_triggered:
@@ -316,6 +317,7 @@ while True:
                     stop_id = renko_param[symbol]['stop_order_id']
                     if stop_id:
                         edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21)
+                        log(f"🔒 update Stop Loss placed for sell {symbol} and {stop_id} at price:{EMA_21}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
                         if stop_triggered:
