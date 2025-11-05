@@ -151,7 +151,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
-    offset = 150 if symbol == "BTCUSD" else 15
+    offset = 250 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
@@ -170,12 +170,15 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     last_row = df.iloc[-1]
+    prv_row = df.iloc[-3]
     renko_param[symbol].update({
         'Date': last_row.name,
         'close': last_row['HA_close'],
         'single': last_row['single'],
         'EMA_21_UP': last_row['EMA_21_UP'],
         'EMA_21_DN': last_row['EMA_21_DN'],
+        'EMA_21_UP_PRV': prv_row['EMA_21_UP'],
+        'EMA_21_DN_PRV': prv_row['EMA_21_DN'],
         'EMA_21': last_row['EMA_21'],
     })
 
@@ -262,6 +265,8 @@ while True:
                 EMA_21 = renko_param[symbol]['EMA_21']
                 EMA_21_UP = renko_param[symbol]['EMA_21_UP']
                 EMA_21_DN = renko_param[symbol]['EMA_21_DN']
+                EMA_21_UP_PRV = renko_param[symbol]['EMA_21_UP_PRV']
+                EMA_21_DN_PRV = renko_param[symbol]['EMA_21_DN_PRV']
                 single = renko_param[symbol]['single']
                 option = renko_param[symbol]['option']
 
@@ -295,7 +300,7 @@ while True:
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                                log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21_DN} | StopOrderID: {stop_order.get('id')}", alert=True)
                             else:
                                 log(f"⚠️ Failed to place stop loss for BUY {symbol} after entry. Check API.", alert=True)
                         else:
@@ -307,7 +312,7 @@ while True:
                 # --- BUY MANAGEMENT ---
                 elif option == 1:
                     stop_id = renko_param[symbol]['stop_order_id']
-                    if stop_id:
+                    if stop_id and EMA_21_DN > EMA_21_DN_PRV:
                         edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21_DN)
                         log(f"🔒 update Stop Loss placed for BUY {symbol} and {stop_id} at price :{EMA_21_DN}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
@@ -353,7 +358,7 @@ while True:
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21_UP} | StopOrderID: {stop_order.get('id')}", alert=True)
                             else:
                                 log(f"⚠️ Failed to place stop loss for SELL {symbol} after entry. Check API.", alert=True)
                         else:
@@ -364,7 +369,7 @@ while True:
                 # --- SELL MANAGEMENT ---
                 elif option == 2:
                     stop_id = renko_param[symbol]['stop_order_id']
-                    if stop_id:
+                    if stop_id and EMA_21_UP < EMA_21_UP_PRV:
                         edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21_UP)
                         log(f"🔒 update Stop Loss placed for sell {symbol} and {stop_id} at price:{EMA_21_UP}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
