@@ -15,6 +15,10 @@ load_dotenv()
 # ---------------------------------------
 symbols = ["BTCUSD", "ETHUSD"]
 ORDER_QTY = 30
+QTY = {
+    "BTCUSD": 0.03,  # 0.01 BTC
+    "ETHUSD": 0.3   # 0.1 ETH
+}
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -321,7 +325,7 @@ while True:
                         if stop_triggered:
                             exit_price = EMA_21
                             entry_price = renko_param[symbol]['entry_price']
-                            pnl = (exit_price - entry_price) * ORDER_QTY
+                            pnl = (exit_price - entry_price) * QTY[symbol]
                             renko_param[symbol].update({
                                 'option': 0, 'stop_order_id': None,
                                 'main_order_id': None, 'exit_price': exit_price,
@@ -378,7 +382,7 @@ while True:
                         if stop_triggered:
                             exit_price = EMA_21
                             entry_price = renko_param[symbol]['entry_price']
-                            pnl = (entry_price - exit_price) * ORDER_QTY
+                            pnl = (entry_price - exit_price) * QTY[symbol]
                             renko_param[symbol].update({
                                 'option': 0, 'stop_order_id': None,
                                 'main_order_id': None, 'exit_price': exit_price,
