@@ -141,7 +141,7 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
-    df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -150,14 +150,15 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     # Heikin Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
+    df['ADX'] = ta.adx(high=df['HA_close'], low=df['HA_low'], close=df['HA_high'], length=14)['ADX_14']
 
-    offset = 200 if symbol == "BTCUSD" else 20
+    offset = 300 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
     df['single'] = 0
-    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_close'].shift(1)) & (df['HA_close'] > df['HA_open']), 'single'] = 1
-    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']), 'single'] = -1
+    df.loc[(df['HA_close'] > df['EMA_21_UP']) & (df['HA_close'] > df['HA_close'].shift(1)) & (df['HA_close'] > df['HA_open']) & (df['ADX'] > 25), 'single'] = 1
+    df.loc[(df['HA_close'] < df['EMA_21_DN']) & (df['HA_close'] < df['HA_close'].shift(1)) & (df['HA_close'] < df['HA_open']) & (df['ADX'] > 25), 'single'] = -1
 
     os.makedirs(ha_save_dir, exist_ok=True)
     try:
