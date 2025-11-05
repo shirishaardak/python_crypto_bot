@@ -151,7 +151,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
-    offset = 300 if symbol == "BTCUSD" else 20
+    offset = 150 if symbol == "BTCUSD" else 15
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
@@ -169,7 +169,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         log(f"Not enough data for {symbol}", alert=True)
         return renko_param
 
-    last_row = df.iloc[-2]
+    last_row = df.iloc[-1]
     renko_param[symbol].update({
         'Date': last_row.name,
         'close': last_row['HA_close'],
@@ -260,6 +260,8 @@ while True:
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
                 EMA_21 = renko_param[symbol]['EMA_21']
+                EMA_21_UP = renko_param[symbol]['EMA_21_UP']
+                EMA_21_DN = renko_param[symbol]['EMA_21_DN']
                 single = renko_param[symbol]['single']
                 option = renko_param[symbol]['option']
 
@@ -289,7 +291,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='sell',
                                 order_type=OrderType.MARKET,
-                                stop_price=EMA_21
+                                stop_price=EMA_21_DN
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
@@ -306,8 +308,8 @@ while True:
                 elif option == 1:
                     stop_id = renko_param[symbol]['stop_order_id']
                     if stop_id:
-                        edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21)
-                        log(f"🔒 update Stop Loss placed for BUY {symbol} and {stop_id} at price :{EMA_21}", alert=True)
+                        edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21_DN)
+                        log(f"🔒 update Stop Loss placed for BUY {symbol} and {stop_id} at price :{EMA_21_DN}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
                         if stop_triggered:
@@ -347,7 +349,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='buy',
                                 order_type=OrderType.MARKET,
-                                stop_price=EMA_21
+                                stop_price=EMA_21_UP
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
@@ -363,8 +365,8 @@ while True:
                 elif option == 2:
                     stop_id = renko_param[symbol]['stop_order_id']
                     if stop_id:
-                        edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21)
-                        log(f"🔒 update Stop Loss placed for sell {symbol} and {stop_id} at price:{EMA_21}", alert=True)
+                        edit_stop_order_with_error_handling(client, stop_id, product_id, EMA_21_UP)
+                        log(f"🔒 update Stop Loss placed for sell {symbol} and {stop_id} at price:{EMA_21_UP}", alert=True)
                         get_orders = get_history_orders_with_error_handling(client, product_id)
                         stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
                         if stop_triggered:
