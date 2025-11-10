@@ -266,7 +266,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and now.minute % 5 == 0:
+        if now.second == 10 and now.minute % 15 == 0:
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -309,7 +309,7 @@ while True:
 
                 # --- BUY MANAGEMENT ---
                 elif option == 1:                   
-                        if price < EMA_21:
+                        if price < EMA_21_DN:
                                 # Place market sell order to exit position
                                 exit_order = place_order_with_error_handling(
                                     client,
@@ -356,7 +356,7 @@ while True:
                 # --- SELL MANAGEMENT ---
                 elif option == 2:                    
                         # Check if we should exit the position
-                        if price > EMA_21:  # Exit condition for sell position                            
+                        if price > EMA_21_UP:  # Exit condition for sell position                            
                                 # Place market buy order to exit position
                                 exit_order = place_order_with_error_handling(
                                     client,
