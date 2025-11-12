@@ -156,7 +156,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
     df['ADX'] = ta.adx(high=df['HA_close'], low=df['HA_low'], close=df['HA_high'], length=14)['ADX_14']
 
-    offset = 200 if symbol == "BTCUSD" else 10
+    offset = 200 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
