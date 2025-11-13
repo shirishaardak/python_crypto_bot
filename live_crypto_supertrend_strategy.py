@@ -249,10 +249,11 @@ def get_history_orders_with_error_handling(client, product_id):
 def get_live_orders_with_error_handling():
     try:        
         response = client.get_live_orders()
-        if not response or 'result' not in response:
-            log(f"⚠️ Unexpected live orders response: {response}", alert=True)
+        if not response:
+            log(f"⚠️ No live orders returned", alert=True)
             return []
-        return response['result']
+        # Response is already a list of orders, return it directly
+        return response
     except Exception as e:
         log(f"⚠️ Error getting live orders: {e}", alert=True)
         return []
@@ -326,7 +327,7 @@ while True:
                     stop_id = renko_param[symbol]['stop_order_id']
                     
                     # Exit condition: price breaks below EMA_21_DN or signal changes
-                    if single == -1 or price < EMA_21_DN:
+                    if price < EMA_21_DN:
                         # Cancel existing stop order only if it exists and is still pending
                         if stop_id:
                             live_orders = get_live_orders_with_error_handling()
@@ -432,7 +433,7 @@ while True:
                     stop_id = renko_param[symbol]['stop_order_id']
                     
                     # Exit condition: price breaks above EMA_21_UP or signal changes
-                    if single == 1 or price > EMA_21_UP:
+                    if price > EMA_21_UP:
                         # Cancel existing stop order only if it exists and is still pending
                         if stop_id:
                             live_orders = get_live_orders_with_error_handling()
