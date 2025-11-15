@@ -153,6 +153,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
 
     # Heikin Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
+    df_15m = ta.ha(open_=df_15m['open'], high=df_15m['high'], close=df_15m['close'], low=df_15m['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
     # Removed ADX calculation as it's not needed
 
