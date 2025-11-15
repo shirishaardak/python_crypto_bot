@@ -145,7 +145,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
     df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
-    df_15m = fetch_and_save_delta_candles(symbol, resolution='5m', days=7, save_dir=ha_save_dir)
+    df_15m = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -215,7 +215,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and now.minute % 5 == 0:
+        if now.second == 10 and now.minute % 15 == 0:
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
