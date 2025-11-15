@@ -145,6 +145,7 @@ def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', 
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
     df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
+    df_15m = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
@@ -174,10 +175,12 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     last_row = df.iloc[-1]
+    last_row_15m = df_15m.iloc[-1]
     # Removed unused prv_row variable
     renko_param[symbol].update({
         'Date': last_row.name,
         'close': last_row['HA_close'],
+        'close_15m': last_row_15m['HA_close'],
         'single': last_row['single'],
         'EMA_21_UP': last_row['EMA_21_UP'],
         'EMA_21_DN': last_row['EMA_21_DN'],
@@ -220,6 +223,7 @@ while True:
             # Trading logic
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
+                close_15m = renko_param[symbol]['close_15m']
                 EMA_21 = renko_param[symbol]['EMA_21']
                 EMA_21_UP = renko_param[symbol]['EMA_21_UP']
                 EMA_21_DN = renko_param[symbol]['EMA_21_DN']
@@ -227,7 +231,7 @@ while True:
                 option = renko_param[symbol]['option']
 
                 # --- BUY ENTRY ---
-                if single == 1 and option == 0:
+                if close_15m > EMA_21_UP and option == 0:
                     log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
                     buy_order = place_order_with_error_handling(
                         client,
@@ -255,7 +259,7 @@ while True:
                 # --- BUY MANAGEMENT (simplified - no stop loss) ---
                 elif option == 1:
                     # Exit condition: price breaks below EMA_21_DN or signal reversal
-                    if price < EMA_21:
+                    if close_15m < EMA_21:
                         # Exit position with market order
                         exit_order = place_order_with_error_handling(
                             client,
@@ -283,7 +287,7 @@ while True:
                             log(f"⚠️ Failed to exit LONG position for {symbol}", alert=True)
 
                 # --- SELL ENTRY ---
-                if single == -1 and option == 0:
+                if close_15m < EMA_21_UP and option == 0:
                     log(f"🔻 SELL signal for {symbol} at {price}", alert=True)
                     sell_order = place_order_with_error_handling(
                         client,
@@ -311,7 +315,7 @@ while True:
                 # --- SELL MANAGEMENT (simplified - no stop loss) ---
                 elif option == 2:
                     # Exit condition: price breaks above EMA_21_UP or signal reversal
-                    if price > EMA_21:                  
+                    if close_15m > EMA_21:                  
                         # Exit position with market order
                         exit_order = place_order_with_error_handling(
                             client,
