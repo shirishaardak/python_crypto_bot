@@ -111,7 +111,7 @@ renko_param = {
 # ---------------------------------------
 # Fetch candles
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -144,7 +144,7 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
-    df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
