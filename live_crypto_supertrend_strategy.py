@@ -233,7 +233,7 @@ while True:
                 option = renko_param[symbol]['option']
 
                 # --- BUY ENTRY ---
-                if close_15m > EMA_21_UP and option == 0:
+                if price > EMA_21_UP and option == 0:
                     log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
                     buy_order = place_order_with_error_handling(
                         client,
@@ -289,7 +289,7 @@ while True:
                             log(f"⚠️ Failed to exit LONG position for {symbol}", alert=True)
 
                 # --- SELL ENTRY ---
-                if close_15m < EMA_21_DN and option == 0:
+                if price < EMA_21_DN and option == 0:
                     log(f"🔻 SELL signal for {symbol} at {price}", alert=True)
                     sell_order = place_order_with_error_handling(
                         client,
