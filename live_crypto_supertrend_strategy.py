@@ -150,6 +150,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     df = df.sort_index()
+    df_15m = df_15m.sort_index()
 
     # Heikin Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
