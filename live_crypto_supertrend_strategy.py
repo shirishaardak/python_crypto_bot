@@ -260,6 +260,8 @@ while True:
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
                 EMA_21 = renko_param[symbol]['EMA_21']
+                EMA_21_UP = renko_param[symbol]['EMA_21_UP']
+                EMA_21_DN = renko_param[symbol]['EMA_21_DN']
                 single = renko_param[symbol]['single']
                 option = renko_param[symbol]['option']
 
@@ -289,7 +291,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='sell',
                                 order_type=OrderType.MARKET,
-                                trail_amount=price - EMA_21,
+                                trail_amount=price - EMA_21_DN,
                                 isTrailingStopLoss=True
                             )
                             if stop_order:
@@ -346,7 +348,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='buy',
                                 order_type=OrderType.MARKET,
-                                trail_amount=EMA_21 -price,
+                                trail_amount=EMA_21_UP -price,
                                 isTrailingStopLoss=True
                             )
                             if stop_order:
