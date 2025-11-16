@@ -294,7 +294,7 @@ while True:
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                                log(f"🔒 Stop Loss placed for BUY {symbol} at {price - EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
                             else:
                                 log(f"⚠️ Failed to place stop loss for BUY {symbol} after entry. Check API.", alert=True)
                         else:
@@ -351,7 +351,7 @@ while True:
                             )
                             if stop_order:
                                 renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
+                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21 -price} | StopOrderID: {stop_order.get('id')}", alert=True)
                             else:
                                 log(f"⚠️ Failed to place stop loss for SELL {symbol} after entry. Check API.", alert=True)
                         else:
