@@ -108,7 +108,7 @@ renko_param = {
 # ---------------------------------------
 # Fetch candles
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -151,7 +151,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
 
-    offset = 300 if symbol == "BTCUSD" else 20
+    offset = 250 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
@@ -249,7 +249,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and now.minute % 5 == 0:
+        if now.second == 10 and now.minute % 15 == 0:
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
