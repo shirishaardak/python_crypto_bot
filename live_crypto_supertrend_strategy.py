@@ -15,6 +15,10 @@ load_dotenv()
 # ---------------------------------------
 symbols = ["BTCUSD", "ETHUSD"]
 ORDER_QTY = 30
+QTY = {
+    "BTCUSD": 0.03,  # 0.01 BTC
+    "ETHUSD": 0.3   # 0.1 ETH
+}
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -85,7 +89,7 @@ if not symbols_map:
 print("Loaded futures product IDs:", symbols_map)
 
 # ---------------------------------------
-# Renko parameters
+# Renko parameters (cleaned up - removed stop loss fields)
 # ---------------------------------------
 renko_param = {
     symbol: {
@@ -96,7 +100,6 @@ renko_param = {
         'EMA_21': None,
         'EMA_21_UP': None,
         'EMA_21_DN': None,
-        'stop_order_id': None,
         'main_order_id': None,
         'entry_price': None,
         'exit_price': None,
@@ -108,7 +111,7 @@ renko_param = {
 # ---------------------------------------
 # Fetch candles
 # ---------------------------------------
-def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.', tz='Asia/Kolkata'):
+def fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir='.', tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -141,15 +144,19 @@ def fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir='.',
 # Process symbol
 # ---------------------------------------
 def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertrend_strategy"):
-    df = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
+    df = fetch_and_save_delta_candles(symbol, resolution='1h', days=7, save_dir=ha_save_dir)
+    df_15m = fetch_and_save_delta_candles(symbol, resolution='15m', days=7, save_dir=ha_save_dir)
     if df is None or df.empty:
         return renko_param
 
     df = df.sort_index()
+    df_15m = df_15m.sort_index()
 
     # Heikin Ashi
     df = ta.ha(open_=df['open'], high=df['high'], close=df['close'], low=df['low'])
+    df_15m = ta.ha(open_=df_15m['open'], high=df_15m['high'], close=df_15m['close'], low=df_15m['low'])
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
+    # Removed ADX calculation as it's not needed
 
     offset = 300 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
@@ -170,9 +177,12 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
         return renko_param
 
     last_row = df.iloc[-1]
+    last_row_15m = df_15m.iloc[-1]
+    # Removed unused prv_row variable
     renko_param[symbol].update({
         'Date': last_row.name,
         'close': last_row['HA_close'],
+        'close_15m': last_row_15m['HA_close'],
         'single': last_row['single'],
         'EMA_21_UP': last_row['EMA_21_UP'],
         'EMA_21_DN': last_row['EMA_21_DN'],
@@ -182,7 +192,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     return renko_param
 
 # ---------------------------------------
-# Helper functions (with alerts on failures)
+# Helper functions (cleaned up - removed stop loss functions)
 # ---------------------------------------
 def place_order_with_error_handling(client, **kwargs):
     try:
@@ -196,50 +206,6 @@ def place_order_with_error_handling(client, **kwargs):
         log(f"⚠️ Error placing order: {e} | payload: {kwargs}", alert=True)
         return None
 
-def place_stop_order_with_error_handling(client, **kwargs):
-    try:
-        resp = client.place_stop_order(**kwargs)
-        if not resp:
-            log(f"⚠️ place_stop_order returned empty response for payload: {kwargs}", alert=True)
-            return None
-        return resp
-    except Exception as e:
-        log(f"⚠️ Error placing stop order: {e} | payload: {kwargs}", alert=True)
-        return None
-
-def cancel_order_with_error_handling(client, order_id, product_id):
-    try:
-        resp = client.cancel_order(order_id, product_id)
-        if not resp:
-            log(f"⚠️ cancel_order returned empty response for order {order_id} product {product_id}", alert=True)
-        return resp
-    except Exception as e:
-        log(f"⚠️ Error cancelling order {order_id}: {e}", alert=True)
-        return None
-
-def edit_stop_order_with_error_handling(client, order_id, product_id, new_stop_price):
-    try:
-        payload = {"id": order_id, "product_id": product_id, "stop_price": str(new_stop_price)}
-        resp = client.request("PUT", "/v2/orders/", payload, auth=True)
-        if not resp:
-            log(f"⚠️ edit_stop_order returned empty response for {order_id} payload: {payload}", alert=True)
-        return resp
-    except Exception as e:
-        log(f"⚠️ Error editing order {order_id}: {e}", alert=True)
-        return None
-
-def get_history_orders_with_error_handling(client, product_id):
-    try:
-        query = {"product_id": product_id}
-        response = client.order_history(query, page_size=10)
-        if not response or 'result' not in response:
-            log(f"⚠️ Unexpected order_history response for product {product_id}: {response}", alert=True)
-            return []
-        return response['result']
-    except Exception as e:
-        log(f"⚠️ Error getting order history: {e}", alert=True)
-        return []
-
 # ---------------------------------------
 # MAIN LOOP
 # ---------------------------------------
@@ -249,7 +215,7 @@ while True:
     try:
         now = datetime.now()
 
-        if now.second == 10 and now.minute % 5 == 0:
+        if now.second == 10 and now.minute % 15 == 0:
             print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cycle...")
 
             # Process symbols
@@ -259,12 +225,15 @@ while True:
             # Trading logic
             for symbol, product_id in symbols_map.items():
                 price = renko_param[symbol]['close']
+                close_15m = renko_param[symbol]['close_15m']
                 EMA_21 = renko_param[symbol]['EMA_21']
+                EMA_21_UP = renko_param[symbol]['EMA_21_UP']
+                EMA_21_DN = renko_param[symbol]['EMA_21_DN']
                 single = renko_param[symbol]['single']
                 option = renko_param[symbol]['option']
 
                 # --- BUY ENTRY ---
-                if single == 1 and option == 0:
+                if close_15m > EMA_21_UP and option == 0:
                     log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
                     buy_order = place_order_with_error_handling(
                         client,
@@ -282,46 +251,45 @@ while True:
                                 'main_order_id': order_id,
                                 'entry_price': price
                             })
-                            log(f"✅ BUY executed on {symbol} — Entry: {price} | OrderID: {order_id}", alert=True)
-                            stop_order = place_stop_order_with_error_handling(
-                                client,
-                                product_id=product_id,
-                                size=ORDER_QTY,
-                                side='sell',
-                                order_type=OrderType.MARKET,
-                                trail_amount=price - EMA_21,
-                                isTrailingStopLoss=True
-                            )
-                            if stop_order:
-                                renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for BUY {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
-                            else:
-                                log(f"⚠️ Failed to place stop loss for BUY {symbol} after entry. Check API.", alert=True)
+                            log(f"✅ BUY executed on {symbol} — Entry: {price} | OrderID: {order_id}", alert=True)                            
                         else:
                             # Order exists but not closed (open/partially filled/etc). Alert and save response.
                             log(f"⚠️ BUY placed for {symbol} but not filled/closed. State: {order_state} | Order: {buy_order}", alert=True)
                     else:
                         log(f"⚠️ BUY order failed to be placed for {symbol}", alert=True)
 
-                # --- BUY MANAGEMENT ---
+                # --- BUY MANAGEMENT (simplified - no stop loss) ---
                 elif option == 1:
-                    stop_id = renko_param[symbol]['stop_order_id']
-                    if stop_id:                        
-                        get_orders = get_history_orders_with_error_handling(client, product_id)
-                        stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
-                        if stop_triggered:
-                            exit_price = EMA_21
+                    # Exit condition: price breaks below EMA_21_DN or signal reversal
+                    if close_15m < EMA_21:
+                        # Exit position with market order
+                        exit_order = place_order_with_error_handling(
+                            client,
+                            product_id=product_id,
+                            order_type=OrderType.MARKET,
+                            side='sell',
+                            size=ORDER_QTY
+                        )
+                        
+                        if exit_order and exit_order.get('state') == 'closed':
+                            exit_price = price
                             entry_price = renko_param[symbol]['entry_price']
-                            pnl = (exit_price - entry_price) * ORDER_QTY
+                            pnl = (exit_price - entry_price) * QTY[symbol]
+                            
                             renko_param[symbol].update({
-                                'option': 0, 'stop_order_id': None,
-                                'main_order_id': None, 'exit_price': exit_price,
+                                'option': 0,
+                                'main_order_id': None,
+                                'exit_price': exit_price,
                                 'pnl': pnl
                             })
-                            log(f"🔴 BUY Stop Loss Triggered on {symbol} — Exit: {exit_price} | PnL: {pnl:.2f}", alert=True)
+                            
+                            reason = "Signal Reversal" if single == -1 else "EMA Break"
+                            log(f"🔴 LONG Position Closed on {symbol} ({reason}) — Exit: {exit_price} | PnL: {pnl:.4f}", alert=True)
+                        else:
+                            log(f"⚠️ Failed to exit LONG position for {symbol}", alert=True)
 
                 # --- SELL ENTRY ---
-                if single == -1 and option == 0:
+                if close_15m < EMA_21_DN and option == 0:
                     log(f"🔻 SELL signal for {symbol} at {price}", alert=True)
                     sell_order = place_order_with_error_handling(
                         client,
@@ -340,56 +308,52 @@ while True:
                                 'entry_price': price
                             })
                             log(f"✅ SELL executed on {symbol} — Entry: {price} | OrderID: {order_id}", alert=True)
-                            stop_order = place_stop_order_with_error_handling(
-                                client,
-                                product_id=product_id,
-                                size=ORDER_QTY,
-                                side='buy',
-                                order_type=OrderType.MARKET,
-                                trail_amount=EMA_21 -price,
-                                isTrailingStopLoss=True
-                            )
-                            if stop_order:
-                                renko_param[symbol]['stop_order_id'] = stop_order.get('id')
-                                log(f"🔒 Stop Loss placed for SELL {symbol} at {EMA_21} | StopOrderID: {stop_order.get('id')}", alert=True)
-                            else:
-                                log(f"⚠️ Failed to place stop loss for SELL {symbol} after entry. Check API.", alert=True)
+                            
                         else:
                             log(f"⚠️ SELL placed for {symbol} but not filled/closed. State: {order_state} | Order: {sell_order}", alert=True)
                     else:
                         log(f"⚠️ SELL order failed to be placed for {symbol}", alert=True)
 
-                # --- SELL MANAGEMENT ---
+                # --- SELL MANAGEMENT (simplified - no stop loss) ---
                 elif option == 2:
-                    stop_id = renko_param[symbol]['stop_order_id']
-                    if stop_id:                       
-                        get_orders = get_history_orders_with_error_handling(client, product_id)
-                        stop_triggered = any(o['id'] == stop_id and o['state'] == 'closed' for o in get_orders)
-                        if stop_triggered:
-                            exit_price = EMA_21
+                    # Exit condition: price breaks above EMA_21_UP or signal reversal
+                    if close_15m > EMA_21:                  
+                        # Exit position with market order
+                        exit_order = place_order_with_error_handling(
+                            client,
+                            product_id=product_id,
+                            order_type=OrderType.MARKET,
+                            side='buy',
+                            size=ORDER_QTY
+                        )
+                        
+                        if exit_order and exit_order.get('state') == 'closed':
+                            exit_price = price
                             entry_price = renko_param[symbol]['entry_price']
-                            pnl = (entry_price - exit_price) * ORDER_QTY
+                            pnl = (entry_price - exit_price) * QTY[symbol]
+                            
                             renko_param[symbol].update({
-                                'option': 0, 'stop_order_id': None,
-                                'main_order_id': None, 'exit_price': exit_price,
+                                'option': 0,
+                                'main_order_id': None,
+                                'exit_price': exit_price,
                                 'pnl': pnl
                             })
-                            log(f"🔴 SELL Stop Loss Triggered on {symbol} — Exit: {exit_price} | PnL: {pnl:.2f}", alert=True)
+                            
+                            reason = "Signal Reversal" if single == 1 else "EMA Break"
+                            log(f"🔴 SHORT Position Closed on {symbol} ({reason}) — Exit: {exit_price} | PnL: {pnl:.4f}", alert=True)
+                        else:
+                            log(f"⚠️ Failed to exit SHORT position for {symbol}", alert=True)
 
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
             print("\nCurrent Strategy Status:")
-            print(df_status[['Date', 'close', 'option', 'single', 'pnl']])
+            print(df_status[['Date', 'close_15m', 'EMA_21_UP', 'EMA_21_DN', 'EMA_21', 'option', 'single', 'pnl']])
 
             print("Waiting for next cycle...\n")
             t.sleep(55)
 
     except KeyboardInterrupt:
         log("🛑 Manual shutdown detected. Exiting gracefully...", alert=True)
-        for symbol in symbols_map:
-            stop_id = renko_param[symbol]['stop_order_id']
-            if stop_id:
-                log(f"❌ Cancelling stop order {stop_id} for {symbol}", alert=True)
-                cancel_order_with_error_handling(client, stop_id, symbols_map[symbol])
+        # Removed stop order cancellation logic
         break
 
     except Exception as e:
