@@ -340,7 +340,7 @@ while True:
 
             df_status = pd.DataFrame.from_dict(renko_param, orient='index')
             print("\nCurrent Strategy Status:")
-            print(df_status[['Date', 'close_15m', 'EMA_21_UP', 'EMA_21_DN', 'EMA_21', 'option', 'single', 'pnl']])
+            print(df_status[['Date', 'EMA_21_UP', 'EMA_21_DN', 'EMA_21', 'option', 'single', 'pnl']])
 
             print("Waiting for next cycle...\n")
             t.sleep(55)
