@@ -158,7 +158,7 @@ def process_symbol(symbol, renko_param, ha_save_dir="./data/live_crypto_supertre
     df['EMA_21'] = ta.ema(df['HA_close'], length=5)
     # Removed ADX calculation as it's not needed
 
-    offset = 250 if symbol == "BTCUSD" else 20
+    offset = 300 if symbol == "BTCUSD" else 20
     df['EMA_21_UP'] = df['EMA_21'] + offset
     df['EMA_21_DN'] = df['EMA_21'] - offset
 
@@ -233,7 +233,7 @@ while True:
                 option = renko_param[symbol]['option']
 
                 # --- BUY ENTRY ---
-                if price > EMA_21_UP and option == 0:
+                if close_15m > EMA_21_UP and option == 0:
                     log(f"🟢 BUY signal for {symbol} at {price}", alert=True)
                     buy_order = place_order_with_error_handling(
                         client,
@@ -289,7 +289,7 @@ while True:
                             log(f"⚠️ Failed to exit LONG position for {symbol}", alert=True)
 
                 # --- SELL ENTRY ---
-                if price < EMA_21_DN and option == 0:
+                if close_15m < EMA_21_DN and option == 0:
                     log(f"🔻 SELL signal for {symbol} at {price}", alert=True)
                     sell_order = place_order_with_error_handling(
                         client,
