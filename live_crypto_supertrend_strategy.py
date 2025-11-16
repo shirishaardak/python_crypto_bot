@@ -16,6 +16,11 @@ load_dotenv()
 symbols = ["BTCUSD", "ETHUSD"]
 ORDER_QTY = 30
 
+TRAIL_AMOUNTS = {
+    "BTCUSD": 500,
+    "ETHUSD": 30
+}
+
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -291,7 +296,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='sell',
                                 order_type=OrderType.MARKET,
-                                trail_amount=price - EMA_21_DN,
+                                trail_amount=TRAIL_AMOUNTS[symbol],
                                 isTrailingStopLoss=True
                             )
                             if stop_order:
@@ -348,7 +353,7 @@ while True:
                                 size=ORDER_QTY,
                                 side='buy',
                                 order_type=OrderType.MARKET,
-                                trail_amount=EMA_21_UP -price,
+                                trail_amount=TRAIL_AMOUNTS[symbol],
                                 isTrailingStopLoss=True
                             )
                             if stop_order:
