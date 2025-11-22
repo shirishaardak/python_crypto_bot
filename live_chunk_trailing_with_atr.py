@@ -227,7 +227,7 @@ def calculate_ema(df, period=10):
 
     return ha_df
 
-def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, df, product_id=None, ORDER_QTY=None):
+def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, prev_close, df, product_id=None, ORDER_QTY=None):
 
     contracts = DEFAULT_CONTRACTS[symbol]
     contract_size = CONTRACT_SIZE[symbol]
@@ -258,7 +258,7 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
     if pos is None:
 
         # ---- LONG ENTRY ----
-        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value:
+        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value and last_close > prev_close:
             entry_price = last_base_price[symbol] + entry_move
 
             # 🔵 Place LIVE MARKET BUY ORDER for LONG
@@ -299,7 +299,7 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
             return
 
         # ---- SHORT ENTRY ----
-        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value:
+        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value and last_close > prev_close:
             entry_price = last_base_price[symbol] - entry_move
 
             # 🔴 Place LIVE MARKET SELL ORDER for SHORT
@@ -439,6 +439,7 @@ def run_live():
                 ha_df = calculate_ema(df, period=10)
                 ema_value = ha_df["EMA"].iloc[-1]
                 last_close = df["Close"].iloc[-1]
+                prev_close = df["Close"].iloc[-2]
 
                 # save_processed_data(ha_df, symbol)
 
@@ -457,6 +458,7 @@ def run_live():
                     trailing_level,
                     ema_value,
                     last_close,
+                    prev_close,
                     ha_df,
                     product_id=product_id,
                     ORDER_QTY=None  # Removed redundant parameter
