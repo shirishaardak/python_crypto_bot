@@ -353,21 +353,6 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
                 exit_fee = commission(price, contracts, symbol)
                 net_pnl = pnl - exit_fee
 
-                save_trade_row({
-                    "symbol": symbol,
-                    "side": "long",
-                    "entry_time": pos["entry_time"],
-                    "exit_time": datetime.now(),
-                    "qty": contracts,
-                    "entry": pos["entry"],
-                    "exit": price,
-                    "gross_pnl": round(pnl, 6),
-                    "commission": round(exit_fee, 6),
-                    "net_pnl": round(net_pnl, 6)
-                })
-
-                log(f"{symbol} | LONG EXIT | Exit: {price} | Net PnL: {net_pnl}")
-
                 # 🔵 Place MARKET SELL to exit LONG
                 try:
                     exit_order = place_order_with_error_handling(
@@ -406,22 +391,7 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
             if price >= pos["stop"]:
                 pnl = (pos["entry"] - price) * contract_size * contracts
                 exit_fee = commission(price, contracts, symbol)
-                net_pnl = pnl - exit_fee
-
-                save_trade_row({
-                    "symbol": symbol,
-                    "side": "short",
-                    "entry_time": pos["entry_time"],
-                    "exit_time": datetime.now(),
-                    "qty": contracts,
-                    "entry": pos["entry"],
-                    "exit": price,
-                    "gross_pnl": round(pnl, 6),
-                    "commission": round(exit_fee, 6),
-                    "net_pnl": round(net_pnl, 6)
-                })
-
-                log(f"{symbol} | SHORT EXIT | Exit: {price} | Net PnL: {net_pnl}")
+                net_pnl = pnl - exit_fee              
 
                 # 🔴 Place MARKET BUY to exit SHORT
                 try:
@@ -470,7 +440,7 @@ def run_live():
                 ema_value = ha_df["EMA"].iloc[-1]
                 last_close = df["Close"].iloc[-1]
 
-                save_processed_data(ha_df, symbol)
+                # save_processed_data(ha_df, symbol)
 
                 price = fetch_ticker_price(symbol)
                 if price is None:
