@@ -8,11 +8,11 @@ import pandas_ta as ta
 # ================= SETTINGS ===============================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 ENTRY_MOVE = {"BTCUSD": 100, "ETHUSD": 10}
-STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 20}
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 15}
 TRAILING_CHUNK = {"BTCUSD": 50, "ETHUSD": 5}
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-TAKER_FEE = 0.0005
+TAKER_FEE = 0.0005  # 0.05%
 
 SAVE_DIR = os.path.join(os.getcwd(), "data", "chunk_trailing_with_atr")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -110,19 +110,17 @@ def fetch_candles(symbol, resolution="5m", days=1, tz='Asia/Kolkata'):
 def calculate_ema(df, period=10):
     ha_df = ta.ha(open_=df['Open'], high=df['High'], close=df['Close'], low=df['Low'])
 
-    # ATR using raw OHLC
     atr = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=14)
     ha_df["ATR"] = atr
 
-    # ATR 14-period SMA
     ha_df["ATR_avg"] = ha_df["ATR"].rolling(14).mean()
 
-    # EMA of HA close
     ha_df["EMA"] = ha_df["HA_close"].ewm(span=period, adjust=False).mean()
 
     return ha_df
 
-def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, df):
+# ============= UPDATED PROCESS PRICE TREND (FULL FIXED VERSION) =============
+def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, prev_close, df):
 
     contracts = DEFAULT_CONTRACTS[symbol]
     contract_size = CONTRACT_SIZE[symbol]
@@ -135,9 +133,8 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
     if ema_value is None:
         return
 
-    # ===== ATR FILTER =====
-    atr_val = df["ATR"].iloc[-1]
-    atr_avg = df["ATR_avg"].iloc[-1]
+    atr_val = df["ATR"].iloc[-2]
+    atr_avg = df["ATR_avg"].iloc[-2]
 
     if pd.isna(atr_val) or pd.isna(atr_avg):
         return
@@ -149,12 +146,15 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
         trailing_level[symbol] = None
         return
 
-    # ================= ENTRY CONDITIONS WITH ATR ===================
+    # ================= ENTRY =================
     if pos is None:
 
-        # ---- LONG ENTRY ----
-        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value:
-            entry_price = last_base_price[symbol] + entry_move
+        # LONG
+        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value and last_close > prev_close:
+
+            entry_price = price
+            entry_fee = commission(entry_price, contracts, symbol)
+
             positions[symbol] = {
                 "side": "long",
                 "entry": entry_price,
@@ -162,15 +162,19 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
                 "contracts": contracts,
                 "contract_size": contract_size,
                 "entry_time": datetime.now(),
-                "trailing_level": entry_price
+                "trailing_level": entry_price,
+                "entry_fee": entry_fee
             }
             trailing_level[symbol] = entry_price
-            log(f"{symbol} | LONG ENTRY | ATR>ATR_avg & Close>EMA | Entry: {entry_price}")
+            log(f"{symbol} | LONG ENTRY | Entry: {entry_price}")
             return
 
-        # ---- SHORT ENTRY ----
-        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value:
-            entry_price = last_base_price[symbol] - entry_move
+        # SHORT
+        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value and last_close < prev_close:
+
+            entry_price = price
+            entry_fee = commission(entry_price, contracts, symbol)
+
             positions[symbol] = {
                 "side": "short",
                 "entry": entry_price,
@@ -178,24 +182,30 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
                 "contracts": contracts,
                 "contract_size": contract_size,
                 "entry_time": datetime.now(),
-                "trailing_level": entry_price
+                "trailing_level": entry_price,
+                "entry_fee": entry_fee
             }
             trailing_level[symbol] = entry_price
-            log(f"{symbol} | SHORT ENTRY | ATR>ATR_avg & Close<EMA | Entry: {entry_price}")
+            log(f"{symbol} | SHORT ENTRY | Entry: {entry_price}")
             return
 
-    # ================= POSITION MANAGEMENT ===================
+    # ================= POSITION MANAGEMENT =================
     if pos is not None:
+
+        # LONG POSITION
         if pos["side"] == "long":
+
             chunks_up = int((price - pos["trailing_level"]) / chunk)
             if chunks_up > 0:
                 pos["trailing_level"] += chunks_up * chunk
                 pos["stop"] = max(pos["stop"], pos["trailing_level"] - sl_points)
 
             if price <= pos["stop"]:
+
                 pnl = (price - pos["entry"]) * contract_size * contracts
                 exit_fee = commission(price, contracts, symbol)
-                net_pnl = pnl - exit_fee
+                entry_fee = pos.get("entry_fee", 0)
+                net_pnl = pnl - entry_fee - exit_fee
 
                 save_trade_row({
                     "symbol": symbol,
@@ -206,25 +216,31 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
                     "entry": pos["entry"],
                     "exit": price,
                     "gross_pnl": round(pnl, 6),
-                    "commission": round(exit_fee, 6),
+                    "entry_fee": round(entry_fee, 6),
+                    "commission_exit": round(exit_fee, 6),
                     "net_pnl": round(net_pnl, 6)
                 })
 
                 log(f"{symbol} | LONG EXIT | Exit: {price} | Net PnL: {net_pnl}")
+
                 positions[symbol] = None
                 last_base_price[symbol] = price
                 trailing_level[symbol] = None
 
+        # SHORT POSITION
         elif pos["side"] == "short":
+
             chunks_down = int((pos["trailing_level"] - price) / chunk)
             if chunks_down > 0:
                 pos["trailing_level"] -= chunks_down * chunk
                 pos["stop"] = min(pos["stop"], pos["trailing_level"] + sl_points)
 
             if price >= pos["stop"]:
+
                 pnl = (pos["entry"] - price) * contract_size * contracts
                 exit_fee = commission(price, contracts, symbol)
-                net_pnl = pnl - exit_fee
+                entry_fee = pos.get("entry_fee", 0)
+                net_pnl = pnl - entry_fee - exit_fee
 
                 save_trade_row({
                     "symbol": symbol,
@@ -235,11 +251,13 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
                     "entry": pos["entry"],
                     "exit": price,
                     "gross_pnl": round(pnl, 6),
-                    "commission": round(exit_fee, 6),
+                    "entry_fee": round(entry_fee, 6),
+                    "commission_exit": round(exit_fee, 6),
                     "net_pnl": round(net_pnl, 6)
                 })
 
                 log(f"{symbol} | SHORT EXIT | Exit: {price} | Net PnL: {net_pnl}")
+
                 positions[symbol] = None
                 last_base_price[symbol] = price
                 trailing_level[symbol] = None
@@ -250,7 +268,7 @@ def run_live():
     last_base_price = {s: None for s in SYMBOLS}
     trailing_level = {s: None for s in SYMBOLS}
 
-    log("🚀 Starting live Chunk-based Trailing Stop strategy with ATR + EMA + 5m Close confirmation")
+    log("🚀 Starting live Chunk-based Trailing Stop strategy with REAL entry price + entry+exit fee PnL")
 
     while True:
         try:
@@ -262,7 +280,8 @@ def run_live():
                 ha_df = calculate_ema(df, period=10)
                 ema_value = ha_df["EMA"].iloc[-1]
                 last_close = df["Close"].iloc[-1]
-
+                prev_close = df["Close"].iloc[-2]
+ 
                 save_processed_data(ha_df, symbol)
 
                 price = fetch_ticker_price(symbol)
@@ -277,6 +296,7 @@ def run_live():
                     trailing_level,
                     ema_value,
                     last_close,
+                    prev_close,
                     ha_df
                 )
 
