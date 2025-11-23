@@ -224,7 +224,7 @@ def calculate_ema(df, period=10):
     return ha_df
 
 # ============= UPDATED PROCESS PRICE TREND (FULL FIXED VERSION) =============
-def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, df, product_id=None, ORDER_QTY=None):
+def process_price_trend(symbol, price, positions, last_base_price, trailing_level, ema_value, last_close, prev_close, df, product_id=None, ORDER_QTY=None):
 
     contracts = DEFAULT_CONTRACTS[symbol]
     contract_size = CONTRACT_SIZE[symbol]
@@ -254,7 +254,7 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
     if pos is None:
 
         # LONG
-        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value:
+        if atr_condition and price >= last_base_price[symbol] + entry_move and last_close > ema_value and last_close > prev_close:
 
             entry_price = price
             entry_fee = commission(entry_price, contracts, symbol)
@@ -298,7 +298,7 @@ def process_price_trend(symbol, price, positions, last_base_price, trailing_leve
             return
 
         # SHORT
-        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value:
+        elif atr_condition and price <= last_base_price[symbol] - entry_move and last_close < ema_value and last_close < prev_close:
 
             entry_price = price
             entry_fee = commission(entry_price, contracts, symbol)
@@ -449,11 +449,12 @@ def run_live():
                 if df is None or len(df) < 20:
                     continue
 
-                ha_df = calculate_ema(df, period=10)
-                ema_value = ha_df["EMA"].iloc[-1]
-                last_close = df["Close"].iloc[-1]
+                ha_df = calculate_ema(df, period=5)
+                ema_value = ha_df["EMA"].iloc[-2]
+                last_close = df["Close"].iloc[-2]
+                prev_close = df["Close"].iloc[-3]
  
-                #save_processed_data(ha_df, symbol)
+                save_processed_data(ha_df, symbol)
 
                 price = fetch_ticker_price(symbol)
                 if price is None:
@@ -470,6 +471,7 @@ def run_live():
                     trailing_level,
                     ema_value,
                     last_close,
+                    prev_close,
                     ha_df,
                     product_id,
                     ORDER_QTY=None
