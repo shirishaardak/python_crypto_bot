@@ -277,7 +277,7 @@ def run_live():
                 if df is None or len(df) < 20:
                     continue
 
-                ha_df = calculate_ema(df, period=10)
+                ha_df = calculate_ema(df, period=5)
                 ema_value = ha_df["EMA"].iloc[-1]
                 last_close = df["Close"].iloc[-1]
                 prev_close = df["Close"].iloc[-2]
