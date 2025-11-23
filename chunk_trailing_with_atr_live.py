@@ -7,6 +7,9 @@ import pandas_ta as ta
 from delta_rest_client import DeltaRestClient, OrderType
 from dotenv import load_dotenv
 
+load_dotenv()
+
+
 # ================= SETTINGS ===============================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 ENTRY_MOVE = {"BTCUSD": 100, "ETHUSD": 10}
