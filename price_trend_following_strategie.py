@@ -156,8 +156,7 @@ def calculate_trendline(df):
     ha.loc[max_idx, "max_high"] = ha.loc[max_idx, "HA_high"]
     ha.loc[min_idx, "max_low"] = ha.loc[min_idx, "HA_low"]
 
-    ha["max_high"].ffill(inplace=True)
-    ha["max_low"].ffill(inplace=True)
+    ha.ffill(inplace=True, subset=["max_high", "max_low"])
 
     ha["Trendline"] = np.nan
     trendline = ha["max_high"].iloc[0]
