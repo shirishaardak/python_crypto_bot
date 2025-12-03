@@ -219,7 +219,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         return
 
     # EXIT: LONG
-    if pos and pos["side"] == "long" and last_close < raw_trendline -SL:
+    if pos and pos["side"] == "long" and price < raw_trendline -SL:
         pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
         fee = commission(price, pos["contracts"], symbol)
         net = pnl - fee
