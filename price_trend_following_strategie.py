@@ -166,18 +166,32 @@ def calculate_trendline(df):
 
     for i in range(1, len(ha)):
         if ha.loc[i, "max_high"] == ha.loc[i, "HA_high"]:
-            trendline = ha.loc[i, "HA_low"]
+            trendline = ha.loc[i-1, "HA_low"]
         elif ha.loc[i, "max_low"] == ha.loc[i, "HA_low"]:
-            trendline = ha.loc[i, "HA_high"]
+            trendline = ha.loc[i-1, "HA_high"]
 
         ha.loc[i, "Trendline"] = trendline
 
     ha = ha.drop(columns=["max_high", "max_low"])
+    # ADX on actual high/low/close (window=14)
+    adx = ta.adx(
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
+        window=14
+    )
+    # ta.adx returns columns like "ADX_14", ensure existence
+    if "ADX_14" in adx.columns:
+        ha["ADX"] = adx["ADX_14"]
+    else:
+        ha["ADX"] = adx.iloc[:, 0]  # fallback if naming differs
+
+    ha["ADX_avg"] = ha["ADX"].rolling(7, min_periods=1).mean()
     return ha
 
 
 # =================== TRADING LOGIC =====================
-def process_price_trend(symbol, price, positions, prev_close, last_close, df):
+def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_Avg df):
     raw_trendline = df["Trendline"].iloc[-1]
     pos = positions.get(symbol)
 
@@ -186,7 +200,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
     pid = PRODUCT_IDS[symbol]
 
     # ENTRY: LONG
-    if pos is None and last_close > raw_trendline and last_close > prev_close and datetime.now().minute % 15 == 0:
+    if pos is None and last_close > raw_trendline and last_close > prev_close and ADX > ADX_Avg and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "buy", size)
         if resp:
             send_telegram(f"🟢 LONG ENTRY {symbol}\nPrice: {price}")
@@ -201,7 +215,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         return
 
     # ENTRY: SHORT
-    if pos is None and last_close < raw_trendline and last_close < prev_close and datetime.now().minute % 15 == 0:
+    if pos is None and last_close < raw_trendline and last_close < prev_close and ADX > ADX_Avg and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "sell", size)
         if resp:
             send_telegram(f"🔻 SHORT ENTRY {symbol}\nPrice: {price}")
@@ -282,13 +296,15 @@ def run_live():
                     continue
 
                 last_close = ha_df["HA_close"].iloc[-1]
+                ADX = ha_df["ADX"].iloc[-1]
+                ADX_Avg = ha_df["ADX_avg"].iloc[-1]
                 prev_close = ha_df["HA_open"].iloc[-2]
 
                 price = fetch_ticker_price(symbol)
                 if price is None:
                     continue
 
-                process_price_trend(symbol, price, positions, prev_close, last_close, ha_df)
+                process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_Avg, ha_df)
 
             time.sleep(20)
 
