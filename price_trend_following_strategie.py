@@ -16,6 +16,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 PRODUCT_IDS = {"BTCUSD": 27, "ETHUSD": 3136}
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
+STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
 TAKER_FEE = 0.0005
 
 SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategie")
@@ -184,6 +185,8 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
     size = DEFAULT_CONTRACTS[symbol]
     contract_size = CONTRACT_SIZE[symbol]
     pid = PRODUCT_IDS[symbol]
+    SL = STOP_LOSS[symbol]
+
 
     # ENTRY: LONG
     if pos is None and last_close > raw_trendline and last_close > prev_close and datetime.now().minute % 15 == 0:
@@ -216,7 +219,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         return
 
     # EXIT: LONG
-    if pos and pos["side"] == "long" and last_close < raw_trendline:
+    if pos and pos["side"] == "long" and last_close < raw_trendline -SL:
         pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
         fee = commission(price, pos["contracts"], symbol)
         net = pnl - fee
@@ -240,7 +243,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         positions[symbol] = None
 
     # EXIT: SHORT
-    if pos and pos["side"] == "short" and last_close > raw_trendline:
+    if pos and pos["side"] == "short" and price > raw_trendline + SL:
         pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
         fee = commission(price, pos["contracts"], symbol)
         net = pnl - fee
