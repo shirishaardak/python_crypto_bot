@@ -191,7 +191,7 @@ def calculate_trendline(df):
 
 
 # =================== TRADING LOGIC =====================
-def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_Avg df):
+def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_Avg, df):
     raw_trendline = df["Trendline"].iloc[-1]
     pos = positions.get(symbol)
 
