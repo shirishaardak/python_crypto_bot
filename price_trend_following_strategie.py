@@ -187,7 +187,6 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
     pid = PRODUCT_IDS[symbol]
     SL = STOP_LOSS[symbol]
 
-
     # ENTRY: LONG
     if pos is None and last_close > raw_trendline and last_close > prev_close and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "buy", size)
@@ -218,53 +217,69 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         }
         return
 
-    # EXIT: LONG
-    if pos and pos["side"] == "long" and price < raw_trendline -SL:
-        pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
-        fee = commission(price, pos["contracts"], symbol)
-        net = pnl - fee
+    # ================================
+    # EXIT: LONG (STOP-LOSS UPDATED)
+    # ================================
+    if pos and pos["side"] == "long":
 
-        place_order(pid, "sell", size)
-        send_telegram(f"📤 LONG EXIT {symbol}\nNet PnL: {net:.4f}")
+        # Correct long stop-loss logic
+        long_stop = pos['entry'] - SL
+        pos["stop"] = max(long_stop, raw_trendline)
 
-        save_trade_row({
-            "symbol": symbol,
-            "side": "long",
-            "entry_time": pos["entry_time"],
-            "exit_time": datetime.now(),
-            "qty": pos["contracts"],
-            "entry": pos["entry"],
-            "exit": price,
-            "gross_pnl": pnl,
-            "commission": fee,
-            "net_pnl": net
-        })
+        if price < pos["stop"]:
+            pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
+            fee = commission(price, pos["contracts"], symbol)
+            net = pnl - fee
 
-        positions[symbol] = None
+            place_order(pid, "sell", size)
+            send_telegram(f"📤 LONG EXIT {symbol}\nNet PnL: {net:.4f}")
 
-    # EXIT: SHORT
-    if pos and pos["side"] == "short" and price > raw_trendline + SL:
-        pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
-        fee = commission(price, pos["contracts"], symbol)
-        net = pnl - fee
+            save_trade_row({
+                "symbol": symbol,
+                "side": "long",
+                "entry_time": pos["entry_time"],
+                "exit_time": datetime.now(),
+                "qty": pos["contracts"],
+                "entry": pos["entry"],
+                "exit": price,
+                "gross_pnl": pnl,
+                "commission": fee,
+                "net_pnl": net
+            })
 
-        place_order(pid, "buy", size)
-        send_telegram(f"📤 SHORT EXIT {symbol}\nNet PnL: {net:.4f}")
+            positions[symbol] = None
 
-        save_trade_row({
-            "symbol": symbol,
-            "side": "short",
-            "entry_time": pos["entry_time"],
-            "exit_time": datetime.now(),
-            "qty": pos["contracts"],
-            "entry": pos["entry"],
-            "exit": price,
-            "gross_pnl": pnl,
-            "commission": fee,
-            "net_pnl": net
-        })
+    # ================================
+    # EXIT: SHORT (STOP-LOSS UPDATED)
+    # ================================
+    if pos and pos["side"] == "short":
 
-        positions[symbol] = None
+        # Correct short stop-loss logic
+        short_stop = pos['entry'] + SL
+        pos["stop"] = min(short_stop, raw_trendline)
+
+        if price > pos["stop"]:
+            pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
+            fee = commission(price, pos["contracts"], symbol)
+            net = pnl - fee
+
+            place_order(pid, "buy", size)
+            send_telegram(f"📤 SHORT EXIT {symbol}\nNet PnL: {net:.4f}")
+
+            save_trade_row({
+                "symbol": symbol,
+                "side": "short",
+                "entry_time": pos["entry_time"],
+                "exit_time": datetime.now(),
+                "qty": pos["contracts"],
+                "entry": pos["entry"],
+                "exit": price,
+                "gross_pnl": pnl,
+                "commission": fee,
+                "net_pnl": net
+            })
+
+            positions[symbol] = None
 
 
 # =================== MAIN LOOP =====================
