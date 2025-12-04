@@ -148,10 +148,9 @@ def calculate_trendline(df):
         close=df["Close"]
     )
     ha = ha.reset_index(drop=True)
-    ha["ATR"] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    # ------ ATR ------
+    ha["ATR"] = ta.atr(ha['HA_high'], ha['HA_low'], ha['HA_close'], length=14)
     ha["ATR_avg"] = ha["ATR"].rolling(14).mean()
-    ha["ATR"].fillna(method='bfill', inplace=True)
-    ha["ATR_avg"].fillna(method='bfill', inplace=True)
 
     max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=42)[0]
     min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=42)[0]
