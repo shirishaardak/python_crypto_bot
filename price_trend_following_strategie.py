@@ -16,7 +16,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 PRODUCT_IDS = {"BTCUSD": 27, "ETHUSD": 3136}
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
+STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 20}
 TAKER_FEE = 0.0005
 
 SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategie")
@@ -148,6 +148,17 @@ def calculate_trendline(df):
         close=df["Close"]
     )
     ha = ha.reset_index(drop=True)
+    adx = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=14)
+    adx = ta.adx(
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
+        window=14
+    )["ADX_14"]
+
+    # Add to your Heikin-Ashi dataframe
+    ha["ADX"] = adx
+    ha["ADX_avg"] = ha["ADX"].rolling(7).mean()
 
     max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=21)[0]
     min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=21)[0]
@@ -178,7 +189,7 @@ def calculate_trendline(df):
 
 
 # =================== TRADING LOGIC =====================
-def process_price_trend(symbol, price, positions, prev_close, last_close, df):
+def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_AVG, df):
     raw_trendline = df["Trendline"].iloc[-1]
     pos = positions.get(symbol)
 
@@ -188,7 +199,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
     SL = STOP_LOSS[symbol]
 
     # ENTRY: LONG
-    if pos is None and last_close > raw_trendline and last_close > prev_close and datetime.now().minute % 15 == 0:
+    if pos is None and last_close > raw_trendline and last_close > prev_close and ADX > ADX_AVG and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "buy", size)
         if resp:
             send_telegram(f"🟢 LONG ENTRY {symbol}\nPrice: {price}")
@@ -203,7 +214,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
         return
 
     # ENTRY: SHORT
-    if pos is None and last_close < raw_trendline and last_close < prev_close and datetime.now().minute % 15 == 0:
+    if pos is None and last_close < raw_trendline and last_close < prev_close and ADX > ADX_AVG and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "sell", size)
         if resp:
             send_telegram(f"🔻 SHORT ENTRY {symbol}\nPrice: {price}")
@@ -224,9 +235,8 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
 
         # Correct long stop-loss logic
         long_stop = pos['entry'] - SL
-        pos["stop"] = max(long_stop, raw_trendline)
 
-        if price < pos["stop"]:
+        if price < long_stop or last_close < raw_trendline:
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
@@ -256,9 +266,8 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, df):
 
         # Correct short stop-loss logic
         short_stop = pos['entry'] + SL
-        pos["stop"] = min(short_stop, raw_trendline)
-
-        if price > pos["stop"]:
+        
+        if price > short_stop or last_close > raw_trendline:
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
@@ -300,13 +309,15 @@ def run_live():
                     continue
 
                 last_close = ha_df["HA_close"].iloc[-1]
+                ADX = ha_df["ADX"].iloc[-1]
+                ADX_AVG = ha_df["ADX_avg"].iloc[-1]
                 prev_close = ha_df["HA_open"].iloc[-2]
 
                 price = fetch_ticker_price(symbol)
                 if price is None:
                     continue
 
-                process_price_trend(symbol, price, positions, prev_close, last_close, ha_df)
+                process_price_trend(symbol, price, positions, prev_close, last_close, ADX, ADX_AVG, ha_df)
 
             time.sleep(20)
 
