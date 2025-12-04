@@ -103,7 +103,7 @@ def fetch_ticker_price(symbol):
         return None
 
 
-def fetch_candles(symbol, resolution="15m", days=1):
+def fetch_candles(symbol, resolution="5m", days=1):
     try:
         start = int((datetime.now() - timedelta(days=days)).timestamp())
         params = {
@@ -199,7 +199,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
     SL = STOP_LOSS[symbol]
 
     # ENTRY: LONG
-    if pos is None and last_close > raw_trendline and last_close > prev_close and ADX > ADX_AVG and datetime.now().minute % 15 == 0:
+    if pos is None and last_close > raw_trendline and last_close > prev_close and ADX > ADX_AVG and datetime.now().minute % 5 == 0:
         resp = place_order(pid, "buy", size)
         if resp:
             send_telegram(f"🟢 LONG ENTRY {symbol}\nPrice: {price}")
@@ -214,7 +214,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
         return
 
     # ENTRY: SHORT
-    if pos is None and last_close < raw_trendline and last_close < prev_close and ADX > ADX_AVG and datetime.now().minute % 15 == 0:
+    if pos is None and last_close < raw_trendline and last_close < prev_close and ADX > ADX_AVG and datetime.now().minute % 5 == 0:
         resp = place_order(pid, "sell", size)
         if resp:
             send_telegram(f"🔻 SHORT ENTRY {symbol}\nPrice: {price}")
