@@ -161,7 +161,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
     if df is None or len(df) == 0:
         return
 
-    raw_trendline = df["Trendline"].iloc[-1]
+    raw_trendline = df["Trendline"].iloc[-2]
     ATR = df["ATR"].iloc[-1]
     ATR_avg = df["ATR_avg"].iloc[-1]
 
@@ -272,8 +272,8 @@ def run_live():
                 if len(ha_df) < 3:
                     continue
 
-                last_close = ha_df["HA_close"].iloc[-1]
-                prav_close = ha_df["HA_open"].iloc[-2]
+                last_close = ha_df["HA_close"].iloc[-2]
+                prav_close = ha_df["HA_open"].iloc[-3]
 
                 save_processed_data(ha_df, symbol)
 
