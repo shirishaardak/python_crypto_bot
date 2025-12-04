@@ -14,7 +14,7 @@ load_dotenv()
 # =================== SETTINGS =====================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 PRODUCT_IDS = {"BTCUSD": 27, "ETHUSD": 3136}
-DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
+DEFAULT_CONTRACTS = {"BTCUSD": 10, "ETHUSD": 10}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 20}
 TAKER_FEE = 0.0005
@@ -103,7 +103,7 @@ def fetch_ticker_price(symbol):
         return None
 
 
-def fetch_candles(symbol, resolution="5m", days=1):
+def fetch_candles(symbol, resolution="15m", days=1):
     try:
         start = int((datetime.now() - timedelta(days=days)).timestamp())
         params = {
@@ -160,8 +160,8 @@ def calculate_trendline(df):
     ha["ADX"] = adx
     ha["ADX_avg"] = ha["ADX"].rolling(7).mean()
 
-    max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=21)[0]
-    min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=21)[0]
+    max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=42)[0]
+    min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=42)[0]
 
     ha["max_high"] = np.nan
     ha["max_low"] = np.nan
@@ -199,7 +199,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
     SL = STOP_LOSS[symbol]
 
     # ENTRY: LONG
-    if pos is None and last_close > raw_trendline and last_close > prev_close and ADX > ADX_AVG and datetime.now().minute % 5 == 0:
+    if pos is None and last_close > raw_trendline and last_close > prev_close  and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "buy", size)
         if resp:
             send_telegram(f"🟢 LONG ENTRY {symbol}\nPrice: {price}")
@@ -214,7 +214,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
         return
 
     # ENTRY: SHORT
-    if pos is None and last_close < raw_trendline and last_close < prev_close and ADX > ADX_AVG and datetime.now().minute % 5 == 0:
+    if pos is None and last_close < raw_trendline and last_close < prev_close  and datetime.now().minute % 15 == 0:
         resp = place_order(pid, "sell", size)
         if resp:
             send_telegram(f"🔻 SHORT ENTRY {symbol}\nPrice: {price}")
@@ -233,10 +233,7 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
     # ================================
     if pos and pos["side"] == "long":
 
-        # Correct long stop-loss logic
-        long_stop = pos['entry'] - SL
-
-        if price < long_stop or last_close < raw_trendline:
+        if last_close < raw_trendline:
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
@@ -263,11 +260,8 @@ def process_price_trend(symbol, price, positions, prev_close, last_close, ADX, A
     # EXIT: SHORT (STOP-LOSS UPDATED)
     # ================================
     if pos and pos["side"] == "short":
-
-        # Correct short stop-loss logic
-        short_stop = pos['entry'] + SL
         
-        if price > short_stop or last_close > raw_trendline:
+        if last_close > raw_trendline:
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
