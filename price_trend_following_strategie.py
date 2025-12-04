@@ -148,17 +148,10 @@ def calculate_trendline(df):
         close=df["Close"]
     )
     ha = ha.reset_index(drop=True)
-    adx = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=14)
-    adx = ta.adx(
-        high=ha["HA_high"],
-        low=ha["HA_low"],
-        close=ha["HA_close"],
-        window=14
-    )["ADX_14"]
-
-    # Add to your Heikin-Ashi dataframe
-    ha["ADX"] = adx
-    ha["ADX_avg"] = ha["ADX"].rolling(7).mean()
+    ha["ATR"] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    ha["ATR_avg"] = ha["ATR"].rolling(14).mean()
+    ha["ATR"].fillna(method='bfill', inplace=True)
+    ha["ATR_avg"].fillna(method='bfill', inplace=True)
 
     max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=42)[0]
     min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=42)[0]
@@ -303,8 +296,8 @@ def run_live():
                     continue
 
                 last_close = ha_df["HA_close"].iloc[-1]
-                ADX = ha_df["ADX"].iloc[-1]
-                ADX_AVG = ha_df["ADX_avg"].iloc[-1]
+                ADX = ha_df["ATR"].iloc[-1]
+                ADX_AVG = ha_df["ATR_avg"].iloc[-1]
                 prev_close = ha_df["HA_open"].iloc[-2]
 
                 price = fetch_ticker_price(symbol)
