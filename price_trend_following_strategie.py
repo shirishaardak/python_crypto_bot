@@ -13,8 +13,8 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
-SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_with_1h_strategie")
+STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 15}
+SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_with_update")
 os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
@@ -126,8 +126,8 @@ def calculate_trendline(df):
     if len(min_idx) > 0:
         ha.loc[min_idx, 'max_low'] = ha.loc[min_idx, 'HA_low']
 
-    ha['max_high'] = ha['max_high'].ffill()
-    ha['max_low']  = ha['max_low'].ffill()
+    ha['max_high'].fillna(method='ffill', inplace=True)
+    ha['max_low'].fillna(method='ffill', inplace=True)
 
     # initialize Trendline
     ha['Trendline'] = np.nan
@@ -185,7 +185,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             positions[symbol] = {
                 "side": "long",
                 "entry": price,
-                "stop": raw_trendline,               # initialize stop to filtered_trendline (same as raw on entry)
+                "stop": raw_trendline - SL,               # initialize stop to filtered_trendline (same as raw on entry)
                 "contracts": contracts,
                 "contract_size": contract_size,
                 "entry_time": datetime.now(),
@@ -199,7 +199,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             positions[symbol] = {
                 "side": "short",
                 "entry": price,
-                "stop": raw_trendline,
+                "stop": raw_trendline + SL,
                 "contracts": contracts,
                 "contract_size": contract_size,
                 "entry_time": datetime.now(),
@@ -217,7 +217,14 @@ def process_price_trend(symbol, price, positions, last_base_price,
 
         # LONG side exit (using filtered trendline)
         if pos.get("side") == "long":
-            if last_close < raw_trendline:
+
+            if df['max_high'].iloc[-1] == df['HA_high'].iloc[-1]:
+                new_stop = df['HA_low'].iloc[-1]
+                if new_stop > pos["stop"]:
+                    pos["stop"] = new_stop
+                    log(f"{symbol} | LONG SL UPDATE → {new_stop}")
+
+            if price < pos['stop']:
                 pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
@@ -246,6 +253,11 @@ def process_price_trend(symbol, price, positions, last_base_price,
 
         # SHORT side exit (using filtered trendline)
         elif pos.get("side") == "short":
+            if df['max_low'].iloc[-1] == df['HA_low'].iloc[-1]:
+                new_stop = df['HA_high'].iloc[-1]
+                if new_stop > pos["stop"]:
+                    pos["stop"] = new_stop
+                    log(f"{symbol} | SHORT SL UPDATE → {new_stop}")
             if last_close > raw_trendline:
 
                 pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
