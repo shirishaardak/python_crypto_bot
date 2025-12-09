@@ -15,7 +15,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKE_PROFIT = {"BTCUSD": 200, "ETHUSD": 10}
 TAKER_FEE = 0.0005
 
-SAVE_DIR = os.path.join(os.getcwd(), "data", "trade_reversal_update")
+SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategie")
 os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
