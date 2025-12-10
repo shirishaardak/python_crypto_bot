@@ -125,8 +125,8 @@ def calculate_trendline(df):
         ha.loc[max_idx, 'max_high'] = ha.loc[max_idx, 'HA_high']
     if len(min_idx) > 0:
         ha.loc[min_idx, 'max_low'] = ha.loc[min_idx, 'HA_low']
-    ha['max_high'] = ha['max_high'] = ha['max_high'].ffill()
-    ha['max_low']= ha['max_low'] = ha['max_high'].ffill()
+    ha[['max_high', 'max_low']] = ha[['max_high', 'max_low']].ffill()
+
 
     # initialize Trendline
     ha['Trendline'] = np.nan
