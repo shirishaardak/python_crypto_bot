@@ -222,7 +222,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
                     pos["stop"] = new_stop
                     log(f"{symbol} | LONG SL UPDATE → {new_stop}")
 
-            if price < pos['stop']:
+            if last_close < pos['stop']:
                 pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
@@ -256,7 +256,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
                 if new_stop < pos["stop"]:
                     pos["stop"] = new_stop
                     log(f"{symbol} | SHORT SL UPDATE → {new_stop}")
-            if price > pos["stop"]:
+            if last_close > pos["stop"]:
                 pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
