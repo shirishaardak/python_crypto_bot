@@ -15,7 +15,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKE_PROFIT = {"BTCUSD": 200, "ETHUSD": 10}
 TAKER_FEE = 0.0005
 
-SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategie")
+SAVE_DIR = os.path.join(os.getcwd(), "data", "trade_reversal_update")
 os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
@@ -110,8 +110,8 @@ def calculate_trendline(df):
     ha = ta.ha(open_=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
     ha = ha.reset_index(drop=True)
 
-    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=42)[0]
-    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=42)[0]
+    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=48)[0]
+    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=48)[0]
 
     ha['max_high'] = np.nan
     ha['max_low'] = np.nan
@@ -121,7 +121,8 @@ def calculate_trendline(df):
     if len(min_idx) > 0:
         ha.loc[min_idx, 'max_low'] = ha.loc[min_idx, 'HA_low']
 
-    ha[['max_high', 'max_low']] = ha[['max_high', 'max_low']].ffill()
+    ha['max_high'].fillna(method='ffill', inplace=True)
+    ha['max_low'].fillna(method='ffill', inplace=True)
 
     ha['Trendline'] = np.nan
     if len(ha) == 0:
@@ -308,7 +309,7 @@ def run_live():
     while True:
         try:
             for symbol in SYMBOLS:
-                df = fetch_candles(symbol, resolution="5m", days=5)
+                df = fetch_candles(symbol, resolution="5m", days=1)
                 if df is None or len(df) < 50:
                     continue
 
