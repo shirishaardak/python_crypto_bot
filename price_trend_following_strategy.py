@@ -127,7 +127,6 @@ def calculate_trendline(df):
         ha.loc[min_idx, 'max_low'] = ha.loc[min_idx, 'HA_low']
     ha[['max_high', 'max_low']] = ha[['max_high', 'max_low']].ffill()
 
-
     # initialize Trendline
     ha['Trendline'] = np.nan
     if len(ha) == 0:
@@ -254,7 +253,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
         elif pos.get("side") == "short":
             if df['max_low'].iloc[-1] == df['HA_low'].iloc[-1]:
                 new_stop = df['HA_high'].iloc[-1]
-                if new_stop > pos["stop"]:
+                if new_stop < pos["stop"]:
                     pos["stop"] = new_stop
                     log(f"{symbol} | SHORT SL UPDATE → {new_stop}")
             if price > pos["stop"]:
