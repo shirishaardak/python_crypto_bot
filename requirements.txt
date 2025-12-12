@@ -1,24 +1,9 @@
-# requirements.txt
-
-# Core data libraries
 pandas
-numpy
-
-# Technical analysis
 pandas_ta
-
-# Plotting / visualization
 matplotlib
-
-# Exchange API wrapper
 ccxt
-
-# Date/time handling
 python-dateutil
 pytz
-
-# HTTP requests
 requests
-
-# HTTP delta-rest-client
 delta-rest-client
+scipy
