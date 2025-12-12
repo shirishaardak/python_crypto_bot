@@ -146,8 +146,8 @@ def calculate_trendline(df, swing_order=SWING_ORDER):
     if len(min_idx) > 0:
         ha.iloc[min_idx, ha.columns.get_loc('max_low')] = ha['HA_low'].iloc[min_idx].values
 
-    ha['max_high'].ffill(inplace=True)
-    ha['max_low'].ffill(inplace=True)
+    ha['max_high'] = ha['max_high'].ffill().bfill()
+    ha['max_low']  = ha['max_low'].ffill().bfill()
 
     # Build Trendline by carrying the most recent detected swing forward
     ha['Trendline'] = np.nan
