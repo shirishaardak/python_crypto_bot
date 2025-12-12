@@ -160,14 +160,14 @@ def calculate_trendline(df, swing_order=SWING_ORDER):
     else:
         trendline = ha['HA_high'].iat[0]
 
-    ha['Trendline'].iat[0] = trendline
+    ha.loc[ha.index[0], 'Trendline'] = trendline
 
     for i in range(1, len(ha)):
         if not pd.isna(ha['max_high'].iat[i]) and ha['HA_high'].iat[i] == ha['max_high'].iat[i]:
             trendline = ha['HA_high'].iat[i]
         elif not pd.isna(ha['max_low'].iat[i]) and ha['HA_low'].iat[i] == ha['max_low'].iat[i]:
             trendline = ha['HA_low'].iat[i]
-        ha['Trendline'].iat[i] = trendline
+        ha.loc[ha.index[i], 'Trendline'] = trendline
 
     # Ensure desired column names exist for downstream code
     # pandas_ta returns HA_open, HA_high, HA_low, HA_close names already
