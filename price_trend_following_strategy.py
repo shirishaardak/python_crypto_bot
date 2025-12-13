@@ -13,7 +13,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 10}
 SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -114,8 +114,8 @@ def calculate_trendline(df):
     ha["ATR_avg"] = ha["ATR"].rolling(14).mean()
 
     # ------ Extremas ------
-    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=96)[0]
-    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=96)[0]
+    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=48)[0]
+    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=48)[0]
 
     ha['max_high'] = np.nan
     ha['max_low'] = np.nan
@@ -136,9 +136,9 @@ def calculate_trendline(df):
 
     for i in range(1, len(ha)):
         if ha.loc[i, 'HA_high'] == ha.loc[i, 'max_high']:
-            trendline = ha.loc[i-1, 'HA_low']
+            trendline = ha.loc[i, 'HA_low']
         elif ha.loc[i, 'HA_low'] == ha.loc[i, 'max_low']:
-            trendline = ha.loc[i-1, 'HA_high']
+            trendline = ha.loc[i, 'HA_high']
         ha.loc[i, 'Trendline'] = trendline
 
     ha["Trendline"] = ha["Trendline"].ffill().bfill()
@@ -158,7 +158,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
     if df is None or len(df) == 0:
         return
 
-    raw_trendline = df["Trendline"].iloc[-2]
+    raw_trendline = df["Trendline"].iloc[-1]
     ATR = df["ATR"].iloc[-2]
     ATR_avg = df["ATR_avg"].iloc[-2]
 
@@ -177,7 +177,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
     if pos is None:
 
         # LONG ENTRY
-        if last_close > raw_trendline and last_close > prav_close and ATR > ATR_avg and datetime.now().minute % 15 == 0:
+        if last_close > raw_trendline and last_close > prav_close and datetime.now().minute % 15 == 0:
             positions[symbol] = {
                 "side": "long",
                 "entry": price,
@@ -191,7 +191,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             return
 
         # SHORT ENTRY
-        if last_close < raw_trendline and last_close < prav_close and ATR > ATR_avg and datetime.now().minute % 15 == 0:
+        if last_close < raw_trendline and last_close < prav_close  and datetime.now().minute % 15 == 0:
             positions[symbol] = {
                 "side": "short",
                 "entry": price,
@@ -208,7 +208,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
     if pos is not None:
 
         # ---- LONG EXIT (only exit if position is long) ----
-        if pos["side"] == "long" and last_close < raw_trendline:
+        if pos["side"] == "long" and price < raw_trendline - SL:
 
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
@@ -230,7 +230,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             return
 
         # ---- SHORT EXIT (only exit if position is short) ----
-        if pos["side"] == "short" and last_close > raw_trendline:
+        if pos["side"] == "short" and price > raw_trendline + SL:
 
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
@@ -273,8 +273,8 @@ def run_live():
                 if len(ha_df) < 3:
                     continue
 
-                last_close = ha_df["HA_close"].iloc[-2]
-                prav_close = ha_df["HA_open"].iloc[-3]
+                last_close = ha_df["HA_close"].iloc[-1]
+                prav_close = ha_df["HA_open"].iloc[-2]
 
                 save_processed_data(ha_df, symbol)
 
