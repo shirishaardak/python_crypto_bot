@@ -208,7 +208,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
     if pos is not None:
 
         # ---- LONG EXIT (only exit if position is long) ----
-        if pos["side"] == "long" and price < raw_trendline - SL:
+        if pos["side"] == "long" and last_close < raw_trendline:
 
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
@@ -230,7 +230,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             return
 
         # ---- SHORT EXIT (only exit if position is short) ----
-        if pos["side"] == "short" and price > raw_trendline + SL:
+        if pos["side"] == "short" and last_close > raw_trendline:
 
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
@@ -273,8 +273,8 @@ def run_live():
                 if len(ha_df) < 3:
                     continue
 
-                last_close = ha_df["HA_close"].iloc[-1]
-                prav_close = ha_df["HA_open"].iloc[-2]
+                last_close = ha_df["HA_close"].iloc[-2]
+                prav_close = ha_df["HA_open"].iloc[-3]
 
                 save_processed_data(ha_df, symbol)
 
