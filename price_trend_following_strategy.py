@@ -177,7 +177,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
         sl = STOP_LOSS[symbol]
 
         # ---- HARD STOP LOSS ----
-        if pos["side"] == "long" and price <= raw_trendline - sl:
+        if pos["side"] == "long" and price <= pos["entry"] - sl:
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
@@ -185,7 +185,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             positions[symbol] = None
             return
 
-        if pos["side"] == "short" and price >= raw_trendline + sl:
+        if pos["side"] == "short" and price >= pos["entry"] + sl:
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
