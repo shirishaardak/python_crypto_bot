@@ -110,8 +110,8 @@ def calculate_trendline(df):
     ha = ta.ha(open_=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
     ha = ha.reset_index(drop=True)
 
-    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=48)[0]
-    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=48)[0]
+    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=21)[0]
+    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=21)[0]
 
     ha['max_high'] = np.nan
     ha['max_low'] = np.nan
