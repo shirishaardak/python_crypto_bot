@@ -107,11 +107,18 @@ def fetch_candles(symbol, resolution="15m", days=1, tz='Asia/Kolkata'):
 
 # ================= TRENDLINE CALCULATION ===================
 def calculate_trendline(df):
-    ha = ta.ha(open_=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
+
+    ha = ta.ha(
+        open_=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close']
+    )
     ha = ha.reset_index(drop=True)
 
-    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=21)[0]
-    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=21)[0]
+    # -------- Find Extremas --------
+    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=5)[0]
+    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=5)[0]
 
     ha['max_high'] = np.nan
     ha['max_low'] = np.nan
@@ -123,28 +130,36 @@ def calculate_trendline(df):
 
     ha[['max_high', 'max_low']] = ha[['max_high', 'max_low']].ffill()
 
-
+    # -------- NEW TRENDLINE LOGIC --------
     ha['Trendline'] = np.nan
     if len(ha) == 0:
         return ha
 
-    trendline = ha['max_high'].iloc[0] if not pd.isna(ha['max_high'].iloc[0]) else ha['HA_high'].iloc[0]
+    trendline = ha['HA_close'].iloc[0]
     ha.loc[0, 'Trendline'] = trendline
 
     for i in range(1, len(ha)):
-        if not pd.isna(ha.loc[i, 'max_high']) and ha.loc[i, 'HA_high'] == ha.loc[i, 'max_high']:
-            trendline = ha.loc[i, 'HA_high']
-        elif not pd.isna(ha.loc[i, 'max_low']) and ha.loc[i, 'HA_low'] == ha.loc[i, 'max_low']:
-            trendline = ha.loc[i, 'HA_low']
-        ha.loc[i, 'Trendline'] = trendline
 
-    # Keep HA columns named as you expect for later use
-    ha = ha.rename(columns={
-        "HA_open": "HA_open",
-        "HA_high": "HA_high",
-        "HA_low": "HA_low",
-        "HA_close": "HA_close"
-    })
+        close_now = ha.loc[i, 'HA_close']
+        close_prev = ha.loc[i - 1, 'HA_close']
+
+        # Bullish confirmation → move trendline to max_high
+        if (
+            close_now > close_prev and
+            close_now > trendline and
+            not pd.isna(ha.loc[i, 'max_low'])
+        ):
+            trendline = ha.loc[i, 'max_low']
+
+        # Bearish confirmation → move trendline to max_low
+        elif (
+            close_now < close_prev and
+            close_now < trendline and
+            not pd.isna(ha.loc[i, 'max_high'])
+        ):
+            trendline = ha.loc[i, 'max_high']
+
+        ha.loc[i, 'Trendline'] = trendline
 
     return ha
 
@@ -165,7 +180,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
         return
 
     # Use previous completed HA bar's trendline for entry/management
-    raw_trendline = df["Trendline"].iloc[-2]
+    raw_trendline = df["Trendline"].iloc[-1]
 
     # Initialize per-symbol state on first run
     if last_base_price.get(symbol) is None:
@@ -217,18 +232,19 @@ def process_price_trend(symbol, price, positions, last_base_price,
         if side == "long":
             # If trendline bar indicates HA high swing (new high), update stop to that bar's HA_low
             # (using the previous bar values)
-            if raw_trendline == df["HA_high"].iloc[-2]:
-                new_stop = df["HA_low"].iloc[-2]
+            if raw_trendline == df["HA_high"].iloc[-1]:
+                new_stop = df["HA_low"].iloc[-1]
                 # only allow stop to move up (never down)
                 if new_stop > pos["stop"]:
                     pos["stop"] = new_stop
+                    log(f"{symbol} | LONG | Stop:{pos['stop']}")
 
             # Enforce directional movement: never decrease stop below original anchor
             # (pos["trendline"] is the anchor set on entry)
             pos["stop"] = max(pos["stop"], pos.get("trendline", pos["stop"]))
 
             # Exit on price crossing below stop
-            if last_close < pos["stop"]:
+            if last_close < raw_trendline:
                 pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
@@ -258,17 +274,18 @@ def process_price_trend(symbol, price, positions, last_base_price,
         # ---------- SHORT MANAGEMENT ----------
         elif side == "short":
             # If trendline bar indicates HA low swing (new low), update stop to that bar's HA_high
-            if raw_trendline == df["HA_low"].iloc[-2]:
-                new_stop = df["HA_high"].iloc[-2]
+            if raw_trendline == df["HA_low"].iloc[-1]:
+                new_stop = df["HA_high"].iloc[-1]
                 # only allow stop to move down (never up) for short
                 if new_stop < pos["stop"]:
                     pos["stop"] = new_stop
+                    log(f"{symbol} | SHORT | Stop:{pos['stop']}")
 
             # Stop cannot move up for a short position relative to original anchor
             pos["stop"] = min(pos["stop"], pos.get("trendline", pos["stop"]))
 
             # Exit on price crossing above stop
-            if last_close > pos["stop"]:
+            if last_close > raw_trendline:
                 pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
