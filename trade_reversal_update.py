@@ -218,7 +218,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
             # If trendline bar indicates HA high swing (new high), update stop to that bar's HA_low
             # (using the previous bar values)
             if raw_trendline == df["HA_high"].iloc[-2]:
-                new_stop = df["HA_high"].iloc[-2]
+                new_stop = df["HA_low"].iloc[-2]
                 # only allow stop to move up (never down)
                 if new_stop > pos["stop"]:
                     pos["stop"] = new_stop
@@ -259,7 +259,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
         elif side == "short":
             # If trendline bar indicates HA low swing (new low), update stop to that bar's HA_high
             if raw_trendline == df["HA_low"].iloc[-2]:
-                new_stop = df["HA_low"].iloc[-2]
+                new_stop = df["HA_high"].iloc[-2]
                 # only allow stop to move down (never up) for short
                 if new_stop < pos["stop"]:
                     pos["stop"] = new_stop
