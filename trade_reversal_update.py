@@ -12,7 +12,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-TAKE_PROFIT = {"BTCUSD": 200, "ETHUSD": 10}
+TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 15}
 TAKER_FEE = 0.0005
 
 SAVE_DIR = os.path.join(os.getcwd(), "data", "trade_reversal_update")
@@ -180,7 +180,7 @@ def process_price_trend(symbol, price, positions, last_base_price,
         return
 
     # Use previous completed HA bar's trendline for entry/management
-    raw_trendline = df["Trendline"].iloc[-1]
+    raw_trendline = df["Trendline"].iloc[-2]
 
     # Initialize per-symbol state on first run
     if last_base_price.get(symbol) is None:
@@ -229,22 +229,10 @@ def process_price_trend(symbol, price, positions, last_base_price,
         side = pos.get("side")
 
         # ---------- LONG MANAGEMENT ----------
-        if side == "long":
-            # If trendline bar indicates HA high swing (new high), update stop to that bar's HA_low
-            # (using the previous bar values)
-            if raw_trendline == df["HA_high"].iloc[-1]:
-                new_stop = df["HA_low"].iloc[-1]
-                # only allow stop to move up (never down)
-                if new_stop > pos["stop"]:
-                    pos["stop"] = new_stop
-                    log(f"{symbol} | LONG | Stop:{pos['stop']}")
-
-            # Enforce directional movement: never decrease stop below original anchor
-            # (pos["trendline"] is the anchor set on entry)
-            pos["stop"] = max(pos["stop"], pos.get("trendline", pos["stop"]))
+        if side == "long":           
 
             # Exit on price crossing below stop
-            if last_close < raw_trendline:
+            if last_close < raw_trendline or price < raw_trendline - take_profit:
                 pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
@@ -272,20 +260,9 @@ def process_price_trend(symbol, price, positions, last_base_price,
                 return
 
         # ---------- SHORT MANAGEMENT ----------
-        elif side == "short":
-            # If trendline bar indicates HA low swing (new low), update stop to that bar's HA_high
-            if raw_trendline == df["HA_low"].iloc[-1]:
-                new_stop = df["HA_high"].iloc[-1]
-                # only allow stop to move down (never up) for short
-                if new_stop < pos["stop"]:
-                    pos["stop"] = new_stop
-                    log(f"{symbol} | SHORT | Stop:{pos['stop']}")
-
-            # Stop cannot move up for a short position relative to original anchor
-            pos["stop"] = min(pos["stop"], pos.get("trendline", pos["stop"]))
-
+        elif side == "short": 
             # Exit on price crossing above stop
-            if last_close > raw_trendline:
+            if last_close > raw_trendline or price > raw_trendline + take_profit:
                 pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
                 fee = commission(price, pos["contracts"], symbol)
                 net = pnl - fee
@@ -335,8 +312,8 @@ def run_live():
                     continue
 
                 # last_close and prav_close (HA closes)
-                last_close = ha_df["HA_close"].iloc[-1]
-                prav_close = ha_df["HA_open"].iloc[-2]
+                last_close = ha_df["HA_close"].iloc[-2]
+                prav_close = ha_df["HA_open"].iloc[-3]
 
                 save_processed_data(ha_df, symbol)
 
