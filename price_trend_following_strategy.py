@@ -13,7 +13,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
-STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 25}
+
 SAVE_DIR = os.path.join(os.getcwd(), "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -42,9 +42,7 @@ def save_processed_data(df, symbol):
             "HA_high": df["HA_high"].values,
             "HA_low": df["HA_low"].values,
             "HA_close": df["HA_close"].values,
-            "Trendline": df["Trendline"].values,
-            "ATR": df["ATR"].values,
-            "ATR_avg": df["ATR_avg"].values
+            "Trendline": df["Trendline"].values
         })
         df_save.to_csv(save_path, index=False)
     except Exception as e:
@@ -53,8 +51,9 @@ def save_processed_data(df, symbol):
 # ================= DATA FETCHING ==========================
 def fetch_ticker_price(symbol):
     url = f"https://api.india.delta.exchange/v2/tickers/{symbol}"
+    headers = {"Accept": "application/json"}
     try:
-        r = requests.get(url, headers={"Accept": "application/json"}, timeout=5)
+        r = requests.get(url, headers=headers, timeout=5)
         r.raise_for_status()
         data = r.json().get("result", {})
         price = float(data.get("mark_price", 0))
@@ -63,7 +62,7 @@ def fetch_ticker_price(symbol):
         log(f"⚠️ Error fetching ticker price for {symbol}: {e}")
         return None
 
-def fetch_candles(symbol, resolution="15m", days=15, tz='Asia/Kolkata'):
+def fetch_candles(symbol, resolution="15m", days=1, tz='Asia/Kolkata'):
     headers = {'Accept': 'application/json'}
     start = int((datetime.now() - timedelta(days=days)).timestamp())
     params = {
@@ -94,8 +93,10 @@ def fetch_candles(symbol, resolution="15m", days=15, tz='Asia/Kolkata'):
         df["time"] = df["Time"]
         df.set_index("Time", inplace=True)
         df.sort_index(inplace=True)
+        df = df[~df.index.duplicated(keep='last')]
 
-        df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df
 
@@ -105,15 +106,9 @@ def fetch_candles(symbol, resolution="15m", days=15, tz='Asia/Kolkata'):
 
 # ================= TRENDLINE CALCULATION ===================
 def calculate_trendline(df):
-
     ha = ta.ha(open_=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
     ha = ha.reset_index(drop=True)
 
-    # ------ ATR ------
-    ha["ATR"] = ta.atr(ha['HA_high'], ha['HA_low'], ha['HA_close'], length=14)
-    ha["ATR_avg"] = ha["ATR"].rolling(14).mean()
-
-    # ------ Extremas ------
     max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=48)[0]
     min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=48)[0]
 
@@ -125,47 +120,42 @@ def calculate_trendline(df):
     if len(min_idx) > 0:
         ha.loc[min_idx, 'max_low'] = ha.loc[min_idx, 'HA_low']
 
-    ha['max_high'] = ha['max_high'].ffill().bfill()
-    ha['max_low']  = ha['max_low'].ffill().bfill()
+    ha['max_high'].fillna(method='ffill', inplace=True)
+    ha['max_low'].fillna(method='ffill', inplace=True)
 
-    # ------ Trendline ------
     ha['Trendline'] = np.nan
-    trendline = ha['max_high'].iloc[0]
+    if len(ha) == 0:
+        return ha
 
+    trendline = ha['max_high'].iloc[0] if not pd.isna(ha['max_high'].iloc[0]) else ha['HA_high'].iloc[0]
     ha.loc[0, 'Trendline'] = trendline
 
     for i in range(1, len(ha)):
-        if ha.loc[i, 'HA_high'] == ha.loc[i, 'max_high']:
-            trendline = ha.loc[i, 'HA_low']
-        elif ha.loc[i, 'HA_low'] == ha.loc[i, 'max_low']:
+        if not pd.isna(ha.loc[i, 'max_high']) and ha.loc[i, 'HA_high'] == ha.loc[i, 'max_high']:
             trendline = ha.loc[i, 'HA_high']
+        elif not pd.isna(ha.loc[i, 'max_low']) and ha.loc[i, 'HA_low'] == ha.loc[i, 'max_low']:
+            trendline = ha.loc[i, 'HA_low']
         ha.loc[i, 'Trendline'] = trendline
-
-    ha["Trendline"] = ha["Trendline"].ffill().bfill()
 
     return ha
 
-# ================= TRADING LOGIC ===========================
 def process_price_trend(symbol, price, positions, last_base_price,
                         trailing_level, upper_entry_limit, lower_entry_limit,
                         prav_close, last_close, df):
 
     contracts = DEFAULT_CONTRACTS[symbol]
     contract_size = CONTRACT_SIZE[symbol]
-    SL = STOP_LOSS[symbol]
-    pos = positions.get(symbol)
 
-    if df is None or len(df) == 0:
+    pos_long = positions[symbol]["long"]
+    pos_short = positions[symbol]["short"]
+
+    # Safety: must have trendline
+    if df is None or len(df) < 3 or "Trendline" not in df.columns:
         return
 
     raw_trendline = df["Trendline"].iloc[-1]
-    ATR = df["ATR"].iloc[-2]
-    ATR_avg = df["ATR_avg"].iloc[-2]
 
-    if pd.isna(raw_trendline) or pd.isna(last_close) or pd.isna(prav_close):
-        log(f"{symbol} | ⚠️ Skipped because values are NaN")
-        return
-
+    # Initialize first update
     if last_base_price.get(symbol) is None:
         last_base_price[symbol] = price
         trailing_level[symbol] = None
@@ -173,99 +163,130 @@ def process_price_trend(symbol, price, positions, last_base_price,
         lower_entry_limit[symbol] = None
         return
 
-    # ENTRY
-    if pos is None:
+    # ===============================
+    #        ENTRY LOGIC
+    # ===============================
 
-        # LONG ENTRY
-        if last_close > raw_trendline and last_close > prav_close and datetime.now().minute % 15 == 0:
-            positions[symbol] = {
-                "side": "long",
-                "entry": price,
-                "stop": raw_trendline,
-                "contracts": contracts,
-                "contract_size": contract_size,
-                "entry_time": datetime.now(),
-                "trendline": raw_trendline
-            }
-            log(f"{symbol} | LONG ENTRY | {price}")
-            return
+    # ------- LONG ENTRY -------
+    if pos_long is None and last_close > raw_trendline and last_close > prav_close:
+        positions[symbol]["long"] = {
+            "side": "long",
+            "entry": price,
+            "stop": raw_trendline,          # no need to filter
+            "contracts": contracts,
+            "contract_size": contract_size,
+            "entry_time": datetime.now(),
+            "trendline": raw_trendline
+        }
+        log(f"{symbol} | LONG ENTRY | TL: {raw_trendline} | Entry: {price}")
 
-        # SHORT ENTRY
-        if last_close < raw_trendline and last_close < prav_close  and datetime.now().minute % 15 == 0:
-            positions[symbol] = {
-                "side": "short",
-                "entry": price,
-                "stop": raw_trendline,
-                "contracts": contracts,
-                "contract_size": contract_size,
-                "entry_time": datetime.now(),
-                "trendline": raw_trendline
-            }
-            log(f"{symbol} | SHORT ENTRY | {price}")
-            return
+    # ------- SHORT ENTRY -------
+    if pos_short is None and last_close < raw_trendline and last_close < prav_close:
+        positions[symbol]["short"] = {
+            "side": "short",
+            "entry": price,
+            "stop": raw_trendline,
+            "contracts": contracts,
+            "contract_size": contract_size,
+            "entry_time": datetime.now(),
+            "trendline": raw_trendline
+        }
+        log(f"{symbol} | SHORT ENTRY | TL: {raw_trendline} | Entry: {price}")
 
-    # EXIT
+    # ===============================
+    #         EXIT LOGIC
+    # ===============================
+
+    # -------- LONG MANAGEMENT ----------
+    pos = positions[symbol]["long"]
     if pos is not None:
-        sl = STOP_LOSS[symbol]
-        # ---- LONG EXIT (only exit if position is long) ----
-        if pos["side"] == "long" and (last_close < raw_trendline or price <= pos["entry"] - sl ):
+            # If trendline bar indicates HA high swing (new high), update stop to that bar's HA_low
+            # (using the previous bar values)
+        if df["Trendline"].iloc[-1] == df["HA_high"].iloc[-1]:
+                new_stop = df["HA_low"].iloc[-1]
+                # only allow stop to move up (never down)
+                if new_stop > pos["stop"]:
+                    pos["stop"] = new_stop
+                    log(f"{symbol} | LONG | Stop:{pos['stop']}")
 
+            # Enforce directional movement: never decrease stop below original anchor
+            # (pos["trendline"] is the anchor set on entry)
+        pos["stop"] = max(pos["stop"], pos.get("trendline", pos["stop"]))
+        
+
+        # Exit condition
+        if price < pos["stop"]:
             pnl = (price - pos["entry"]) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
 
             save_trade_row({
-                "symbol": symbol, "side": "long",
+                "symbol": symbol,
+                "side": "long",
                 "entry_time": pos["entry_time"],
                 "exit_time": datetime.now(),
                 "qty": pos["contracts"],
-                "entry": pos["entry"], "exit": price,
+                "entry": pos["entry"],
+                "exit": price,
                 "gross_pnl": round(pnl, 6),
                 "commission": round(fee, 6),
                 "net_pnl": round(net, 6)
             })
 
-            log(f"{symbol} | LONG EXIT | {price} | Net: {net}")
-            positions[symbol] = None
-            return
+            log(f"{symbol} | LONG EXIT | Stop:{pos['stop']} | Exit:{price} | Net:{net}")
+            positions[symbol]["long"] = None
 
-        # ---- SHORT EXIT (only exit if position is short) ----
-        if pos["side"] == "short" and (last_close > raw_trendline or price >= pos["entry"] + sl):
+    # -------- SHORT MANAGEMENT ----------
+    pos = positions[symbol]["short"]
+    if pos is not None:
 
+       # If trendline bar indicates HA low swing (new low), update stop to that bar's HA_high
+        if df["Trendline"].iloc[-1] == df["HA_low"].iloc[-1]:
+                new_stop = df["HA_high"].iloc[-1]
+                # only allow stop to move down (never up) for short
+                if new_stop < pos["stop"]:
+                    pos["stop"] = new_stop
+                    log(f"{symbol} | SHORT | Stop:{pos['stop']}")
+
+            # Stop cannot move up for a short position relative to original anchor
+        pos["stop"] = min(pos["stop"], pos.get("trendline", pos["stop"]))
+        
+
+        if price > pos["stop"]:
             pnl = (pos["entry"] - price) * contract_size * pos["contracts"]
             fee = commission(price, pos["contracts"], symbol)
             net = pnl - fee
 
             save_trade_row({
-                "symbol": symbol, "side": "short",
+                "symbol": symbol,
+                "side": "short",
                 "entry_time": pos["entry_time"],
                 "exit_time": datetime.now(),
                 "qty": pos["contracts"],
-                "entry": pos["entry"], "exit": price,
+                "entry": pos["entry"],
+                "exit": price,
                 "gross_pnl": round(pnl, 6),
                 "commission": round(fee, 6),
                 "net_pnl": round(net, 6)
             })
 
-            log(f"{symbol} | SHORT EXIT | {price} | Net: {net}")
-            positions[symbol] = None
-            return
+            log(f"{symbol} | SHORT EXIT | Stop:{pos['stop']} | Exit:{price} | Net:{net}")
+            positions[symbol]["short"] = None
 
 # ================= MAIN LOOP ===============================
 def run_live():
-    positions = {s: None for s in SYMBOLS}
+    positions = {s: {"long": None, "short": None} for s in SYMBOLS}
     last_base_price = {s: None for s in SYMBOLS}
     trailing_level = {s: None for s in SYMBOLS}
     upper_entry_limit = {s: None for s in SYMBOLS}
     lower_entry_limit = {s: None for s in SYMBOLS}
 
-    log("🚀 Starting Trendline + ATR Live Strategy")
+    log("🚀 Starting Trendline + HA Low/High Trailing Stop Strategy (HEDGING ENABLED)")
 
     while True:
         try:
             for symbol in SYMBOLS:
-
-                df = fetch_candles(symbol, resolution="15m", days=15)
+                df = fetch_candles(symbol, resolution="5m", days=30)
                 if df is None or len(df) < 50:
                     continue
 
@@ -273,8 +294,8 @@ def run_live():
                 if len(ha_df) < 3:
                     continue
 
-                last_close = ha_df["HA_close"].iloc[-2]
-                prav_close = ha_df["HA_open"].iloc[-3]
+                last_close = ha_df["HA_close"].iloc[-1]
+                prav_close = ha_df["HA_open"].iloc[-2]
 
                 save_processed_data(ha_df, symbol)
 
@@ -293,6 +314,7 @@ def run_live():
         except Exception as e:
             log(f"⚠️ Main loop error: {e}")
             time.sleep(5)
+
 
 # ================= MAIN ENTRY ==============================
 if __name__ == "__main__":
