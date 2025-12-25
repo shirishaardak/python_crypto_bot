@@ -10,9 +10,9 @@ from scipy.signal import argrelextrema
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 30}
+DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 15}
+TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 10}
 MAX_SL = {"BTCUSD": 500, "ETHUSD": 30}
 TAKER_FEE = 0.0005
 
