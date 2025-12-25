@@ -152,7 +152,7 @@ def process_symbol(symbol, df, price, state):
     if pos is None and state["last_trade_time"] != candle_time:
 
         # LONG
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open:
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -165,7 +165,7 @@ def process_symbol(symbol, df, price, state):
             return
 
         # SHORT
-        if last.HA_close < last.Trendline and last.HA_close < prev.HA_close:
+        if last.HA_close < last.Trendline and last.HA_close < prev.HA_open:
             state["position"] = {
                 "side": "short",
                 "entry": price,
