@@ -192,12 +192,12 @@ def process_symbol(symbol, df, price, state):
 
         # EXIT CONDITIONS
         if side == "long":
-            if last.HA_close < pos["stop"] or price >= pos["entry"] + TAKE_PROFIT[symbol]:
+            if price < pos["stop"] or price >= pos["entry"] + TAKE_PROFIT[symbol]:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         if side == "short":
-            if last.HA_close > pos["stop"] or price <= pos["entry"] - TAKE_PROFIT[symbol]:
+            if price > pos["stop"] or price <= pos["entry"] - TAKE_PROFIT[symbol]:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
