@@ -179,7 +179,16 @@ def process_symbol(symbol, df, price, state):
 
     # ========== MANAGEMENT ==========
     if pos:
-        side = pos["side"]       
+        side = pos["side"]
+
+        # # TRAILING STOP
+        # if side == "long" and last.HA_high == last.Trendline:
+        #     pos["stop"] = max(pos["stop"], last.HA_low)
+
+        # if side == "short" and last.HA_low == last.Trendline:
+        #     pos["stop"] = min(pos["stop"], last.HA_high)
+
+        exit_trade = False
 
         # EXIT CONDITIONS
         if side == "long":
