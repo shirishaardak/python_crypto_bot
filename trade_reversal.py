@@ -156,7 +156,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": max(last.Trendline, price - MAX_SL[symbol]),
+                "stop": last.Trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": candle_time
             }
@@ -169,7 +169,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": min(last.Trendline, price + MAX_SL[symbol]),
+                "stop":last.Trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": candle_time
             }
@@ -179,16 +179,7 @@ def process_symbol(symbol, df, price, state):
 
     # ========== MANAGEMENT ==========
     if pos:
-        side = pos["side"]
-
-        # TRAILING STOP
-        if side == "long" and last.HA_high == last.Trendline:
-            pos["stop"] = max(pos["stop"], last.HA_low)
-
-        if side == "short" and last.HA_low == last.Trendline:
-            pos["stop"] = min(pos["stop"], last.HA_high)
-
-        exit_trade = False
+        side = pos["side"]       
 
         # EXIT CONDITIONS
         if side == "long":
