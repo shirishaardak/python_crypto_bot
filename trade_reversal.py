@@ -12,8 +12,8 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 30, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 15}
-MAX_SL = {"BTCUSD": 500, "ETHUSD": 30}
+TAKE_PROFIT = {"BTCUSD": 500, "ETHUSD": 15}
+MAX_SL = {"BTCUSD": 500, "ETHUSD": 15}
 TAKER_FEE = 0.0005
 
 BASE_DIR = os.getcwd()
@@ -109,8 +109,8 @@ def calculate_trendline(df):
     ha = ta.ha(open_=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
     ha = ha.reset_index(drop=True)
 
-    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=21)[0]
-    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=21)[0]
+    max_idx = argrelextrema(ha['HA_high'].values, np.greater_equal, order=11)[0]
+    min_idx = argrelextrema(ha['HA_low'].values, np.less_equal, order=11)[0]
 
     ha['max_high'] = np.nan
     ha['max_low'] = np.nan
