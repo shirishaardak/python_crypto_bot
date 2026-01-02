@@ -1,0 +1,2 @@
+symbol,side,entry_price,exit_price,qty,net_pnl,entry_time,exit_time
+ETHUSD,short,3015.40790859,3043.98305153,100,-30.097134,2026-01-02 13:30:00+05:30,2026-01-02 09:52:42.999295
