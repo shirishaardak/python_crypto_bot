@@ -22,6 +22,18 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
+TRADE_COLUMNS = [
+    "symbol",
+    "side",
+    "entry_time",
+    "exit_time",
+    "qty",
+    "entry",
+    "exit",
+    "gross_pnl",
+    "commission",
+    "net_pnl"
+]
 # ================= UTILITIES =================
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
@@ -30,15 +42,18 @@ def commission(price, qty, symbol):
     notional = price * CONTRACT_SIZE[symbol] * qty
     return notional * TAKER_FEE
 
-def save_trade(trade):
+def save_trade_row(trade):
     df = pd.DataFrame([trade])
+
+    # FORCE column order
+    df = df.reindex(columns=TRADE_COLUMNS)
+
     df.to_csv(
         TRADE_CSV,
         mode="a",
         header=not os.path.exists(TRADE_CSV),
         index=False
     )
-
 def save_processed_data(df, ha, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
     out = pd.DataFrame({
@@ -205,15 +220,17 @@ def process_symbol(symbol, df, price, state):
             fee = commission(price, pos["qty"], symbol)
             net = pnl - fee
 
-            save_trade({
+            save_trade_row({
                 "symbol": symbol,
                 "side": side,
-                "entry_price": pos["entry"],
-                "exit_price": price,
-                "qty": pos["qty"],
-                "net_pnl": round(net, 6),
                 "entry_time": pos["entry_time"],
-                "exit_time": datetime.now()
+                "exit_time": datetime.now(),
+                "qty": pos["qty"],
+                "entry": pos["entry"],
+                "exit": price,
+                "gross_pnl": round(pnl, 6),
+                "commission": round(fee, 6),
+                "net_pnl": round(net, 6)
             })
 
             log(f"{symbol} | {side.upper()} EXIT @ {price} | NET: {round(net, 6)}")
@@ -223,12 +240,7 @@ def process_symbol(symbol, df, price, state):
 def run():
     # create trade file early
     if not os.path.exists(TRADE_CSV):
-        pd.DataFrame(columns=[
-            "symbol", "side",
-            "entry_price", "exit_price",
-            "qty", "net_pnl",
-            "entry_time", "exit_time"
-        ]).to_csv(TRADE_CSV, index=False)
+       pd.DataFrame(columns=TRADE_COLUMNS).to_csv(TRADE_CSV, index=False)
 
     state = {
         s: {"position": None, "last_trade_time": None}
