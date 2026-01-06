@@ -15,8 +15,8 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 MAX_SL = {"BTCUSD": 500, "ETHUSD": 30}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
-DAYS = 15
+TIMEFRAME = "5m"
+DAYS = 10
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
@@ -112,7 +112,7 @@ def calculate_trendline(df):
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"])
     ha = ha.reset_index(drop=True)
 
-    order = 21
+    order = 96
 
     max_idx = argrelextrema(
         ha["HA_high"].values, np.greater_equal, order=order
@@ -154,7 +154,7 @@ def process_symbol(symbol, df, price, state):
         ha["HA_close"],
         length=14
     )
-    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
+    ha["ATR_MA"] = ha["ATR"].rolling(14).mean()
 
     save_processed_data(df, ha, symbol)
 
@@ -180,7 +180,6 @@ def process_symbol(symbol, df, price, state):
                 "entry": price,
                 "stop": max(last.max_low, price - MAX_SL[symbol]),
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "signal_time": signal_time,
                 "entry_time": datetime.now()
             }
             state["last_trade_time"] = signal_time
@@ -193,7 +192,6 @@ def process_symbol(symbol, df, price, state):
                 "entry": price,
                 "stop": min(last.max_high, price + MAX_SL[symbol]),
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "signal_time": signal_time,
                 "entry_time": datetime.now()
             }
             state["last_trade_time"] = signal_time
@@ -231,7 +229,6 @@ def process_symbol(symbol, df, price, state):
                 "exit_price": price,
                 "qty": pos["qty"],
                 "net_pnl": round(net, 6),
-                "signal_time": pos["signal_time"],
                 "entry_time": pos["entry_time"],
                 "exit_time": datetime.now()
             })
@@ -243,11 +240,10 @@ def process_symbol(symbol, df, price, state):
 def run():
     if not os.path.exists(TRADE_CSV):
         pd.DataFrame(columns=[
-            "symbol", "side",
+            "entry_time", "exit_time", "symbol", "side",
             "entry_price", "exit_price",
             "qty", "net_pnl",
-            "signal_time",
-            "entry_time", "exit_time"
+            
         ]).to_csv(TRADE_CSV, index=False)
 
     state = {s: {"position": None, "last_trade_time": None} for s in SYMBOLS}
