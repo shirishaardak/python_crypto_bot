@@ -23,7 +23,7 @@ STOP_LOSS = {"BTCUSD": 150, "ETHUSD": 15}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following")
+SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -124,11 +124,10 @@ def process_symbol(symbol, df, price, state):
     # Save processed data for analysis
     save_processed_data(df, ha, symbol)
 
-    atr = ha["ATR"].iloc[-2]
-    atr_ma = ha["ATR_MA"].iloc[-2]
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
-    current = ha.iloc[-1]
+    atr = ha["ATR"].iloc[-1]
+    atr_ma = ha["ATR_MA"].iloc[-1]
+    last = ha.iloc[-1]
+    prev = ha.iloc[-1]
 
     pos = state["position"]
 
