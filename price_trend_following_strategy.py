@@ -127,7 +127,7 @@ def process_symbol(symbol, df, price, state):
     atr = ha["ATR"].iloc[-1]
     atr_ma = ha["ATR_MA"].iloc[-1]
     last = ha.iloc[-1]
-    prev = ha.iloc[-1]
+    prev = ha.iloc[-2]
 
     pos = state["position"]
 
