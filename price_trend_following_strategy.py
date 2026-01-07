@@ -14,7 +14,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 15
 
 # ===== RISK SETTINGS =====
@@ -133,11 +133,11 @@ def process_symbol(symbol, df, price, state):
 
     # ===== ENTRY at every 5-min clock =====
     now = datetime.now()
-    if now.minute % 5 == 0 and pos is None and atr > atr_ma:
+    if now.minute % 15 == 0 and pos is None and atr > atr_ma:
         entry_time = datetime.now()
 
         # ===== LONG ENTRY =====
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open and last.HA_close > prev.HA_close:
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -151,7 +151,7 @@ def process_symbol(symbol, df, price, state):
             return
 
         # ===== SHORT ENTRY =====
-        if last.HA_close < last.Trendline and last.HA_close < prev.HA_open:
+        if last.HA_close < last.Trendline and last.HA_close < prev.HA_open and last.HA_close < prev.HA_close:
             state["position"] = {
                 "side": "short",
                 "entry": price,
