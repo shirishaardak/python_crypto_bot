@@ -19,11 +19,11 @@ DAYS = 15
 
 # ===== RISK SETTINGS =====
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS = {"BTCUSD": 150, "ETHUSD": 15}
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
+SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -96,52 +96,46 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 # ================= TRENDLINE + HA =================
 def calculate_trendline(df):
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
-    order = 21
-    max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=order)[0]
-    min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=order)[0]
-    ha["max_high"] = np.nan
-    ha["max_low"] = np.nan
-    ha.loc[max_idx, "max_high"] = ha.loc[max_idx, "HA_high"]
-    ha.loc[min_idx, "max_low"] = ha.loc[min_idx, "HA_low"]
-    ha[["max_high", "max_low"]] = ha[["max_high", "max_low"]].ffill()
+    ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14)
+    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
+
+    order = 9
+    ha["UPPER"] = ha["HA_high"].rolling(order).max()
+    ha["LOWER"] = ha["HA_low"].rolling(order).min()
     ha["Trendline"] = np.nan
     trend = ha["HA_close"].iloc[0]
     ha.loc[0, "Trendline"] = trend
     for i in range(1, len(ha)):
-        if ha.loc[i, "HA_high"] == ha.loc[i, "max_high"]:
-            trend = ha.loc[i, "HA_low"]
-        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
-            trend = ha.loc[i, "HA_high"]
+        if ha.loc[i, "HA_close"] >  ha.loc[i-1, "UPPER"]:
+            trend = ha.loc[i, "LOWER"]
+        elif ha.loc[i, "HA_close"] <  ha.loc[i-1, "LOWER"]:
+            trend = ha.loc[i, "UPPER"]
         ha.loc[i, "Trendline"] = trend
     return ha
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
-    ha = calculate_trendline(df)
-    ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14)
-    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-
+    ha = calculate_trendline(df)   
     # Save processed data for analysis
     save_processed_data(df, ha, symbol)
 
-    atr = ha["ATR"].iloc[-1]
-    atr_ma = ha["ATR_MA"].iloc[-1]
-    last = ha.iloc[-1]
-    prev = ha.iloc[-2]
+    last = ha.iloc[-2]
+    prev = ha.iloc[-3]
+    third = ha.iloc[-2]
 
     pos = state["position"]
 
     # ===== ENTRY at every 5-min clock =====
     now = datetime.now()
-    if now.minute % 15 == 0 and pos is None and atr > atr_ma:
+    if now.minute % 15 == 0 and pos is None:
         entry_time = datetime.now()
 
         # ===== LONG ENTRY =====
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open and last.HA_close > prev.HA_close:
+        if  last.HA_close > last.Trendline and last.HA_close > prev.HA_open and last.HA_close > prev.HA_close:
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - STOP_LOSS[symbol],
+                "stop": last.HA_low - STOP_LOSS[symbol],
                 "tp": price + TAKE_PROFIT[symbol],
                 "trail_base": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -151,11 +145,11 @@ def process_symbol(symbol, df, price, state):
             return
 
         # ===== SHORT ENTRY =====
-        if last.HA_close < last.Trendline and last.HA_close < prev.HA_open and last.HA_close < prev.HA_close:
+        if  last.HA_close < last.Trendline and last.HA_close < prev.HA_open and last.HA_close < prev.HA_close:
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + STOP_LOSS[symbol],
+                "stop": last.HA_high + STOP_LOSS[symbol],
                 "tp": price - TAKE_PROFIT[symbol],
                 "trail_base": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -166,30 +160,15 @@ def process_symbol(symbol, df, price, state):
 
     # ===== MANAGEMENT (EXIT anytime) =====
     if pos:
-        side = pos["side"]
-        step = TRAIL_STEP[symbol]
-
-        # ===== TRAILING STOP =====
-        if side == "long":
-            move = price - pos["trail_base"]
-            if move >= step:
-                steps = int(move // step)
-                pos["stop"] += steps * step
-                pos["trail_base"] += steps * step
-        if side == "short":
-            move = pos["trail_base"] - price
-            if move >= step:
-                steps = int(move // step)
-                pos["stop"] -= steps * step
-                pos["trail_base"] -= steps * step
+        side = pos["side"]      
 
         exit_trade = False
         if side == "long":
-            if price <= pos["stop"] or price >= pos["tp"]:
+            if price > pos["stop"]  or last.HA_close < prev.Trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
         if side == "short":
-            if price >= pos["stop"] or price <= pos["tp"]:
+            if price > pos["stop"] or last.HA_close > prev.Trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
