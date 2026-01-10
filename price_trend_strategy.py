@@ -13,7 +13,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
+TIMEFRAME = "1h"
 DAYS = 15
 
 # ===== RISK SETTINGS =====
@@ -126,8 +126,8 @@ def calculate_trendline(df):
         ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14
     )
     ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-
     ha["SUPERTREND"] = ta.supertrend( high=ha["HA_high"],low=ha["HA_low"], close=ha["HA_close"], length=21, multiplier=2.5)['SUPERT_21_2.5']
+
     order = 21
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
     ha["LOWER"] = ha["HA_low"].rolling(order).min()
@@ -158,12 +158,13 @@ def process_symbol(symbol, df, price, state):
     now = datetime.now()
 
     # ===== ENTRY =====
-    if now.minute % 15 == 0 and pos is None and last.ATR > last.ATR_MA:
+    if now.minute % 5 == 0 and pos is None and last.ATR > last.ATR_MA:
 
         if (
             last.HA_close > last.Trendline and
             last.HA_close > prev.HA_close and
-            last.HA_close > prev.HA_open
+            last.HA_close > prev.HA_open and
+            last.HA_close > last.SUPERTREND
         ):
             state["position"] = {
                 "side": "long",
@@ -179,7 +180,8 @@ def process_symbol(symbol, df, price, state):
         if (
             last.HA_close < last.Trendline and
             last.HA_close < prev.HA_close and
-            last.HA_close < prev.HA_open
+            last.HA_close < prev.HA_open and 
+            last.HA_close < last.SUPERTREND
         ):
             state["position"] = {
                 "side": "short",
