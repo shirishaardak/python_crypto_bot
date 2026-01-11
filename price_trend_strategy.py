@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import pandas_ta as ta
+from requests.exceptions import RequestException, ConnectionError
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -102,43 +103,65 @@ def fetch_price(symbol):
         log(f"{symbol} PRICE fetch error: {e}", tg=True, key=f"{symbol}_price")
         return None
 
-def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
+
+def fetch_candles(symbol, resolution="60", days=7, tz="Asia/Kolkata", max_retries=5, base_delay=2):
+    """
+    Fetch OHLCV candles from Delta Exchange with retry on network errors.
+
+    Args:
+        symbol (str): Symbol to fetch, e.g., "ETHUSD".
+        resolution (str): Timeframe in minutes.
+        days (int): How many days of history to fetch.
+        tz (str): Timezone for the returned dataframe.
+        max_retries (int): Number of retries on failure.
+        base_delay (int): Base delay in seconds for exponential backoff.
+
+    Returns:
+        pd.DataFrame or None
+    """
     start = int((datetime.now() - timedelta(days=days)).timestamp())
+    end = int(time.time())
 
     params = {
         "resolution": resolution,
         "symbol": symbol,
         "start": str(start),
-        "end": str(int(time.time()))
+        "end": str(end)
     }
 
-    try:
-        r = requests.get(
-            "https://api.india.delta.exchange/v2/history/candles",
-            params=params,
-            timeout=10
-        )
-        r.raise_for_status()
+    url = "https://api.india.delta.exchange/v2/history/candles"
 
-        df = pd.DataFrame(
-            r.json()["result"],
-            columns=["time","open","high","low","close","volume"]
-        )
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            r.raise_for_status()
 
-        df.rename(columns=str.title, inplace=True)
-        df["Time"] = (
-            pd.to_datetime(df["Time"], unit="s", utc=True)
-              .dt.tz_convert(tz)
-        )
-        df.set_index("Time", inplace=True)
-        df.sort_index(inplace=True)
+            data = r.json().get("result")
+            if not data:
+                log(f"No data returned for {symbol}")
+                return None
 
-        df = df.astype(float)
-        return df.dropna()
+            df = pd.DataFrame(data, columns=["time","open","high","low","close","volume"])
+            df.rename(columns=str.title, inplace=True)
+            df["Time"] = pd.to_datetime(df["Time"], unit="s", utc=True).dt.tz_convert(tz)
+            df.set_index("Time", inplace=True)
+            df.sort_index(inplace=True)
+            df = df.astype(float)
 
-    except Exception as e:
-        log(f"{symbol} fetch error: {e}", tg=True, key=f"{symbol}_api")
-        return None
+            return df.dropna()
+
+        except (ConnectionError, RequestException) as e:
+            log(f"[Attempt {attempt}] {symbol} fetch error: {e}")
+            if attempt == max_retries:
+                log(f"All retries failed for {symbol}.")
+                return None
+            sleep_time = base_delay * (2 ** (attempt - 1))
+            log(f"Retrying in {sleep_time} seconds...")
+            time.sleep(sleep_time)
+
+        except Exception as e:
+            log(f"{symbol} fetch unexpected error: {e}")
+            return None
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
