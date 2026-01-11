@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 _last_tg = {}
@@ -18,24 +18,23 @@ _last_tg = {}
 def send_telegram(msg, key=None, cooldown=30):
     try:
         now = time.time()
+        if key and key in _last_tg and now - _last_tg[key] < cooldown:
+            return
         if key:
-            if key in _last_tg and now - _last_tg[key] < cooldown:
-                return
             _last_tg[key] = now
 
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
-    except:
+    except Exception:
         pass
 
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
-
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1h"
+TIMEFRAME = "1h"  # minutes
 DAYS = 15
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
@@ -59,16 +58,12 @@ def commission(price, qty, symbol):
     return notional * TAKER_FEE
 
 def save_trade(trade):
-    trade = trade.copy()
+    trade_copy = trade.copy()
     for t in ["entry_time", "exit_time"]:
-        trade[t] = trade[t].strftime("%Y-%m-%d %H:%M:%S")
+        trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
 
-    cols = [
-        "entry_time","exit_time","symbol","side",
-        "entry_price","exit_price","qty","net_pnl"
-    ]
-
-    pd.DataFrame([trade])[cols].to_csv(
+    cols = ["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]
+    pd.DataFrame([trade_copy])[cols].to_csv(
         TRADE_CSV,
         mode="a",
         header=not os.path.exists(TRADE_CSV),
@@ -77,7 +72,6 @@ def save_trade(trade):
 
 def save_processed_data(df, ha, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-
     out = pd.DataFrame({
         "time": df.index,
         "HA_open": ha["HA_open"],
@@ -88,98 +82,61 @@ def save_processed_data(df, ha, symbol):
         "ATR": ha["ATR"],
         "ATR_MA": ha["ATR_MA"]
     })
-
     out.to_csv(path, index=False)
 
 # ================= DATA =================
 def fetch_price(symbol):
     try:
-        r = requests.get(
-            f"https://api.india.delta.exchange/v2/tickers/{symbol}",
-            timeout=5
-        )
+        r = requests.get(f"https://api.india.delta.exchange/v2/tickers/{symbol}", timeout=5)
         return float(r.json()["result"]["mark_price"])
     except Exception as e:
         log(f"{symbol} PRICE fetch error: {e}", tg=True, key=f"{symbol}_price")
         return None
 
-
-def fetch_candles(symbol, resolution="60", days=7, tz="Asia/Kolkata", max_retries=5, base_delay=2):
-    """
-    Fetch OHLCV candles from Delta Exchange with retry on network errors.
-
-    Args:
-        symbol (str): Symbol to fetch, e.g., "ETHUSD".
-        resolution (str): Timeframe in minutes.
-        days (int): How many days of history to fetch.
-        tz (str): Timezone for the returned dataframe.
-        max_retries (int): Number of retries on failure.
-        base_delay (int): Base delay in seconds for exponential backoff.
-
-    Returns:
-        pd.DataFrame or None
-    """
+def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
     start = int((datetime.now() - timedelta(days=days)).timestamp())
-    end = int(time.time())
 
     params = {
         "resolution": resolution,
         "symbol": symbol,
         "start": str(start),
-        "end": str(end)
+        "end": str(int(time.time()))
     }
 
-    url = "https://api.india.delta.exchange/v2/history/candles"
+    try:
+        r = requests.get(
+            "https://api.india.delta.exchange/v2/history/candles",
+            params=params,
+            timeout=10
+        )
+        r.raise_for_status()
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            r = requests.get(url, params=params, timeout=10)
-            r.raise_for_status()
+        df = pd.DataFrame(
+            r.json()["result"],
+            columns=["time","open","high","low","close","volume"]
+        )
 
-            data = r.json().get("result")
-            if not data:
-                log(f"No data returned for {symbol}")
-                return None
+        df.rename(columns=str.title, inplace=True)
+        df["Time"] = (
+            pd.to_datetime(df["Time"], unit="s", utc=True)
+              .dt.tz_convert(tz)
+        )
+        df.set_index("Time", inplace=True)
+        df.sort_index(inplace=True)
 
-            df = pd.DataFrame(data, columns=["time","open","high","low","close","volume"])
-            df.rename(columns=str.title, inplace=True)
-            df["Time"] = pd.to_datetime(df["Time"], unit="s", utc=True).dt.tz_convert(tz)
-            df.set_index("Time", inplace=True)
-            df.sort_index(inplace=True)
-            df = df.astype(float)
+        df = df.astype(float)
+        return df.dropna()
 
-            return df.dropna()
-
-        except (ConnectionError, RequestException) as e:
-            log(f"[Attempt {attempt}] {symbol} fetch error: {e}")
-            if attempt == max_retries:
-                log(f"All retries failed for {symbol}.")
-                return None
-            sleep_time = base_delay * (2 ** (attempt - 1))
-            log(f"Retrying in {sleep_time} seconds...")
-            time.sleep(sleep_time)
-
-        except Exception as e:
-            log(f"{symbol} fetch unexpected error: {e}")
-            return None
+    except Exception as e:
+        log(f"{symbol} fetch error: {e}")
+        return None
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-    ha = ta.ha(
-        df["Open"], df["High"], df["Low"], df["Close"]
-    ).reset_index(drop=True)
-
-    ha["ATR"] = ta.atr(
-        ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14
-    )
+    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
+    ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14)
     ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-    ha["SUPERTREND"] = ta.supertrend(
-        high=ha["HA_high"],
-        low=ha["HA_low"],
-        close=ha["HA_close"],
-        length=21,
-        multiplier=2.5
-    )["SUPERT_21_2.5"]
+    ha["SUPERTREND"] = ta.supertrend(high=ha["HA_high"], low=ha["HA_low"], close=ha["HA_close"], length=21, multiplier=2.5)["SUPERT_21_2.5"]
 
     order = 21
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
@@ -194,7 +151,6 @@ def calculate_trendline(df):
             trend = ha.loc[i, "HA_low"]
         elif ha.loc[i, "HA_low"] == ha.loc[i, "LOWER"]:
             trend = ha.loc[i, "HA_high"]
-
         ha.loc[i, "Trendline"] = trend
 
     return ha
@@ -203,46 +159,24 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state):
     ha = calculate_trendline(df)
     save_processed_data(df, ha, symbol)
-
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
     pos  = state["position"]
-
     now = datetime.now()
 
     # ===== ENTRY =====
     if now.minute % 5 == 0 and pos is None and last.ATR > last.ATR_MA:
-
-        if (
-            last.HA_close > last.Trendline and
-            last.HA_close > prev.HA_close and
-            last.HA_close > prev.HA_open and
-            last.HA_close > last.SUPERTREND
-        ):
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.HA_close > last.SUPERTREND:
             state["position"] = {
-                "side": "long",
-                "entry": price,
-                "stop": price - STOP_LOSS[symbol],
-                "tp": price + TAKE_PROFIT[symbol],
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
+                "side": "long", "entry": price, "stop": price - STOP_LOSS[symbol], "tp": price + TAKE_PROFIT[symbol],
+                "qty": DEFAULT_CONTRACTS[symbol], "entry_time": now
             }
             log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
             return
-
-        if (
-            last.HA_close < last.Trendline and
-            last.HA_close < prev.HA_close and
-            last.HA_close < prev.HA_open and 
-            last.HA_close < last.SUPERTREND
-        ):
+        if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.HA_close < last.SUPERTREND:
             state["position"] = {
-                "side": "short",
-                "entry": price,
-                "stop": price + STOP_LOSS[symbol],
-                "tp": price - TAKE_PROFIT[symbol],
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
+                "side": "short", "entry": price, "stop": price + STOP_LOSS[symbol], "tp": price - TAKE_PROFIT[symbol],
+                "qty": DEFAULT_CONTRACTS[symbol], "entry_time": now
             }
             log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
             return
@@ -250,11 +184,10 @@ def process_symbol(symbol, df, price, state):
     # ===== EXIT =====
     if pos:
         exit_trade = False
-
+        pnl = 0
         if pos["side"] == "long" and last.HA_close < last.Trendline:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
-
         if pos["side"] == "short" and last.HA_close > last.Trendline:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
@@ -262,33 +195,16 @@ def process_symbol(symbol, df, price, state):
         if exit_trade:
             fee = commission(price, pos["qty"], symbol)
             net = pnl - fee
-
-            save_trade({
-                "symbol": symbol,
-                "side": pos["side"],
-                "entry_price": pos["entry"],
-                "exit_price": price,
-                "qty": pos["qty"],
-                "net_pnl": round(net, 6),
-                "entry_time": pos["entry_time"],
-                "exit_time": datetime.now()
-            })
-
+            save_trade({"symbol": symbol, "side": pos["side"], "entry_price": pos["entry"], "exit_price": price,
+                        "qty": pos["qty"], "net_pnl": round(net,6), "entry_time": pos["entry_time"], "exit_time": now})
             emoji = "🟢" if net > 0 else "🔴"
-            log(
-                f"{emoji} {symbol} {pos['side'].upper()} EXIT @ {price}\nPNL: {round(net,6)}",
-                tg=True
-            )
+            log(f"{emoji} {symbol} {pos['side'].upper()} EXIT @ {price}\nPNL: {round(net,6)}", tg=True)
             state["position"] = None
 
 # ================= MAIN =================
 def run():
     if not os.path.exists(TRADE_CSV):
-        pd.DataFrame(columns=[
-            "entry_time","exit_time","symbol","side",
-            "entry_price","exit_price","qty","net_pnl"
-        ]).to_csv(TRADE_CSV, index=False)
-
+        pd.DataFrame(columns=["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]).to_csv(TRADE_CSV, index=False)
     state = {s: {"position": None} for s in SYMBOLS}
     log("🚀 HA Trendline Breakout Strategy LIVE", tg=True)
 
@@ -298,15 +214,11 @@ def run():
                 df = fetch_candles(symbol)
                 if df is None or len(df) < 100:
                     continue
-
                 price = fetch_price(symbol)
                 if price is None:
                     continue
-
                 process_symbol(symbol, df, price, state[symbol])
-
             time.sleep(20)
-
         except Exception as e:
             log(f"🚨 Runtime error: {e}", tg=True, key="runtime")
             time.sleep(5)
