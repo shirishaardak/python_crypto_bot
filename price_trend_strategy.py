@@ -101,9 +101,7 @@ def calculate_trendline(df):
 
     ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], 14)
     ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-    ha["SUPERTREND"] = ta.supertrend(
-        ha["HA_high"], ha["HA_low"], ha["HA_close"], 21, 2.5
-    )["SUPERT_21_2.5"]
+    ha["SUPERTREND"] = ta.supertrend(ha["HA_high"], ha["HA_low"], ha["HA_close"], 21, 2.5)["SUPERT_21_2.5"]
 
     order = 21
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
