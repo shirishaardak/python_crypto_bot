@@ -97,24 +97,29 @@ def fetch_candles(symbol):
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"])
+    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
+
     ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], 14)
     ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-    ha["SUPERTREND"] = ta.supertrend(ha["HA_high"],ha["HA_low"],ha["HA_close"],21,2.5)['SUPERT_21_2.5']
+    ha["SUPERTREND"] = ta.supertrend(
+        ha["HA_high"], ha["HA_low"], ha["HA_close"], 21, 2.5
+    )["SUPERT_21_2.5"]
 
     order = 21
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
     ha["LOWER"] = ha["HA_low"].rolling(order).min()
 
-    trend = ha["HA_close"].iloc[0]
-    ha["Trendline"] = trend
+    ha["Trendline"] = np.nan
+    trend = ha.loc[0, "HA_close"]
+    ha.loc[0, "Trendline"] = trend
 
-    for i in range(1,len(ha)):
-        if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["HA_low"].iloc[i]
-        elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["HA_high"].iloc[i]
-        ha["Trendline"].iloc[i] = trend
+    for i in range(1, len(ha)):
+        if ha.loc[i, "HA_high"] == ha.loc[i, "UPPER"]:
+            trend = ha.loc[i, "HA_low"]
+        elif ha.loc[i, "HA_low"] == ha.loc[i, "LOWER"]:
+            trend = ha.loc[i, "HA_high"]
+
+        ha.loc[i, "Trendline"] = trend
 
     return ha
 
