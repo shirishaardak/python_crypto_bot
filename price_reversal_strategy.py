@@ -21,7 +21,7 @@ TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
 STOP_LOSS   = {"BTCUSD": 200, "ETHUSD": 20}
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trendline_strategy")
+SAVE_DIR = os.path.join(BASE_DIR, "data", "price_reversal_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -137,9 +137,9 @@ def calculate_trendline(df):
 
     for i in range(1, len(ha)):
         if ha.loc[i, "HA_high"] == ha.loc[i, "UPPER"]:
-            trend = ha.loc[i, "HA_low"]
-        elif ha.loc[i, "HA_low"] == ha.loc[i, "LOWER"]:
             trend = ha.loc[i, "HA_high"]
+        elif ha.loc[i, "HA_low"] == ha.loc[i, "LOWER"]:
+            trend = ha.loc[i, "HA_low"]
 
         ha.loc[i, "Trendline"] = trend
 
