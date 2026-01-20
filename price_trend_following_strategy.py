@@ -21,7 +21,7 @@ DAYS = 5
 # ===== RISK SETTINGS =====
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
 STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 20}
-TRAIL_STEP = {"BTCUSD": 300, "ETHUSD": 20}
+TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
@@ -164,8 +164,8 @@ def calculate_trendline(df):
     high_vals = data["high_smooth"].values
     low_vals  = data["low_smooth"].values
 
-    max_idx = argrelextrema(high_vals, np.greater_equal, order=21)[0]
-    min_idx = argrelextrema(low_vals,  np.less_equal,    order=21)[0]
+    max_idx = argrelextrema(high_vals, np.greater_equal, order=42)[0]
+    min_idx = argrelextrema(low_vals,  np.less_equal,    order=42)[0]
 
     data["smoothed_high"] = np.nan
     data["smoothed_low"]  = np.nan
@@ -211,7 +211,7 @@ def process_symbol(symbol, df, price, state):
         length=14
     )
 
-    data["ATR_MA_HA"] = data["ATR_HA"].rolling(14).mean()
+    data["ATR_MA_HA"] = data["ATR_HA"].rolling(21).mean()
 
     save_processed_data(df, data, symbol)
 
@@ -267,28 +267,28 @@ def process_symbol(symbol, df, price, state):
         side = pos["side"]
         step = TRAIL_STEP[symbol]
 
-        if side == "long":
-            move = last.HA_close - pos["trail_base"]
-            if move >= step:
-                steps = int(move // step)
-                pos["stop"] += steps * step
-                pos["trail_base"] += steps * step
+        # if side == "long":
+        #     move = last.HA_close - pos["trail_base"]
+        #     if move >= step:
+        #         steps = int(move // step)
+        #         pos["stop"] += steps * step
+        #         pos["trail_base"] += steps * step
 
-        if side == "short":
-            move = pos["trail_base"] - last.HA_close
-            if move >= step:
-                steps = int(move // step)
-                pos["stop"] -= steps * step
-                pos["trail_base"] -= steps * step
+        # if side == "short":
+        #     move = pos["trail_base"] - last.HA_close
+        #     if move >= step:
+        #         steps = int(move // step)
+        #         pos["stop"] -= steps * step
+        #         pos["trail_base"] -= steps * step
 
         exit_trade = False
         pnl = 0
 
-        if side == "long" and price < pos["stop"]:
+        if side == "long" and (price < pos["stop"] or last.HA_close < last.Trendline):
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
-        if side == "short" and price > pos["stop"]:
+        if side == "short" and (price > pos["stop"] or last.HA_close > last.Trendline):
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
