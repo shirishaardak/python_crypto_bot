@@ -27,7 +27,7 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trad.csv")
 
 
 # ================= UTILITIES =================
@@ -223,7 +223,7 @@ def process_symbol(symbol, df, price, state):
 
     # ===== ENTRY (HA ONLY) =====
     if (
-        now.minute % 5 == 0
+        now.minute % 15 == 0
         and pos is None
         and last.ATR_HA > prev.ATR_MA_HA
     ):
