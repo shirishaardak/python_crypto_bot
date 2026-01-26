@@ -88,7 +88,7 @@ def high_low_trend(data, fyers):
     min_idx = argrelextrema(
         ha["low_smooth"].values,
         np.less_equal,
-        order=42
+        order=21
     )[0]
 
     ha["max_high"] = np.nan

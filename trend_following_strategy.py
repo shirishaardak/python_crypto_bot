@@ -160,7 +160,7 @@ def run_strategy(token_df, fyers, start_date, end_date):
 
     data_CE = {
         "symbol": CE_SYMBOL,
-        "resolution": "15",
+        "resolution": "5",
         "date_format": "1",
         "range_from": start_date.strftime('%Y-%m-%d'),
         "range_to": end_date.strftime('%Y-%m-%d'),
@@ -169,7 +169,7 @@ def run_strategy(token_df, fyers, start_date, end_date):
 
     data_PE = {
         "symbol": PE_SYMBOL,
-        "resolution": "15",
+        "resolution": "5",
         "date_format": "1",
         "range_from": start_date.strftime('%Y-%m-%d'),
         "range_to": end_date.strftime('%Y-%m-%d'),
