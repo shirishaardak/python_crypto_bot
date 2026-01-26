@@ -1,9 +1,7 @@
-pandas
-pandas_ta
-matplotlib
-ccxt
-python-dateutil
-pytz
 requests
-delta-rest-client
+pandas
+numpy
+pandas-ta
 scipy
+pyotp
+fyers-apiv3
