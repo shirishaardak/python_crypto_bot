@@ -6,6 +6,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import pandas_ta as ta
 from scipy.signal import argrelextrema
+from dotenv import load_dotenv
+load_dotenv()
 
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
