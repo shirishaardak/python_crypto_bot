@@ -191,6 +191,18 @@ def reset_day():
 send_telegram("🟢 Trend Following Algo Started")
 folder = create_strategy_folder(strategy_name)
 
+# Try loading token & model immediately at script start
+try:
+    if os.path.exists(TOKEN_FILE):
+        token_generated = True
+        fyers = load_fyers_model()
+        if fyers:
+            token_df = load_option_tokens(fyers)
+            model_loaded = True
+except Exception as e:
+    send_telegram(f"❌ Initial load failed: {e}")
+
+# ================= LOOP =================
 while True:
     try:
         now = datetime.now()
@@ -200,11 +212,11 @@ while True:
             current_trading_day = now.date()
             reset_day()
 
-        # Retry until token generated
-        if not token_generated and time(9,0) <= now.time() <= time(15,30):
+        # Generate token at 9:00 AM
+        if not token_generated and time(9,0) <= now.time() <= time(9,5):
             token_generated = generate_daily_token()
 
-        # Retry until model loaded
+        # Load Fyers model after token
         if token_generated and not model_loaded:
             fyers = load_fyers_model()
             if fyers:
