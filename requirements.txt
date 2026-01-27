@@ -5,3 +5,4 @@ pandas-ta
 scipy
 pyotp
 fyers-apiv3
+pytz
