@@ -147,9 +147,10 @@ def run_strategy():
 
     last_CE = df_CE.iloc[-2]
     last_PE = df_PE.iloc[-2]
-
+# Check if current time is at 15-min entry slot
+    entry_allowed = datetime.now().minute % 15 == 0
     # CE
-    if CE_position == 0 and last_CE["trade_single"] == 1:
+    if CE_position == 0 and last_CE["trade_single"] == 1 and entry_allowed:
         CE_position = 1
         CE_enter = CE_price
         CE_SL = CE_price - SL_POINTS
@@ -162,7 +163,7 @@ def run_strategy():
         send_telegram(f"🔴 CE SELL {CE_price} | PnL ₹{pnl}")
 
     # PE
-    if PE_position == 0 and last_PE["trade_single"] == 1:
+    if PE_position == 0 and last_PE["trade_single"] == 1 and entry_allowed:
         PE_position = 1
         PE_enter = PE_price
         PE_SL = PE_price - SL_POINTS
