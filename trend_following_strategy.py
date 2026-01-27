@@ -233,13 +233,7 @@ while True:
             send_telegram("🔴 Market closed – strategy stopped")
             strategy_active = False
 
-        # Heartbeat every minute
-        if now.second == 0:
-            send_telegram(
-                f"💓 Algo Alive\nTime: {now.strftime('%H:%M:%S')}\n"
-                f"Token: {token_generated}\nModel: {model_loaded}\n"
-                f"CE Pos: {CE_position} | PE Pos: {PE_position}"
-            )
+     
 
         t.sleep(1)
 
