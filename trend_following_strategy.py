@@ -1,19 +1,20 @@
-# ================= TIMEZONE (MUST BE FIRST) =================
 import os
-os.environ["TZ"] = "Asia/Kolkata"
-
-from zoneinfo import ZoneInfo
-IST = ZoneInfo("Asia/Kolkata")
-
-# ================= IMPORTS =================
 import time as t
 import requests
 import pandas as pd
-from datetime import datetime, time, timedelta, date
+import pytz
+from datetime import datetime, time, timedelta
 from fyers_apiv3 import fyersModel
 from utility.common_utility import get_stock_instrument_token, high_low_trend
 from dotenv import load_dotenv
+
 load_dotenv()
+
+# ================= TIME =================
+IST = pytz.timezone("Asia/Kolkata")
+
+def now_ist():
+    return datetime.now(IST)
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
@@ -22,11 +23,7 @@ TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(
-            url,
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
-            timeout=5
-        )
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
     except:
         pass
 
@@ -35,69 +32,71 @@ CLIENT_ID = "98E1TAKD4T-100"
 QTY = 1
 SL_POINTS = 50
 COMMISSION_RATE = 0.0004
+EXIT_TIME = time(15, 15)
 
 TOKEN_FILE = "auth/api_key/access_token.txt"
 TOKEN_CSV = "data/Trend_Following/instrument_token.csv"
 strategy_name = "Trend_Following"
 
+folder = f"data/{strategy_name}"
+os.makedirs(folder, exist_ok=True)
+
 # ================= STATE =================
-current_trading_day = date.today()
+current_trading_day = now_ist().date()
 token_generated = False
 model_loaded = False
-strategy_active = False
+
+CE_position = PE_position = 0
+CE_enter = PE_enter = 0
+CE_enter_time = PE_enter_time = None
+CE_SL = PE_SL = 0
 
 fyers = None
 token_df = None
 
-CE_position = PE_position = 0
-CE_enter = PE_enter = 0
-CE_SL = PE_SL = 0
-orders = []
-
-# ================= FOLDERS =================
-folder = f"data/{strategy_name}"
-os.makedirs(folder, exist_ok=True)
-
 # ================= UTILS =================
-def calculate_pnl(entry, exit):
-    gross = (exit - entry) * QTY
-    turnover = (entry + exit) * QTY
-    return round(gross - turnover * COMMISSION_RATE, 2)
+def commission(price, qty):
+    return round(price * qty * COMMISSION_RATE, 6)
 
+def calculate_pnl(entry, exit, qty):
+    return round((exit - entry) * qty, 6)
+
+def save_trade(row):
+    path = f"{folder}/live_trades.csv"
+    df = pd.DataFrame([row])
+    df.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
+
+# ================= DO NOT TOUCH =================
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(folder, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["trendline"],
+        "atr_condition": ha["atr_condition"],
+        "trade_single": ha["trade_single"]
+    })
+    out.to_csv(path, index=False)
+
+# ================= FYERS =================
 def generate_daily_token():
-    while True:
-        try:
-            send_telegram("🔐 Generating Fyers token...")
-            code = os.system("python auth/fyers_auth.py")
-            if code == 0 and os.path.exists(TOKEN_FILE):
-                send_telegram("✅ Token generated successfully")
-                return True
-            send_telegram("❌ Token generation failed, retrying...")
-        except Exception as e:
-            send_telegram(f"❌ Token error: {e}")
-        t.sleep(5)
+    send_telegram("🔐 Generating token")
+    return os.system("python auth/fyers_auth.py") == 0
 
-def load_fyers_model():
-    global fyers
-    while True:
-        try:
-            token = open(TOKEN_FILE).read().strip()
-            fy = fyersModel.FyersModel(
-                client_id=CLIENT_ID,
-                token=token,
-                is_async=False,
-                log_path=""
-            )
-            if fy.get_profile().get("s") == "ok":
-                fyers = fy
-                send_telegram("✅ Fyers model loaded")
-                return fy
-            send_telegram("❌ Model load failed, retrying...")
-        except Exception as e:
-            send_telegram(f"❌ Model error: {e}")
-        t.sleep(5)
+def load_fyers():
+    token = open(TOKEN_FILE).read().strip()
+    fy = fyersModel.FyersModel(
+        client_id=CLIENT_ID,
+        token=token,
+        is_async=False,
+        log_path=""
+    )
+    return fy if fy.get_profile().get("s") == "ok" else None
 
-def load_option_tokens(fyers):
+def load_tokens(fyers):
     if os.path.exists(TOKEN_CSV):
         return pd.read_csv(TOKEN_CSV)
 
@@ -114,32 +113,12 @@ def load_option_tokens(fyers):
     df.to_csv(TOKEN_CSV, index=False)
     return df
 
-def save_live_trades():
-    if not orders:
-        return
-    pd.DataFrame(orders).to_csv(f"{folder}/live_trades.csv", index=False)
-    send_telegram("📁 Trades saved")
-
-def save_processed_data(df, ha, symbol):
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": ha["HA_open"],
-        "HA_high": ha["HA_high"],
-        "HA_low": ha["HA_low"],
-        "HA_close": ha["HA_close"],
-        "trendline": ha["trendline"],
-        "atr_condition": ha["atr_condition"],
-        "trade_single": ha["trade_single"]
-    })
-    out.to_csv(f"{folder}/{symbol}_processed.csv", index=False)
-
 # ================= STRATEGY =================
 def run_strategy():
-    global CE_position, PE_position, CE_enter, PE_enter, CE_SL, PE_SL, strategy_active
+    global CE_position, PE_position, CE_enter, PE_enter
+    global CE_enter_time, PE_enter_time, CE_SL, PE_SL
 
-    now = datetime.now(IST)
-
-    # run once per candle
+    now = now_ist()
     if now.second != 10:
         return
 
@@ -149,7 +128,7 @@ def run_strategy():
     start = (now.date() - timedelta(days=5)).strftime("%Y-%m-%d")
     end = now.date().strftime("%Y-%m-%d")
 
-    data = {
+    base = {
         "resolution": "5",
         "date_format": "1",
         "range_from": start,
@@ -157,16 +136,13 @@ def run_strategy():
         "cont_flag": "1"
     }
 
-    df_CE = high_low_trend({**data, "symbol": CE_SYMBOL}, fyers)
-    df_PE = high_low_trend({**data, "symbol": PE_SYMBOL}, fyers)
+    df_CE = high_low_trend({**base, "symbol": CE_SYMBOL}, fyers)
+    df_PE = high_low_trend({**base, "symbol": PE_SYMBOL}, fyers)
 
     save_processed_data(df_CE, df_CE, token_df.loc[0, "tradingsymbol"])
     save_processed_data(df_PE, df_PE, token_df.loc[1, "tradingsymbol"])
 
-    quotes = fyers.quotes(
-        data={"symbols": f"{CE_SYMBOL},{PE_SYMBOL}"}
-    )["d"]
-
+    quotes = fyers.quotes(data={"symbols": f"{CE_SYMBOL},{PE_SYMBOL}"})["d"]
     price = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
 
     CE_price = price[token_df.loc[0, "tradingsymbol"]]
@@ -175,114 +151,85 @@ def run_strategy():
     last_CE = df_CE.iloc[-2]
     last_PE = df_PE.iloc[-2]
 
-    entry_allowed = now.minute % 15 == 0
+    entry_allowed = now.minute % 5 == 0 and now.time() < EXIT_TIME
 
     # ===== CE =====
     if CE_position == 0 and last_CE["trade_single"] == 1 and entry_allowed:
         CE_position = 1
         CE_enter = CE_price
+        CE_enter_time = now
         CE_SL = CE_price - SL_POINTS
-        strategy_active = True
-        orders.append({
-            "symbol": CE_SYMBOL,
-            "action": "BUY",
-            "price": CE_price,
-            "time": now
-        })
-        send_telegram(f"🟢 CE BUY {CE_price}")
 
     elif CE_position == 1 and (
-        CE_price <= CE_SL or last_CE["HA_close"] < last_CE["trendline"]
+        CE_price <= CE_SL
+        or last_CE["HA_close"] < last_CE["trendline"]
+        or now.time() >= EXIT_TIME
     ):
-        pnl = calculate_pnl(CE_enter, CE_price)
-        CE_position = 0
-        orders.append({
+        pnl = calculate_pnl(CE_enter, CE_price, QTY)
+        net = pnl - commission(CE_price, QTY)
+        save_trade({
             "symbol": CE_SYMBOL,
-            "action": "SELL",
-            "price": CE_price,
-            "pnl": pnl,
-            "time": now
+            "side": "BUY",
+            "entry_price": CE_enter,
+            "exit_price": CE_price,
+            "qty": QTY,
+            "net_pnl": net,
+            "entry_time": CE_enter_time,
+            "exit_time": now
         })
-        send_telegram(f"🔴 CE SELL {CE_price} | PnL ₹{pnl}")
+        CE_position = 0
 
     # ===== PE =====
     if PE_position == 0 and last_PE["trade_single"] == 1 and entry_allowed:
         PE_position = 1
         PE_enter = PE_price
+        PE_enter_time = now
         PE_SL = PE_price - SL_POINTS
-        strategy_active = True
-        orders.append({
-            "symbol": PE_SYMBOL,
-            "action": "BUY",
-            "price": PE_price,
-            "time": now
-        })
-        send_telegram(f"🟢 PE BUY {PE_price}")
 
     elif PE_position == 1 and (
-        PE_price <= PE_SL or last_PE["HA_close"] < last_PE["trendline"]
+        PE_price <= PE_SL
+        or last_PE["HA_close"] < last_PE["trendline"]
+        or now.time() >= EXIT_TIME
     ):
-        pnl = calculate_pnl(PE_enter, PE_price)
-        PE_position = 0
-        orders.append({
+        pnl = calculate_pnl(PE_enter, PE_price, QTY)
+        net = pnl - commission(PE_price, QTY)
+        save_trade({
             "symbol": PE_SYMBOL,
-            "action": "SELL",
-            "price": PE_price,
-            "pnl": pnl,
-            "time": now
+            "side": "BUY",
+            "entry_price": PE_enter,
+            "exit_price": PE_price,
+            "qty": QTY,
+            "net_pnl": net,
+            "entry_time": PE_enter_time,
+            "exit_time": now
         })
-        send_telegram(f"🔴 PE SELL {PE_price} | PnL ₹{pnl}")
-
-# ================= RESET =================
-def reset_day():
-    global token_generated, model_loaded, strategy_active
-    global CE_position, PE_position, orders
-
-    token_generated = False
-    model_loaded = False
-    strategy_active = False
-    CE_position = PE_position = 0
-    orders = []
-
-    send_telegram("♻ Daily reset completed")
+        PE_position = 0
 
 # ================= MAIN =================
-send_telegram("🟢 Trend Following Algo Started")
-
-if os.path.exists(TOKEN_FILE):
-    token_generated = True
-    fyers = load_fyers_model()
-    if fyers:
-        token_df = load_option_tokens(fyers)
-        model_loaded = True
+send_telegram("🟢 Algo started")
 
 while True:
     try:
-        now = datetime.now(IST)
+        now = now_ist()
 
         if now.date() != current_trading_day:
             current_trading_day = now.date()
-            reset_day()
+            token_generated = False
+            model_loaded = False
 
         if not token_generated and time(9, 0) <= now.time() <= time(9, 5):
             token_generated = generate_daily_token()
 
         if token_generated and not model_loaded:
-            fyers = load_fyers_model()
-            if fyers:
-                token_df = load_option_tokens(fyers)
-                model_loaded = True
+            fyers = load_fyers()
+            token_df = load_tokens(fyers)
+            model_loaded = True
 
-        if model_loaded and time(9, 20) <= now.time() <= time(15, 30):
+        if model_loaded and time(9, 20) <= now.time() <= EXIT_TIME:
             run_strategy()
-
-        if now.time() > time(15, 30) and strategy_active:
-            save_live_trades()
-            send_telegram("🔴 Market closed – strategy stopped")
-            strategy_active = False
 
         t.sleep(1)
 
     except Exception as e:
-        send_telegram(f"❌ Algo crash\n<code>{e}</code>")
+        send_telegram(f"❌ {e}")
         t.sleep(5)
