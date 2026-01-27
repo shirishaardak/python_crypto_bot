@@ -94,34 +94,34 @@ def high_low_trend(data, fyers):
     ha["max_high"] = np.nan
     ha["max_low"] = np.nan
 
-    ha.loc[max_idx, "max_high"] = ha.loc[max_idx, "high_smooth"]
-    ha.loc[min_idx, "max_low"] = ha.loc[min_idx, "low_smooth"]
+    ha.loc[max_idx, "max_high"] = ha.loc[max_idx, "HA_high"]
+    ha.loc[min_idx, "max_low"] = ha.loc[min_idx, "HA_low"]
 
     ha["max_high"] = ha["max_high"].ffill()
     ha["max_low"] = ha["max_low"].ffill()
 
     # ------------------------------------------------------------------
-    # Trendline construction
+    # trendline construction
     # ------------------------------------------------------------------
-    ha["Trendline"] = np.nan
-    current_trend = ha.loc[0, "HA_high"]
-    ha["trade_single"] = 0 
+    ha["trendline"] = np.nan
+    trendline = ha["HA_close"].iloc[0]
+    ha.loc[0, "trendline"] = trendline
 
-    for i in range(len(ha)):
-        if ha.loc[i, "HA_high"] == ha.loc[i, "max_high"]:
-            current_trend = ha.loc[i, "max_high"]
-        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
-            current_trend = ha.loc[i, "max_low"]
+    for i in range(1, len(ha)):
+        if ha["HA_high"].iloc[i] == ha["max_high"].iloc[i]:
+            trendline = ha["HA_low"].iloc[i]
+        elif ha["HA_low"].iloc[i] == ha["max_low"].iloc[i]:
+            trendline = ha["HA_high"].iloc[i]
 
-        ha.loc[i, "Trendline"] = current_trend
+        ha.loc[i, "trendline"] = trendline
 
     # ------------------------------------------------------------------
     # ATR & ATR EMA
     # ------------------------------------------------------------------
     ha["ATR"] = ta.atr(
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
         length=14
     )
 
@@ -133,7 +133,7 @@ def high_low_trend(data, fyers):
     # ------------------------------------------------------------------
     # Trade signals
     # ------------------------------------------------------------------
-    ha["trade_signal"] = 0
+    ha["trade_single"] = 0
 
     for i in range(1, len(ha)):
 
@@ -142,7 +142,7 @@ def high_low_trend(data, fyers):
 
         # BUY
         if (
-            ha.loc[i, "HA_close"] > ha.loc[i, "Trendline"] and
+            ha.loc[i, "HA_close"] > ha.loc[i, "trendline"] and
             ha.loc[i, "HA_close"] > ha.loc[i - 1, "HA_open"] and
             ha.loc[i, "HA_close"] > ha.loc[i - 1, "HA_close"]
         ):
@@ -150,7 +150,7 @@ def high_low_trend(data, fyers):
 
         # SELL
         elif (
-            ha.loc[i, "HA_close"] < ha.loc[i, "Trendline"] and
+            ha.loc[i, "HA_close"] < ha.loc[i, "trendline"] and
             ha.loc[i, "HA_close"] < ha.loc[i - 1, "HA_open"] and
             ha.loc[i, "HA_close"] < ha.loc[i - 1, "HA_close"]
         ):

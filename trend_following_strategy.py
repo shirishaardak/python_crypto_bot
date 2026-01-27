@@ -26,7 +26,7 @@ SL_POINTS = 50
 COMMISSION_RATE = 0.0004
 
 TOKEN_FILE = "auth/api_key/access_token.txt"
-TOKEN_CSV = "data/trend_following_strategy.csv"
+TOKEN_CSV = "data/Trend_Following/instrument_token.csv"
 strategy_name = "Trend_Following"
 
 # ================= STATE =================
@@ -42,6 +42,10 @@ CE_position = PE_position = 0
 CE_enter = PE_enter = 0
 CE_SL = PE_SL = 0
 orders = []
+
+# ================= FOLDERS =================
+folder = f"data/{strategy_name}"
+os.makedirs(folder, exist_ok=True)
 
 # ================= UTILS =================
 def calculate_pnl(entry, exit):
@@ -99,22 +103,32 @@ def load_option_tokens(fyers):
     df.to_csv(TOKEN_CSV, index=False)
     return df
 
-def create_strategy_folder(name):
-    folder = f"data/{name}"
-    os.makedirs(folder, exist_ok=True)
-    return folder
-
 def save_live_trades():
     if not orders:
         return
     df = pd.DataFrame(orders)
-    df.to_csv(f"{folder}/live_trades_{current_trading_day}.csv", index=False)
+    df.to_csv(f"{folder}/live_trades.csv", index=False)
     send_telegram("📁 Trades saved")
+
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(folder, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["trendline"],
+        "atr_condition": ha["atr_condition"],
+        "trade_single": ha["trade_single"]
+    })
+    out.to_csv(path, index=False)
 
 # ================= STRATEGY =================
 def run_strategy():
     global CE_position, PE_position, CE_enter, PE_enter, CE_SL, PE_SL, strategy_active
 
+    # Only run at second = 10 to avoid multiple runs per second
     if datetime.now().second != 10:
         return
 
@@ -136,9 +150,15 @@ def run_strategy():
     data_PE = data_CE.copy()
     data_PE["symbol"] = PE_SYMBOL
 
+    # Calculate trend / indicators
     df_CE = high_low_trend(data_CE, fyers)
     df_PE = high_low_trend(data_PE, fyers)
 
+    # Save processed data per candle
+    save_processed_data(df_CE, df_CE, token_df.loc[0, "tradingsymbol"])
+    save_processed_data(df_PE, df_PE, token_df.loc[1, "tradingsymbol"])
+
+    # Get current prices
     quotes = fyers.quotes(data={"symbols": f"{CE_SYMBOL},{PE_SYMBOL}"})["d"]
     price = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
 
@@ -147,32 +167,60 @@ def run_strategy():
 
     last_CE = df_CE.iloc[-2]
     last_PE = df_PE.iloc[-2]
-# Check if current time is at 15-min entry slot
+
+    # Check if current time is at 15-min entry slot
     entry_allowed = datetime.now().minute % 15 == 0
-    # CE
+
+    # ===== CE =====
     if CE_position == 0 and last_CE["trade_single"] == 1 and entry_allowed:
         CE_position = 1
         CE_enter = CE_price
         CE_SL = CE_price - SL_POINTS
         strategy_active = True
+        orders.append({
+            "symbol": CE_SYMBOL,
+            "action": "BUY",
+            "price": CE_price,
+            "time": datetime.now()
+        })
         send_telegram(f"🟢 CE BUY {CE_price}")
 
-    elif CE_position == 1 and (CE_price <= CE_SL or last_CE["trade_single"] == -1):
+    elif CE_position == 1 and (CE_price <= CE_SL or last_CE["HA_close"] < last_CE["trendline"] ):
         pnl = calculate_pnl(CE_enter, CE_price)
         CE_position = 0
+        orders.append({
+            "symbol": CE_SYMBOL,
+            "action": "SELL",
+            "price": CE_price,
+            "pnl": pnl,
+            "time": datetime.now()
+        })
         send_telegram(f"🔴 CE SELL {CE_price} | PnL ₹{pnl}")
 
-    # PE
+    # ===== PE =====
     if PE_position == 0 and last_PE["trade_single"] == 1 and entry_allowed:
         PE_position = 1
         PE_enter = PE_price
         PE_SL = PE_price - SL_POINTS
         strategy_active = True
+        orders.append({
+            "symbol": PE_SYMBOL,
+            "action": "BUY",
+            "price": PE_price,
+            "time": datetime.now()
+        })
         send_telegram(f"🟢 PE BUY {PE_price}")
 
-    elif PE_position == 1 and (PE_price <= PE_SL or last_PE["trade_single"] == -1):
+    elif PE_position == 1 and (PE_price <= PE_SL or last_PE["HA_close"] < last_PE["trendline"] ):
         pnl = calculate_pnl(PE_enter, PE_price)
         PE_position = 0
+        orders.append({
+            "symbol": PE_SYMBOL,
+            "action": "SELL",
+            "price": PE_price,
+            "pnl": pnl,
+            "time": datetime.now()
+        })
         send_telegram(f"🔴 PE SELL {PE_price} | PnL ₹{pnl}")
 
 # ================= RESET =================
@@ -190,7 +238,6 @@ def reset_day():
 
 # ================= MAIN =================
 send_telegram("🟢 Trend Following Algo Started")
-folder = create_strategy_folder(strategy_name)
 
 # Try loading token & model immediately at script start
 try:
@@ -233,8 +280,6 @@ while True:
             save_live_trades()
             send_telegram("🔴 Market closed – strategy stopped")
             strategy_active = False
-
-     
 
         t.sleep(1)
 
