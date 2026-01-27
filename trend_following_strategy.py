@@ -154,7 +154,11 @@ def run_strategy(token_df, fyers, start_date, end_date):
 
     if datetime.now().second != 10:
         return
-
+    send_telegram(
+        f"⏱ Strategy check\n"
+        f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+        f"CE Pos: {CE_position} | PE Pos: {PE_position}"
+    )
     CE_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     PE_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
