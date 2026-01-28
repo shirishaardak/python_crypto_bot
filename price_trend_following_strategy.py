@@ -24,8 +24,8 @@ STOP_LOSS   = {"BTCUSD": 150, "ETHUSD": 15}
 TRAIL_STEP  = {"BTCUSD": 100, "ETHUSD": 10}
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("aaaBOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("aaCHAT_ID")
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
