@@ -1,19 +1,6 @@
-# ================= TIMEZONE PATCH =================
-# MUST BE AT THE VERY TOP, BEFORE ANY OTHER IMPORTS
-import pytz
-
-_real_timezone = pytz.timezone
-
-def fixed_timezone(name):
-    if isinstance(name, str) and name.lower() == "asia/kolkata":
-        name = "Asia/Kolkata"
-    return _real_timezone(name)
-
-pytz.timezone = fixed_timezone
-# ===================================================
-
 import os
 import time as t
+import pytz
 import requests
 import pandas as pd
 from datetime import datetime, time
@@ -23,12 +10,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ================= TIMEZONE =================
+# ================= TIMEZONE (CORRECT WAY) =================
+UTC = pytz.utc
 IST = pytz.timezone("Asia/Kolkata")
 
 def ist_now():
-    """Return current datetime in IST (tz-aware)"""
-    return datetime.now(IST)
+    """Always return current IST time regardless of server location"""
+    return datetime.now(UTC).astimezone(IST)
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
@@ -42,7 +30,7 @@ def send_telegram(msg):
             timeout=5
         )
     except Exception as e:
-        print(f"Telegram error: {e}")  # Debug output
+        print("Telegram error:", e)
 
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
@@ -64,6 +52,7 @@ symbols_loaded = False
 # ================= STATE =================
 fyers = None
 token_df = None
+
 CE_position = PE_position = 0
 CE_enter = PE_enter = 0
 CE_SL = PE_SL = 0
@@ -107,14 +96,26 @@ def load_token():
 def load_model():
     send_telegram("🔌 Loading Fyers model")
     token = open(TOKEN_FILE).read().strip()
-    fy = fyersModel.FyersModel(client_id=CLIENT_ID, token=token, is_async=False, log_path="")
-    return fy
+    return fyersModel.FyersModel(
+        client_id=CLIENT_ID,
+        token=token,
+        is_async=False,
+        log_path=""
+    )
 
 def load_symbols(fyers):
     send_telegram("📄 Loading symbols")
     if os.path.exists(TOKEN_CSV):
         return pd.read_csv(TOKEN_CSV)
-    tickers = [{"strategy_name":"Trend_Following","name":"BANKNIFTY","segment-name":"NSE:NIFTY BANK","segment":"NFO-OPT","expiry":0,"offset":1}]
+
+    tickers = [{
+        "strategy_name": "Trend_Following",
+        "name": "BANKNIFTY",
+        "segment-name": "NSE:NIFTY BANK",
+        "segment": "NFO-OPT",
+        "expiry": 0,
+        "offset": 1
+    }]
     df = pd.DataFrame(get_stock_instrument_token(tickers, fyers))
     df.to_csv(TOKEN_CSV, index=False)
     return df
@@ -129,7 +130,14 @@ def run_strategy():
 
     start = (ist_now().date() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
     end = ist_now().date().strftime("%Y-%m-%d")
-    base = {"resolution": "5", "date_format": "1", "range_from": start, "range_to": end, "cont_flag": "1"}
+
+    base = {
+        "resolution": "5",
+        "date_format": "1",
+        "range_from": start,
+        "range_to": end,
+        "cont_flag": "1"
+    }
 
     df_CE = high_low_trend({**base, "symbol": CE_SYMBOL}, fyers)
     df_PE = high_low_trend({**base, "symbol": PE_SYMBOL}, fyers)
@@ -139,13 +147,14 @@ def run_strategy():
 
     quotes = fyers.quotes({"symbols": f"{CE_SYMBOL},{PE_SYMBOL}"})["d"]
     price_map = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
+
     CE_price = price_map[token_df.loc[0, "tradingsymbol"]]
     PE_price = price_map[token_df.loc[1, "tradingsymbol"]]
 
     last_CE = df_CE.iloc[-2]
     last_PE = df_PE.iloc[-2]
 
-    # ===== CE Entry/Exit =====
+    # ===== CE =====
     if CE_position == 0 and last_CE["trade_single"] == 1:
         CE_position = 1
         CE_enter = CE_price
@@ -155,12 +164,19 @@ def run_strategy():
 
     elif CE_position == 1 and CE_price <= CE_SL:
         net = calculate_pnl(CE_enter, CE_price, QTY) - commission(CE_price, QTY)
-        save_trade({"symbol": CE_SYMBOL, "entry_price": CE_enter, "exit_price": CE_price, "qty": QTY,
-                    "net_pnl": net, "entry_time": CE_enter_time.isoformat(), "exit_time": ist_now().isoformat()})
+        save_trade({
+            "symbol": CE_SYMBOL,
+            "entry_price": CE_enter,
+            "exit_price": CE_price,
+            "qty": QTY,
+            "net_pnl": net,
+            "entry_time": CE_enter_time.isoformat(),
+            "exit_time": ist_now().isoformat()
+        })
         CE_position = 0
         send_telegram(f"🔴 CE EXIT @ {CE_price} | Net ₹{round(net,2)}")
 
-    # ===== PE Entry/Exit =====
+    # ===== PE =====
     if PE_position == 0 and last_PE["trade_single"] == 1:
         PE_position = 1
         PE_enter = PE_price
@@ -170,43 +186,54 @@ def run_strategy():
 
     elif PE_position == 1 and PE_price <= PE_SL:
         net = calculate_pnl(PE_enter, PE_price, QTY) - commission(PE_price, QTY)
-        save_trade({"symbol": PE_SYMBOL, "entry_price": PE_enter, "exit_price": PE_price, "qty": QTY,
-                    "net_pnl": net, "entry_time": PE_enter_time.isoformat(), "exit_time": ist_now().isoformat()})
+        save_trade({
+            "symbol": PE_SYMBOL,
+            "entry_price": PE_enter,
+            "exit_price": PE_price,
+            "qty": QTY,
+            "net_pnl": net,
+            "entry_time": PE_enter_time.isoformat(),
+            "exit_time": ist_now().isoformat()
+        })
         PE_position = 0
         send_telegram(f"🔴 PE EXIT @ {PE_price} | Net ₹{round(net,2)}")
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 Trend Following Algo Started")
-current_day = ist_now().date()
+
+current_trading_date = ist_now().date()
 
 while True:
     try:
         now = ist_now()
-        today = now.date()
 
-        # ===== DAILY RESET at 15:30 =====
-        if now.time() >= time(15,30) and current_day == today:
+        # ===== MARKET WINDOW =====
+        market_open = time(9, 15)
+        market_close = time(15, 30)
+
+        # ===== DAILY RESET =====
+        if now.time() > market_close and current_trading_date == now.date():
             token_loaded = model_loaded = symbols_loaded = False
             CE_position = PE_position = 0
-            current_day = today + pd.Timedelta(days=1)
+            current_trading_date = now.date() + pd.Timedelta(days=1)
             send_telegram("♻ End of day reset done")
 
-        # ===== LOAD EVERYTHING FIRST TIME / scheduled at 09:20 =====
-        if not token_loaded and (time(9,15) <= now.time() < time(15,25)):
-            load_token()
-            token_loaded = True
-        if not model_loaded and (time(9,20) <= now.time() < time(15,25)):
-            fyers = load_model()
-            model_loaded = True
-        if not symbols_loaded and (time(9,25) <= now.time() < time(15,25)):
-            token_df = load_symbols(fyers)
-            symbols_loaded = True
+        # ===== LOAD PHASE =====
+        if market_open <= now.time() < market_close:
+            if not token_loaded:
+                token_loaded = load_token()
+            if not model_loaded:
+                fyers = load_model()
+                model_loaded = True
+            if not symbols_loaded:
+                token_df = load_symbols(fyers)
+                symbols_loaded = True
 
-        # ===== RUN STRATEGY ONLY DURING MARKET HOURS 09:30-15:30 =====
-        if time(9,30) <= now.time() <= time(15,30) and symbols_loaded:
+        # ===== STRATEGY =====
+        if time(9, 30) <= now.time() <= market_close and symbols_loaded:
             run_strategy()
 
-        t.sleep(1)
+        t.sleep(2)
 
     except Exception as e:
         send_telegram(f"❌ Algo error: {e}")
