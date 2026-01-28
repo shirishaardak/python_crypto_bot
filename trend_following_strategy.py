@@ -7,12 +7,11 @@ from datetime import datetime, time
 from fyers_apiv3 import fyersModel
 from utility.common_utility import get_stock_instrument_token, high_low_trend
 from dotenv import load_dotenv
-
-
 load_dotenv()
 
 # ================= TIMEZONE =================
 IST = pytz.timezone("Asia/Kolkata")
+print(datetime.now(IST))
 def ist_now():
     return datetime.now(IST)
 
