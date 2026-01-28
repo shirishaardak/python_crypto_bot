@@ -7,17 +7,29 @@ from datetime import datetime, time
 from fyers_apiv3 import fyersModel
 from utility.common_utility import get_stock_instrument_token, high_low_trend
 from dotenv import load_dotenv
+
 load_dotenv()
 
-# ================= TIMEZONE =================
+# ================= TIMEZONE FIX =================
+# Monkey patch pytz to auto-correct lowercase 'asia/kolkata'
+_real_timezone = pytz.timezone
+def fixed_timezone(name):
+    if name.lower() == "asia/kolkata":
+        name = "Asia/Kolkata"
+    return _real_timezone(name)
+pytz.timezone = fixed_timezone
+
+# IST timezone
 IST = pytz.timezone("Asia/Kolkata")
-print(datetime.now(IST))
+
 def ist_now():
+    """Return current datetime in IST with tz info"""
     return datetime.now(IST)
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+
 def send_telegram(msg):
     try:
         requests.post(
@@ -25,8 +37,8 @@ def send_telegram(msg):
             json={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=5
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Telegram error: {e}")  # for debug
 
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
@@ -67,13 +79,9 @@ def save_trade(trade):
     else:
         df.to_csv(TRADES_FILE, mode="a", header=False, index=False)
 
-# ===== SAVE PROCESSED HA DATA =====
 def save_processed_data(ha, symbol):
-    # ---- sanitize symbol for Windows filenames ----
     safe_symbol = symbol.replace(":", "_").replace("/", "_")
-
     path = os.path.join(folder, f"{safe_symbol}_processed.csv")
-
     out = pd.DataFrame({
         "time": ha.index,
         "HA_open": ha["HA_open"],
@@ -84,9 +92,7 @@ def save_processed_data(ha, symbol):
         "atr_condition": ha["atr_condition"],
         "trade_signal": ha["trade_single"]
     })
-
     out.to_csv(path, index=False)
-    
 
 # ================= FYERS =================
 def load_token():
@@ -117,7 +123,6 @@ def run_strategy():
     CE_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     PE_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
-    # Fetch last 5 days of HA data
     start = (ist_now().date() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
     end = ist_now().date().strftime("%Y-%m-%d")
     base = {"resolution": "5", "date_format": "1", "range_from": start, "range_to": end, "cont_flag": "1"}
@@ -125,11 +130,9 @@ def run_strategy():
     df_CE = high_low_trend({**base, "symbol": CE_SYMBOL}, fyers)
     df_PE = high_low_trend({**base, "symbol": PE_SYMBOL}, fyers)
 
-    # Save processed HA data
     save_processed_data(df_CE, token_df.loc[0, "tradingsymbol"])
     save_processed_data(df_PE, token_df.loc[1, "tradingsymbol"])
 
-    # Get current prices
     quotes = fyers.quotes({"symbols": f"{CE_SYMBOL},{PE_SYMBOL}"})["d"]
     price_map = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
     CE_price = price_map[token_df.loc[0, "tradingsymbol"]]
