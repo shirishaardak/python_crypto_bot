@@ -6,3 +6,4 @@ scipy
 pyotp
 fyers-apiv3
 pytz
+python-dotenv
