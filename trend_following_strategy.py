@@ -1,8 +1,21 @@
+# ================= TIMEZONE PATCH =================
+# MUST BE AT THE VERY TOP, BEFORE ANY OTHER IMPORTS
+import pytz
+
+_real_timezone = pytz.timezone
+
+def fixed_timezone(name):
+    if isinstance(name, str) and name.lower() == "asia/kolkata":
+        name = "Asia/Kolkata"
+    return _real_timezone(name)
+
+pytz.timezone = fixed_timezone
+# ===================================================
+
 import os
 import time as t
 import requests
 import pandas as pd
-import pytz
 from datetime import datetime, time
 from fyers_apiv3 import fyersModel
 from utility.common_utility import get_stock_instrument_token, high_low_trend
@@ -10,16 +23,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ================= TIMEZONE FIX =================
-# Monkey patch pytz to auto-correct lowercase 'asia/kolkata'
-_real_timezone = pytz.timezone
-def fixed_timezone(name):
-    if name.lower() == "asia/kolkata":
-        name = "Asia/Kolkata"
-    return _real_timezone(name)
-pytz.timezone = fixed_timezone
-
-# IST timezone
+# ================= TIMEZONE =================
 IST = pytz.timezone("Asia/Kolkata")
 
 def ist_now():
@@ -38,7 +42,7 @@ def send_telegram(msg):
             timeout=5
         )
     except Exception as e:
-        print(f"Telegram error: {e}")  # for debug
+        print(f"Telegram error: {e}")  # For debugging
 
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
