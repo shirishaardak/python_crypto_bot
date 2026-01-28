@@ -27,7 +27,7 @@ load_dotenv()
 IST = pytz.timezone("Asia/Kolkata")
 
 def ist_now():
-    """Return current datetime in IST with tz info"""
+    """Return current datetime in IST (tz-aware)"""
     return datetime.now(IST)
 
 # ================= TELEGRAM =================
@@ -42,7 +42,7 @@ def send_telegram(msg):
             timeout=5
         )
     except Exception as e:
-        print(f"Telegram error: {e}")  # For debugging
+        print(f"Telegram error: {e}")  # Debug output
 
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
