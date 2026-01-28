@@ -53,22 +53,42 @@ def get_stock_instrument_token(stock_name, fyers):
     return tokens
 
 
+
 def high_low_trend(data, fyers):
 
     # ------------------------------------------------------------------
     # Fetch & prepare data
     # ------------------------------------------------------------------
     df = pd.DataFrame(get_stock_historical_data(data, fyers))
+    df = df.reset_index(drop=True)
 
     # ------------------------------------------------------------------
-    # Heikin Ashi candles
+    # Manual Heikin Ashi (NO pandas-ta ha → no warnings)
     # ------------------------------------------------------------------
-    ha = ta.ha(
-        open_=df["Open"],
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"]
-    ).reset_index(drop=True)
+    ha = pd.DataFrame(index=df.index)
+
+    ha["HA_close"] = (
+        df["Open"] + df["High"] + df["Low"] + df["Close"]
+    ) / 4
+
+    ha["HA_open"] = np.nan
+    ha.loc[0, "HA_open"] = (df.loc[0, "Open"] + df.loc[0, "Close"]) / 2
+
+    for i in range(1, len(df)):
+        ha.loc[i, "HA_open"] = 0.5 * (
+            ha.loc[i - 1, "HA_open"] +
+            ha.loc[i - 1, "HA_close"]
+        )
+
+    ha["HA_high"] = pd.concat(
+        [df["High"], ha["HA_open"], ha["HA_close"]],
+        axis=1
+    ).max(axis=1)
+
+    ha["HA_low"] = pd.concat(
+        [df["Low"], ha["HA_open"], ha["HA_close"]],
+        axis=1
+    ).min(axis=1)
 
     # ------------------------------------------------------------------
     # Smooth HA highs & lows
@@ -101,17 +121,17 @@ def high_low_trend(data, fyers):
     ha["max_low"] = ha["max_low"].ffill()
 
     # ------------------------------------------------------------------
-    # trendline construction
+    # Trendline construction
     # ------------------------------------------------------------------
     ha["trendline"] = np.nan
-    trendline = ha["HA_close"].iloc[0]
+    trendline = ha.loc[0, "HA_close"]
     ha.loc[0, "trendline"] = trendline
 
     for i in range(1, len(ha)):
-        if ha["HA_high"].iloc[i] == ha["max_high"].iloc[i]:
-            trendline = ha["HA_low"].iloc[i]
-        elif ha["HA_low"].iloc[i] == ha["max_low"].iloc[i]:
-            trendline = ha["HA_high"].iloc[i]
+        if ha.loc[i, "HA_high"] == ha.loc[i, "max_high"]:
+            trendline = ha.loc[i, "HA_low"]
+        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
+            trendline = ha.loc[i, "HA_high"]
 
         ha.loc[i, "trendline"] = trendline
 
@@ -127,7 +147,6 @@ def high_low_trend(data, fyers):
 
     ha["ATR_EMA"] = ta.ema(ha["ATR"], length=14)
 
-    # ATR condition
     ha["atr_condition"] = ha["ATR"] > ha["ATR_EMA"]
 
     # ------------------------------------------------------------------
@@ -157,9 +176,3 @@ def high_low_trend(data, fyers):
             ha.loc[i, "trade_single"] = -1
 
     return ha
-
-
-
-
-
-
