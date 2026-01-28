@@ -20,7 +20,7 @@ TIMEFRAME = "15m"
 DAYS = 5
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS   = {"BTCUSD": 150, "ETHUSD": 15}
+STOP_LOSS   = {"BTCUSD": 200, "ETHUSD": 20}
 TRAIL_STEP  = {"BTCUSD": 100, "ETHUSD": 10}
 
 # ================= TELEGRAM =================
@@ -169,14 +169,14 @@ def process_symbol(symbol, df, price, state):
         and last.ATR_HA > last.ATR_MA_HA
     ):
         if (
-            last.HA_close > last.Trendline
+            last.HA_close > last.trendline
             and last.HA_close > prev.HA_close
             and last.HA_close > prev.HA_open
         ):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": last.Trendline - STOP_LOSS[symbol],
+                "stop": last.trendline - STOP_LOSS[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now()
             }
@@ -185,14 +185,14 @@ def process_symbol(symbol, df, price, state):
             return
 
         if (
-            last.HA_close < last.Trendline
+            last.HA_close < last.trendline
             and last.HA_close < prev.HA_close
             and last.HA_close < prev.HA_open
         ):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last.Trendline + STOP_LOSS[symbol],
+                "stop": last.trendline + STOP_LOSS[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now()
             }
@@ -205,15 +205,15 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
 
         if pos["side"] == "long":
-            new_stop = last.Trendline - STOP_LOSS[symbol]
+            new_stop = last.trendline - STOP_LOSS[symbol]
             pos["stop"] = max(pos["stop"], new_stop)
-            if price < pos["stop"] or last.HA_close < last.Trendline:
+            if price < pos["stop"] or last.HA_close < last.trendline:
                 exit_trade = True
 
         if pos["side"] == "short":
-            new_stop = last.Trendline + STOP_LOSS[symbol]
+            new_stop = last.trendline + STOP_LOSS[symbol]
             pos["stop"] = min(pos["stop"], new_stop)
-            if price > pos["stop"] or last.HA_close > last.Trendline:
+            if price > pos["stop"] or last.HA_close > last.trendline:
                 exit_trade = True
 
         if exit_trade:
