@@ -31,7 +31,21 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "new_live_trades.csv")
+
+def save_processed_data(ha, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": ha.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["trendline"],
+        "ATR": ha["ATR_HA"],
+        "ATR_MA": ha["ATR_MA_HA"]
+    })
+    out.to_csv(path, index=False)
 
 # ================= UTILITIES =================
 def log(msg):
@@ -112,43 +126,36 @@ def calculate_trendline(df):
     ha = heikin_ashi(df)
     data = ha.copy()
 
-    data["high_smooth"] = ta.ema(data["HA_high"], length=5)
-    data["low_smooth"]  = ta.ema(data["HA_low"], length=5)
+    data["smoothed_high"] = data["HA_high"].rolling(42).max()
+    data["smoothed_low"]  = data["HA_low"].rolling(42).min()
 
-    hi = argrelextrema(data["high_smooth"].values, np.greater_equal, order=42)[0]
-    lo = argrelextrema(data["low_smooth"].values,  np.less_equal,    order=42)[0]
+    data["five_high"] = data["HA_high"].rolling(2).max()
+    data["five_low"]  = data["HA_low"].rolling(2).min()
 
-    data["smoothed_high"] = np.nan
-    data["smoothed_low"]  = np.nan
-    data.iloc[hi, data.columns.get_loc("smoothed_high")] = data["HA_high"].iloc[hi]
-    data.iloc[lo, data.columns.get_loc("smoothed_low")]  = data["HA_low"].iloc[lo]
+    data["trendline"] = np.nan
 
-    data[["smoothed_high", "smoothed_low"]] = data[
-        ["smoothed_high", "smoothed_low"]
-    ].ffill()
-
-    trendline = []
     tl = data["HA_close"].iloc[0]
 
     for i in range(len(data)):
         if data["HA_high"].iloc[i] == data["smoothed_high"].iloc[i]:
-            tl = data["HA_low"].iloc[i]
+            tl = data["five_low"].iloc[i]
         elif data["HA_low"].iloc[i] == data["smoothed_low"].iloc[i]:
-            tl = data["HA_high"].iloc[i]
-        trendline.append(tl)
+            tl = data["five_high"].iloc[i]
 
-    data["Trendline"] = trendline
+        data.loc[data.index[i], "trendline"] = tl
+
     return data
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
     data = calculate_trendline(df)
+    
 
     data["ATR_HA"] = ta.atr(
         data["HA_high"], data["HA_low"], data["HA_close"], length=14
     )
     data["ATR_MA_HA"] = data["ATR_HA"].rolling(21).mean()
-
+    save_processed_data(data, symbol)
     last = data.iloc[-2]
     prev = data.iloc[-3]
     candle_time = data.index[-2]
@@ -255,6 +262,7 @@ def run():
 
                 price = fetch_price(symbol)
                 process_symbol(symbol, df, price, state[symbol])
+                
 
             time.sleep(20)
 
