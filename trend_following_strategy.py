@@ -314,7 +314,7 @@ def run_strategy():
         CE_SL = CE_price - SL_POINTS
         send_telegram(f"🟢 CE BUY @ {CE_price}")
 
-    elif CE_position == 1 and CE_price <= CE_SL:
+    elif CE_position == 1 and (CE_price <= last_CE["trendline"] or ist_time() >= time(15, 15)):
         net = calculate_pnl(CE_enter, CE_price, QTY) - commission(CE_price, QTY)
         save_trade({
             "symbol": CE_SYMBOL,
@@ -336,7 +336,7 @@ def run_strategy():
         PE_SL = PE_price - SL_POINTS
         send_telegram(f"🟢 PE BUY @ {PE_price}")
 
-    elif PE_position == 1 and PE_price <= PE_SL:
+    elif PE_position == 1 and (PE_price <= last_PE["trendline"] or ist_time() >= time(15, 15)):
         net = calculate_pnl(PE_enter, PE_price, QTY) - commission(PE_price, QTY)
         save_trade({
             "symbol": PE_SYMBOL,
