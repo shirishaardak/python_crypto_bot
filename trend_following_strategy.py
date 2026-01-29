@@ -1,8 +1,9 @@
 
 
-import zoneinfo
+from zoneinfo import ZoneInfo
 from datetime import datetime
-print(datetime.now(zoneinfo.ZoneInfo("asia/Kolkata")))
+print(datetime.now(ZoneInfo("Asia/Kolkata")))
+print(datetime.now(ZoneInfo("asia/Kolkata")))
 
 # import os
 # import time as t
