@@ -126,11 +126,12 @@ def calculate_trendline(df):
     ha = heikin_ashi(df)
     data = ha.copy()
 
-    data["smoothed_high"] = data["HA_high"].rolling(42).max()
-    data["smoothed_low"]  = data["HA_low"].rolling(42).min()
+    data['high_ema'] = ta.ema(close=data["HA_high"], length=5)
+    data['low_ema'] = ta.ema(close=data["HA_low"], length=5)
 
-    data["five_high"] = data["HA_high"].rolling(2).max()
-    data["five_low"]  = data["HA_low"].rolling(2).min()
+    data["smoothed_high"] = data["high_ema"].rolling(42).max()
+    data["smoothed_low"]  = data["low_ema"].rolling(42).min()
+
 
     data["trendline"] = np.nan
 
@@ -138,9 +139,9 @@ def calculate_trendline(df):
 
     for i in range(len(data)):
         if data["HA_high"].iloc[i] == data["smoothed_high"].iloc[i]:
-            tl = data["five_low"].iloc[i]
+            tl = data["HA_high"].iloc[i]
         elif data["HA_low"].iloc[i] == data["smoothed_low"].iloc[i]:
-            tl = data["five_high"].iloc[i]
+            tl = data["HA_low"].iloc[i]
 
         data.loc[data.index[i], "trendline"] = tl
 
