@@ -1,5 +1,5 @@
-# ================= FIX FLYERS TIMEZONE BUG =================
-# Must be first, before importing fyers
+# ================= FIX FLYERS SDK TIMEZONE BUG =================
+# MUST be first, before importing fyers or any other module
 import zoneinfo
 
 _original_zoneinfo = zoneinfo.ZoneInfo
@@ -7,7 +7,7 @@ _original_zoneinfo = zoneinfo.ZoneInfo
 class FixedZoneInfo(zoneinfo.ZoneInfo):
     def __new__(cls, key):
         if isinstance(key, str) and key.lower() == "asia/kolkata":
-            key = "Asia/Kolkata"
+            key = "Asia/Kolkata"  # Fix lowercase bug
         return _original_zoneinfo(key)
 
 zoneinfo.ZoneInfo = FixedZoneInfo
@@ -24,11 +24,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ================= IST TIME (TIMEZONE-AWARE) =================
+# ================= TIMEZONE-AWARE IST =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def ist_now():
-    """Return current IST time, timezone-aware, Python 3.12 safe"""
+    """Always return timezone-aware IST datetime"""
     return datetime.now(timezone.utc).astimezone(IST)
 
 # ================= TELEGRAM =================
@@ -141,7 +141,7 @@ def run_strategy():
     CE_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     PE_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
-    start = (ist_now().date() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    start = (ist_now().date() - timedelta(days=5)).strftime("%Y-%m-%d")
     end = ist_now().date().strftime("%Y-%m-%d")
 
     base = {
@@ -228,7 +228,7 @@ while True:
         if now.time() > market_close and current_trading_date == now.date():
             token_loaded = model_loaded = symbols_loaded = False
             CE_position = PE_position = 0
-            current_trading_date = now.date() + pd.Timedelta(days=1)
+            current_trading_date = now.date() + timedelta(days=1)
             send_telegram("♻ End of day reset done")
 
         # ===== LOAD PHASE =====
