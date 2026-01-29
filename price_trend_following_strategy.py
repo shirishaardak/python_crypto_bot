@@ -31,7 +31,7 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR, "new_live_trades.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "live.csv")
 
 def save_processed_data(ha, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
