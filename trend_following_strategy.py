@@ -17,8 +17,8 @@ import os
 import time as t
 import requests
 import pandas as pd
-from datetime import datetime, time, timedelta, timezone
 from fyers_apiv3 import fyersModel
+from datetime import datetime, time, timedelta, timezone
 from utility.common_utility import get_stock_instrument_token, high_low_trend
 from dotenv import load_dotenv
 
