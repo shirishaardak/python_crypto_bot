@@ -1,35 +1,21 @@
-# ================= FIX FLYERS SDK TIMEZONE BUG =================
-# MUST be first, before importing fyers or any other module
-import zoneinfo
-
-_original_zoneinfo = zoneinfo.ZoneInfo
-
-class FixedZoneInfo(zoneinfo.ZoneInfo):
-    def __new__(cls, key):
-        if isinstance(key, str) and key.lower() == "asia/kolkata":
-            key = "Asia/Kolkata"  # Fix lowercase bug
-        return _original_zoneinfo(key)
-
-zoneinfo.ZoneInfo = FixedZoneInfo
-
 # ================= IMPORTS =================
 import os
 import time as t
 import requests
 import pandas as pd
+from datetime import datetime, time, timedelta
 from fyers_apiv3 import fyersModel
-from datetime import datetime, time, timedelta, timezone
 from utility.common_utility import get_stock_instrument_token, high_low_trend
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ================= TIMEZONE-AWARE IST =================
-IST = timezone(timedelta(hours=5, minutes=30))
+# ================= TIMEZONE (FIXED OFFSET) =================
+IST_OFFSET = timedelta(hours=5, minutes=30)
 
 def ist_now():
-    """Always return timezone-aware IST datetime"""
-    return datetime.now(timezone.utc).astimezone(IST)
+    """Return current IST datetime using UTC + fixed offset (naive datetime)"""
+    return datetime.utcnow() + IST_OFFSET
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
@@ -220,7 +206,7 @@ while True:
     try:
         now = ist_now()
 
-        # ===== MARKET WINDOW =====
+        # ===== MARKET WINDOW (IST) =====
         market_open = time(9, 15)
         market_close = time(15, 30)
 
