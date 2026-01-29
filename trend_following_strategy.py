@@ -1,16 +1,17 @@
-# ================= FIX FYERS SDK TIMEZONE BUG =================
-# MUST be first, before importing fyers or any other module
+# ================= HARD FIX FOR FYERS TIMEZONE BUG =================
+# Must be FIRST lines in file — before any imports
 import zoneinfo
-
 _original_zoneinfo = zoneinfo.ZoneInfo
 
-class FixedZoneInfo(zoneinfo.ZoneInfo):
+class SafeZoneInfo(zoneinfo.ZoneInfo):
     def __new__(cls, key):
+        if not key:
+            key = "UTC"
         if isinstance(key, str) and key.lower() == "asia/kolkata":
             key = "Asia/Kolkata"
         return _original_zoneinfo(key)
 
-zoneinfo.ZoneInfo = FixedZoneInfo
+zoneinfo.ZoneInfo = SafeZoneInfo
 
 # ================= IMPORTS =================
 import os
@@ -133,18 +134,14 @@ def load_model():
 def get_stock_historical_data(data, fyers): 
     final_data = fyers.history(data=data)
 
-    # Defensive guard
     if not final_data or "candles" not in final_data or not final_data["candles"]:
         raise ValueError("Fyers returned empty candle data")
 
     df = pd.DataFrame(final_data['candles'])  
     df = df.rename(columns={0: 'Date', 1: 'Open',2: 'High',3: 'Low',4: 'Close',5: 'V'})
 
-    # Convert from epoch → UTC → IST → naive
-    df['Date'] = pd.to_datetime(df['Date'], unit='s', utc=True)
-    df['Date'] = df['Date'].dt.tz_convert('Asia/Kolkata')
-    df['Date'] = df['Date'].dt.tz_localize(None)
-
+    # Convert from epoch → naive datetime (no timezone anywhere)
+    df['Date'] = pd.to_datetime(df['Date'], unit='s')
     df.set_index("Date", inplace=True)
     return df
 
