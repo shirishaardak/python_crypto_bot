@@ -32,19 +32,16 @@ sys.path.append(mydir)
 # ================= LOAD ENV =================
 load_dotenv()
 
-# ================= FORCE IST TIMEZONE (AWS SAFE) =================
+# ================= FORCE IST TIMEZONE =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def ist_now():
-    """Return timezone-aware IST datetime regardless of server timezone"""
     return datetime.now(timezone.utc).astimezone(IST)
 
 def ist_today():
-    """Return IST date regardless of server timezone"""
     return ist_now().date()
 
 def ist_time():
-    """Return IST time regardless of server timezone"""
     return ist_now().time()
 
 # ================= TELEGRAM =================
@@ -135,10 +132,15 @@ def load_model():
 # ================= MARKET DATA =================
 def get_stock_historical_data(data, fyers): 
     final_data = fyers.history(data=data)
+
+    # Defensive guard
+    if not final_data or "candles" not in final_data or not final_data["candles"]:
+        raise ValueError("Fyers returned empty candle data")
+
     df = pd.DataFrame(final_data['candles'])  
     df = df.rename(columns={0: 'Date', 1: 'Open',2: 'High',3: 'Low',4: 'Close',5: 'V'})
 
-    # Convert from epoch → UTC → IST → naive (for TA compatibility)
+    # Convert from epoch → UTC → IST → naive
     df['Date'] = pd.to_datetime(df['Date'], unit='s', utc=True)
     df['Date'] = df['Date'].dt.tz_convert('Asia/Kolkata')
     df['Date'] = df['Date'].dt.tz_localize(None)
@@ -280,7 +282,7 @@ def run_strategy():
     CE_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     PE_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
-    # Always compute date ranges in IST
+    # IMPORTANT: Only pass DATE STRINGS to Fyers — no datetimes!
     start = (ist_today() - timedelta(days=5)).strftime("%Y-%m-%d")
     end = ist_today().strftime("%Y-%m-%d")
 
@@ -358,9 +360,7 @@ current_trading_date = ist_today()
 
 while True:
     try:
-        now = ist_now()
-
-        # ===== MARKET WINDOW (IST) =====
+        # ===== MARKET WINDOW (IST ONLY) =====
         market_open = time(9, 15)
         market_close = time(15, 30)
 
