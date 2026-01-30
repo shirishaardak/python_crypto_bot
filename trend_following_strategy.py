@@ -61,7 +61,7 @@ def send_telegram(msg):
 
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
-QTY = 1
+QTY = 30
 SL_POINTS = 50
 COMMISSION_RATE = 0.0004
 

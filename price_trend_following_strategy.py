@@ -31,7 +31,7 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR, "live.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
 def save_processed_data(ha, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
@@ -123,28 +123,51 @@ def heikin_ashi(df):
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-    ha = heikin_ashi(df)
-    data = ha.copy()
+    # ----- Build HA -----
+    ha = ta.ha(df["open"], df["high"], df["low"], df["close"]).reset_index(drop=True)
 
-    data['high_ema'] = ta.ema(close=data["HA_high"], length=5)
-    data['low_ema'] = ta.ema(close=data["HA_low"], length=5)
+    data = df.copy().reset_index(drop=True)
 
-    data["smoothed_high"] = data["high_ema"].rolling(42).max()
-    data["smoothed_low"]  = data["low_ema"].rolling(42).min()
+    data["HA_open"]  = ha["HA_open"]
+    data["HA_high"]  = ha["HA_high"]
+    data["HA_low"]   = ha["HA_low"]
+    data["HA_close"] = ha["HA_close"]
 
+    # ----- Smooth HA -----
+    data["high_smooth"] = ta.ema(data["HA_high"], length=5)
+    data["low_smooth"]  = ta.ema(data["HA_low"], length=5)
 
+    high_vals = data["high_smooth"].values
+    low_vals  = data["low_smooth"].values
+
+    max_idx = argrelextrema(high_vals, np.greater_equal, order=42)[0]
+    min_idx = argrelextrema(low_vals,  np.less_equal,    order=42)[0]
+
+    data["smoothed_high"] = np.nan
+    data["smoothed_low"]  = np.nan
+
+    data.iloc[max_idx, data.columns.get_loc("smoothed_high")] = data["HA_high"].iloc[max_idx]
+    data.iloc[min_idx, data.columns.get_loc("smoothed_low")]  = data["HA_low"].iloc[min_idx]
+
+    data[["smoothed_high","smoothed_low"]] = data[["smoothed_high","smoothed_low"]].ffill()
+
+    # ----- TRENDLINE FROM HA -----
     data["trendline"] = np.nan
+    trendline = data["HA_close"].iloc[0]
 
-    tl = data["HA_close"].iloc[0]
+    data.iloc[0, data.columns.get_loc("trendline")] = trendline
 
-    for i in range(len(data)):
+    for i in range(1, len(data)):
+
         if data["HA_high"].iloc[i] == data["smoothed_high"].iloc[i]:
-            tl = data["HA_high"].iloc[i]
+            trendline = data["HA_low"].iloc[i]
+
         elif data["HA_low"].iloc[i] == data["smoothed_low"].iloc[i]:
-            tl = data["HA_low"].iloc[i]
+            trendline = data["HA_high"].iloc[i]
 
-        data.loc[data.index[i], "trendline"] = tl
+        data.loc[i, "trendline"] = trendline
 
+    data.index = df.index
     return data
 
 # ================= STRATEGY =================
