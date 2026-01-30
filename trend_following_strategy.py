@@ -85,6 +85,9 @@ CE_enter = PE_enter = 0
 CE_SL = PE_SL = 0
 CE_enter_time = PE_enter_time = None
 
+# ================= NEW STATE FOR CANDLE CONTROL =================
+last_candle_time = None
+
 # ================= UTILS =================
 def commission(price, qty):
     return round(price * qty * COMMISSION_RATE, 6)
@@ -275,6 +278,7 @@ def high_low_trend(data, fyers):
 def run_strategy():
     global CE_position, PE_position, CE_enter, PE_enter, CE_SL, PE_SL
     global CE_enter_time, PE_enter_time
+    global last_candle_time
 
     CE_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     PE_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
@@ -305,6 +309,13 @@ def run_strategy():
 
     last_CE = df_CE.iloc[-2]
     last_PE = df_PE.iloc[-2]
+    current_candle_time = df_CE.index[-2]
+
+    # ================= ENTRY CONTROL: ONLY ON NEW CANDLE =================
+    if last_candle_time == current_candle_time:
+        return
+    else:
+        last_candle_time = current_candle_time
 
     # ===== CE =====
     if CE_position == 0 and last_CE["trade_single"] == 1:
