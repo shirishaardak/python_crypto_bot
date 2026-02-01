@@ -328,14 +328,15 @@ def run_strategy():
     elif CE_position == 1 and (CE_price <= last_CE["trendline"] or ist_time() >= time(15, 15)):
         net = calculate_pnl(CE_enter, CE_price, QTY) - commission(CE_price, QTY)
         save_trade({
-            "symbol": CE_SYMBOL,
-            "entry_price": CE_enter,
-            "exit_price": CE_price,
-            "qty": QTY,
-            "net_pnl": net,
-            "entry_time": CE_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat()
-        })
+                "entry_time": CE_enter_time.isoformat(),
+                "exit_time": ist_now().isoformat(),
+                "symbol": CE_SYMBOL,
+                "side": "BUY",
+                "entry_price": CE_enter,
+                "exit_price": CE_price,
+                "qty": QTY,
+                "net_pnl": net
+            })
         CE_position = 0
         send_telegram(f"🔴 CE EXIT @ {CE_price} | Net ₹{round(net,2)}")
 
@@ -350,13 +351,14 @@ def run_strategy():
     elif PE_position == 1 and (PE_price <= last_PE["trendline"] or ist_time() >= time(15, 15)):
         net = calculate_pnl(PE_enter, PE_price, QTY) - commission(PE_price, QTY)
         save_trade({
+            "entry_time": PE_enter_time.isoformat(),
+            "exit_time": ist_now().isoformat(),
             "symbol": PE_SYMBOL,
+            "side": "BUY",
             "entry_price": PE_enter,
             "exit_price": PE_price,
             "qty": QTY,
-            "net_pnl": net,
-            "entry_time": PE_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat()
+            "net_pnl": net
         })
         PE_position = 0
         send_telegram(f"🔴 PE EXIT @ {PE_price} | Net ₹{round(net,2)}")

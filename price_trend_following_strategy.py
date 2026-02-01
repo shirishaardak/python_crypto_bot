@@ -174,7 +174,6 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state):
     data = calculate_trendline(df)
     
-
     data["ATR_HA"] = ta.atr(
         data["HA_high"], data["HA_low"], data["HA_close"], length=14
     )
@@ -229,13 +228,11 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
 
         if pos["side"] == "long":
-            # new_stop = last.trendline - STOP_LOSS[symbol]
             pos["stop"] = last.trendline - STOP_LOSS[symbol]
             if price < pos["stop"] or last.HA_close < last.trendline:
                 exit_trade = True
 
         if pos["side"] == "short":
-            # new_stop = 
             pos["stop"] = last.trendline + STOP_LOSS[symbol]
             if price > pos["stop"] or last.HA_close > last.trendline:
                 exit_trade = True
@@ -286,7 +283,6 @@ def run():
 
                 price = fetch_price(symbol)
                 process_symbol(symbol, df, price, state[symbol])
-                
 
             time.sleep(20)
 
