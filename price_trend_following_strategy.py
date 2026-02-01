@@ -66,11 +66,12 @@ def commission(price, qty, symbol):
     return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
 def save_trade(trade):
-    trade = trade.copy()
-    for c in ["entry_time", "exit_time"]:
-        trade[c] = trade[c].strftime("%Y-%m-%d %H:%M:%S")
+    trade_copy = trade.copy()
+    for t in ["entry_time", "exit_time"]:
+        trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
 
-    pd.DataFrame([trade]).to_csv(
+    cols = ["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]
+    pd.DataFrame([trade_copy])[cols].to_csv(
         TRADE_CSV,
         mode="a",
         header=not os.path.exists(TRADE_CSV),
@@ -179,9 +180,9 @@ def process_symbol(symbol, df, price, state):
     )
     data["ATR_MA_HA"] = data["ATR_HA"].rolling(21).mean()
     save_processed_data(data, symbol)
-    last = data.iloc[-1]
-    prev = data.iloc[-2]
-    candle_time = data.index[-1]
+    last = data.iloc[-2]
+    prev = data.iloc[-3]
+    candle_time = data.index[-2]
 
     pos = state["position"]
 
