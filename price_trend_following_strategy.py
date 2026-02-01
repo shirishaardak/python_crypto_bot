@@ -199,7 +199,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop":last.trendline - STOP_LOSS[symbol],
+                "stop":last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now()
             }
@@ -215,7 +215,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last.trendline + STOP_LOSS[symbol],
+                "stop": last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now()
             }
@@ -228,12 +228,12 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
 
         if pos["side"] == "long":
-            pos["stop"] = last.trendline - STOP_LOSS[symbol]
+            # pos["stop"] = last.trendline - STOP_LOSS[symbol]
             if price < pos["stop"] or last.HA_close < last.trendline:
                 exit_trade = True
 
         if pos["side"] == "short":
-            pos["stop"] = last.trendline + STOP_LOSS[symbol]
+            # pos["stop"] = last.trendline + STOP_LOSS[symbol]
             if price > pos["stop"] or last.HA_close > last.trendline:
                 exit_trade = True
 
