@@ -195,9 +195,9 @@ def high_low_trend(data, fyers):
     ha.loc[0, "trendline"] = trendline
     for i in range(1, len(ha)):
         if ha.loc[i, "HA_high"] == ha.loc[i, "max_high"]:
-            trendline = ha.loc[i, "HA_low"]
-        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
             trendline = ha.loc[i, "HA_high"]
+        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
+            trendline = ha.loc[i, "HA_low"]
         ha.loc[i, "trendline"] = trendline
     ha["ATR"] = ta.atr(high=ha["HA_high"], low=ha["HA_low"], close=ha["HA_close"], length=14)
     ha["ATR_EMA"] = ta.ema(ha["ATR"], length=14)
