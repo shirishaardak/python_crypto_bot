@@ -113,6 +113,7 @@ def load_model():
 
 # ================= SYMBOL LOAD =================
 def load_symbols(fyers):
+    send_telegram("📄 Loading symbols")
     if os.path.exists(TOKEN_CSV):
         return pd.read_csv(TOKEN_CSV)
 
@@ -123,7 +124,6 @@ def load_symbols(fyers):
     out = pd.DataFrame([{
         "tradingsymbol": df["tradingsymbol"]
     }])
-    send_telegram("📄 Loading symbols")
     out.to_csv(TOKEN_CSV, index=False)
     return out
 
