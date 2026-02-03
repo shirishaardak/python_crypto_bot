@@ -61,7 +61,7 @@ def send_telegram(msg):
 CLIENT_ID = "98E1TAKD4T-100"
 QTY = 30
 SL_POINTS = 50
-TARGET_POINTS = 200
+TARGET_POINTS = 300
 COMMISSION_RATE = 0.0004
 
 TOKEN_FILE = "auth/api_key/access_token.txt"
@@ -151,17 +151,17 @@ def high_low_trend(data, fyers):
     ha["high_smooth"] = ta.ema(ha["HA_high"], 5)
     ha["low_smooth"] = ta.ema(ha["HA_low"], 5)
 
-    max_idx = argrelextrema(ha["high_smooth"].values, np.greater_equal, order=21)[0]
-    min_idx = argrelextrema(ha["low_smooth"].values, np.less_equal, order=21)[0]
+    max_idx = argrelextrema(ha["HA_high"].values, np.greater_equal, order=21)[0]
+    min_idx = argrelextrema(ha["HA_low"].values, np.less_equal, order=21)[0]
 
     ha["max_high"] = np.nan
     ha["max_low"] = np.nan
 
     # ✅ FIXED: use iloc (positional indexing)
     if len(max_idx) > 0:
-        ha.iloc[max_idx, ha.columns.get_loc("max_high")] = ha.iloc[max_idx]["HA_high"].values
+        ha.iloc[max_idx, ha.columns.get_loc("max_high")] = ha.iloc[max_idx]["HA_low"].values
     if len(min_idx) > 0:
-        ha.iloc[min_idx, ha.columns.get_loc("max_low")] = ha.iloc[min_idx]["HA_low"].values
+        ha.iloc[min_idx, ha.columns.get_loc("max_low")] = ha.iloc[min_idx]["HA_high"].values
 
     ha[["max_high", "max_low"]] = ha[["max_high", "max_low"]].ffill()
 
@@ -182,9 +182,9 @@ def high_low_trend(data, fyers):
     for i in range(1, len(ha)):
         if ha["ATR"].iloc[i] <= ha["ATR_EMA"].iloc[i]:
             continue
-        if ha["HA_close"].iloc[i-1] < ha["trendline"].iloc[i-1] and ha["HA_close"].iloc[i] > ha["trendline"].iloc[i]:
+        if ha["HA_close"].iloc[i] > ha["trendline"].iloc[i] and ha["HA_close"].iloc[i] > ha["HA_close"].iloc[i-1]:
             ha.iloc[i, ha.columns.get_loc("trade_single")] = 1
-        elif ha["HA_close"].iloc[i-1] > ha["trendline"].iloc[i-1] and ha["HA_close"].iloc[i] < ha["trendline"].iloc[i]:
+        elif ha["HA_close"].iloc[i] < ha["trendline"].iloc[i] and ha["HA_close"].iloc[i] < ha["HA_close"].iloc[i-1]:
             ha.iloc[i, ha.columns.get_loc("trade_single")] = -1
 
     return ha
