@@ -8,6 +8,7 @@ __pycache__/
 
 # Generated data files
 data/price_trend_strategy/*_processed.csv
+data/price_trend_following_strategy/*_processed.csv
 
 # Logs
 *.log
