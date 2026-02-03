@@ -112,6 +112,7 @@ def load_model():
     )
 
 # ================= SYMBOL =================
+ ================= SYMBOL =================
 def load_symbols(fyers):
     if os.path.exists(TOKEN_CSV):
         return pd.read_csv(TOKEN_CSV)
