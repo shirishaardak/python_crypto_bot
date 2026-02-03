@@ -137,7 +137,7 @@ def calculate_trendline(df):
 
 # ================= STRATEGY =================
 def process_symbol(symbol, state):
-
+    now = datetime.now()
     df_1h = fetch_candles(symbol, TREND_TF)
     df_5m = fetch_candles(symbol, ENTRY_TF)
 
@@ -149,15 +149,17 @@ def process_symbol(symbol, state):
     one_hour_trendline = trend_1h["trendline"].iloc[-2]
 
     last_5m_close = trend_5m["HA_close"].iloc[-2]
+    last_5m_prv_close = trend_5m["HA_close"].iloc[-3]
+    last_5m_open = trend_5m["HA_open"].iloc[-3]
     candle_time = trend_5m.index[-2]
 
     price = fetch_price(symbol)
     pos = state["position"]
 
     # ===== ENTRY =====
-    if pos is None and state["last_candle"] != candle_time:
+    if pos is None and state["last_candle"] != candle_time and now.minute % 15 == 0:
 
-        if last_5m_close > one_hour_trendline:
+        if last_5m_close > one_hour_trendline and last_5m_close > last_5m_prv_close and last_5m_close > last_5m_open:
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -168,7 +170,7 @@ def process_symbol(symbol, state):
             send_telegram(f"📈 <b>{symbol} LONG ENTRY</b>\n{price}")
             return
 
-        if last_5m_close < one_hour_trendline:
+        if last_5m_close < one_hour_trendline and last_5m_close < last_5m_prv_close and last_5m_close < last_5m_open:
             state["position"] = {
                 "side": "short",
                 "entry": price,
