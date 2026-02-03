@@ -1,0 +1,2 @@
+entry_time,exit_time,symbol,side,entry_price,exit_price,qty,net_pnl
+2026-02-03T15:22:52.378750+05:30,2026-02-03T15:25:01.282276+05:30,NSE:BANKNIFTY26FEBFUT,BUY,60224.8,60221.2,30,-830.6544000001746
