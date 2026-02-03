@@ -17,7 +17,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
 TREND_TF = "1h"
-ENTRY_TF = "5m"
+ENTRY_TF = "15m"
 DAYS = 5
 
 # ================= TELEGRAM =================
