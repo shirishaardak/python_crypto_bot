@@ -1,0 +1,13 @@
+# Python virtual environment
+venv/
+
+# Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated data files
+data/price_trend_strategy/*_processed.csv
+
+# Logs
+*.log
