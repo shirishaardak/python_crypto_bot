@@ -185,10 +185,10 @@ def process_symbol(symbol, df, price, state):
     if pos:
         exit_trade = False
         pnl = 0
-        if pos["side"] == "long" and price < last.Trendline:
+        if pos["side"] == "long" and last.HA_close < last.Trendline:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
-        if pos["side"] == "short" and price > last.Trendline:
+        if pos["side"] == "short" and last.HA_close > last.Trendline:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
