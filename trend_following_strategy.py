@@ -96,12 +96,13 @@ def save_trade(trade):
         df.to_csv(TRADES_FILE, mode="a", header=False, index=False)
 
 # ================= FYERS AUTH =================
-def load_token():
+def load_token():    
     send_telegram("🔐 Loading token")
     os.system("python auth/fyers_auth.py")
     return True
 
 def load_model():
+    send_telegram("🔌 Loading Fyers model")
     token = open(TOKEN_FILE).read().strip()
     return fyersModel.FyersModel(
         client_id=CLIENT_ID,
@@ -122,7 +123,7 @@ def load_symbols(fyers):
     out = pd.DataFrame([{
         "tradingsymbol": df["tradingsymbol"]
     }])
-
+    send_telegram("📄 Loading symbols")
     out.to_csv(TOKEN_CSV, index=False)
     return out
 
