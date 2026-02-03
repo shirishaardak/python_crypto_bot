@@ -97,12 +97,14 @@ def save_trade(trade):
         df.to_csv(TRADES_FILE, mode="a", header=False, index=False)
 
 # ================= FYERS =================
+# ================= FYERS AUTH =================
 def load_token():
     send_telegram("🔐 Loading token")
     os.system("python auth/fyers_auth.py")
     return True
 
 def load_model():
+    send_telegram("🔌 Loading Fyers model")
     token = open(TOKEN_FILE).read().strip()
     return fyersModel.FyersModel(
         client_id=CLIENT_ID,
@@ -111,78 +113,84 @@ def load_model():
         log_path=""
     )
 
-# ================= SYMBOL =================
- ================= SYMBOL =================
-def load_symbols(fyers):
-    if os.path.exists(TOKEN_CSV):
-        return pd.read_csv(TOKEN_CSV)
-
-    df = pd.read_csv("https://api.kite.trade/instruments")
-    df = df[(df["name"] == "BANKNIFTY") & (df["segment"] == "NFO-FUT")]
-    df = df.sort_values("expiry").iloc[0]
-
-    out = pd.DataFrame([{
-        "tradingsymbol": df["tradingsymbol"]
-    }])
-
-    out.to_csv(TOKEN_CSV, index=False)
-    return out
-
 # ================= MARKET DATA =================
-def get_stock_historical_data(data, fyers):
-    res = fyers.history(data=data)
-    df = pd.DataFrame(res["candles"])
-    df.columns = ["Date", "Open", "High", "Low", "Close", "V"]
-    df["Date"] = pd.to_datetime(df["Date"], unit="s")
+def get_stock_historical_data(data, fyers): 
+    final_data = fyers.history(data=data)
+    if not final_data or "candles" not in final_data or not final_data["candles"]:
+        raise ValueError("Fyers returned empty candle data")
+    df = pd.DataFrame(final_data['candles'])  
+    df = df.rename(columns={0: 'Date', 1: 'Open',2: 'High',3: 'Low',4: 'Close',5: 'V'})
+    df['Date'] = pd.to_datetime(df['Date'], unit='s')
     df.set_index("Date", inplace=True)
     return df
 
-# ================= STRATEGY =================
-def high_low_trend(data, fyers):
-    df = get_stock_historical_data(data, fyers)
+# ================= INSTRUMENT TOKEN =================
+def get_stock_instrument_token(stock_name, fyers):
+    tokens=[]
+    for i in range(len(stock_name)):
+        print(stock_name[i]['name']) 
+        df = pd.read_csv("https://api.kite.trade/instruments")
+        if stock_name[i]['segment'] == 'NFO-FUT':
+            df = df[(df['name'] == stock_name[i]['name']) & (df['segment'] == stock_name[i]['segment'])]
+            df = df[df["expiry"] == sorted(list(df["expiry"].unique()))[stock_name[i]['expiry']]]
+            df_instrument_token= df['instrument_token'].item()
+            df_instrument_name= df['tradingsymbol'].item()
+            tokens.append({'strategy_name': stock_name[i]['strategy_name'], 'instrument_token': df_instrument_token, 'tradingsymbol': df_instrument_name})
+    return tokens
 
+def load_symbols(fyers):
+    send_telegram("📄 Loading symbols")
+    if os.path.exists(TOKEN_CSV):
+        return pd.read_csv(TOKEN_CSV)
+    tickers = [
+        {"strategy_name": "Trend_Following_CURR", "name": "BANKNIFTY", "segment": "NFO-FUT", "expiry": 0},
+        {"strategy_name": "Trend_Following_NEXT", "name": "BANKNIFTY", "segment": "NFO-FUT", "expiry": 1}
+    ]
+    df = pd.DataFrame(get_stock_instrument_token(tickers, fyers))
+    df.to_csv(TOKEN_CSV, index=False)
+    return df
+
+# ================= STRATEGY LOGIC =================
+def high_low_trend(data, fyers):
+    df = pd.DataFrame(get_stock_historical_data(data, fyers)).reset_index(drop=True)
     ha = pd.DataFrame(index=df.index)
     ha["HA_close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4
-    ha["HA_open"] = ha["HA_close"].shift(1)
-    ha.iloc[0, ha.columns.get_loc("HA_open")] = df.iloc[0][["Open","Close"]].mean()
-
-    ha["HA_high"] = ha[["HA_open","HA_close"]].join(df["High"]).max(axis=1)
-    ha["HA_low"] = ha[["HA_open","HA_close"]].join(df["Low"]).min(axis=1)
-
-    ha["high_smooth"] = ta.ema(ha["HA_high"], 5)
-    ha["low_smooth"] = ta.ema(ha["HA_low"], 5)
-
+    ha["HA_open"] = np.nan
+    ha.loc[0, "HA_open"] = (df.loc[0, "Open"] + df.loc[0, "Close"]) / 2
+    for i in range(1, len(df)):
+        ha.loc[i, "HA_open"] = 0.5 * (ha.loc[i - 1, "HA_open"] + ha.loc[i - 1, "HA_close"])
+    ha["HA_high"] = pd.concat([df["High"], ha["HA_open"], ha["HA_close"]], axis=1).max(axis=1)
+    ha["HA_low"] = pd.concat([df["Low"], ha["HA_open"], ha["HA_close"]], axis=1).min(axis=1)
+    ha["high_smooth"] = ta.ema(ha["HA_high"], length=5)
+    ha["low_smooth"] = ta.ema(ha["HA_low"], length=5)
     max_idx = argrelextrema(ha["high_smooth"].values, np.greater_equal, order=21)[0]
     min_idx = argrelextrema(ha["low_smooth"].values, np.less_equal, order=21)[0]
-
-    ha["max_high"] = np.nan
-    ha["max_low"] = np.nan
+    ha["max_high"] = np.nan; ha["max_low"] = np.nan
     ha.loc[max_idx, "max_high"] = ha.loc[max_idx, "HA_high"]
     ha.loc[min_idx, "max_low"] = ha.loc[min_idx, "HA_low"]
-    ha.ffill(inplace=True)
-
-    trend = ha.iloc[0]["HA_close"]
-    ha["trendline"] = trend
-
+    ha["max_high"] = ha["max_high"].ffill(); ha["max_low"] = ha["max_low"].ffill()
+    ha["trendline"] = np.nan
+    trendline = ha.loc[0, "HA_close"]
+    ha.loc[0, "trendline"] = trendline
     for i in range(1, len(ha)):
-        if ha.iloc[i]["HA_high"] == ha.iloc[i]["max_high"]:
-            trend = ha.iloc[i]["HA_low"]
-        elif ha.iloc[i]["HA_low"] == ha.iloc[i]["max_low"]:
-            trend = ha.iloc[i]["HA_high"]
-        ha.iloc[i, ha.columns.get_loc("trendline")] = trend
-
-    ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], 14)
-    ha["ATR_EMA"] = ta.ema(ha["ATR"], 14)
+        if ha.loc[i, "HA_high"] == ha.loc[i, "max_high"]:
+            trendline = ha.loc[i, "HA_low"]
+        elif ha.loc[i, "HA_low"] == ha.loc[i, "max_low"]:
+            trendline = ha.loc[i, "HA_high"]
+        ha.loc[i, "trendline"] = trendline
+    ha["ATR"] = ta.atr(high=ha["HA_high"], low=ha["HA_low"], close=ha["HA_close"], length=14)
+    ha["ATR_EMA"] = ta.ema(ha["ATR"], length=14)
+    ha["atr_condition"] = ha["ATR"] > ha["ATR_EMA"]
     ha["trade_single"] = 0
-
     for i in range(1, len(ha)):
-        if ha["ATR"].iloc[i] <= ha["ATR_EMA"].iloc[i]:
+        if not ha.loc[i, "atr_condition"]:
             continue
-        if ha["HA_close"].iloc[i-1] < ha["trendline"].iloc[i-1] and ha["HA_close"].iloc[i] > ha["trendline"].iloc[i]:
-            ha.iloc[i, ha.columns.get_loc("trade_single")] = 1
-        elif ha["HA_close"].iloc[i-1] > ha["trendline"].iloc[i-1] and ha["HA_close"].iloc[i] < ha["trendline"].iloc[i]:
-            ha.iloc[i, ha.columns.get_loc("trade_single")] = -1
-
+        # CROSS ABOVE for buy
+        if ha.loc[i-1, "HA_close"] < ha.loc[i-1, "trendline"] and ha.loc[i, "HA_close"] > ha.loc[i, "trendline"]:
+            ha.loc[i, "trade_single"] = 1
+        # CROSS BELOW for sell
+        elif ha.loc[i-1, "HA_close"] > ha.loc[i-1, "trendline"] and ha.loc[i, "HA_close"] < ha.loc[i, "trendline"]:
+            ha.loc[i, "trade_single"] = -1
     return ha
 
 # ================= RUN STRATEGY =================
