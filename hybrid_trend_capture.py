@@ -201,7 +201,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
 
-            if price < pos['stop'] or price > pos['entry'] + STOP_LOSS[symbol]:
+            if last.HA_close < pos['stop']:
                 exit_trade(symbol, price, pos, state)
 
         if pos["side"] == "short":
@@ -211,7 +211,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
 
-            if price > pos['stop'] or price < pos['entry'] - STOP_LOSS[symbol]:
+            if last.HA_close > pos['stop']:
                 exit_trade(symbol, price, pos, state)
 
 def exit_trade(symbol, price, pos, state):
