@@ -187,19 +187,17 @@ def run_strategy():
     CURR_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
     NEXT_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
-    # ========== VOLATILITY FILTER ==========
-    if not trade_active:
-        if not volatility_ok(CURR_SYMBOL, fyers):
-            return  # skip choppy market
-
     quotes = fyers.quotes({"symbols": f"{CURR_SYMBOL},{NEXT_SYMBOL}"})["d"]
     price_map = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
 
     CURR_price = price_map[token_df.loc[0, "tradingsymbol"]]
     NEXT_price = price_map[token_df.loc[1, "tradingsymbol"]]
 
-    # ================= ENTRY =================
+    # ========== ENTRY ONLY IF BOTH LEGS ARE FREE ==========
     if not trade_active and ist_time() >= time(9, 30):
+        if not volatility_ok(CURR_SYMBOL, fyers):
+            return
+
         CURR_position = 1   # BUY
         NEXT_position = -1  # SELL
 
@@ -220,19 +218,17 @@ def run_strategy():
 
     # ================= TRAILING SL =================
     if trade_active:
-        # Trailing BUY leg
         if CURR_position == 1:
             profit = CURR_price - CURR_enter
             if profit > TRAIL_POINTS:
                 CURR_TSL = max(CURR_TSL, CURR_price - TRAIL_POINTS)
 
-        # Trailing SELL leg
         if NEXT_position == -1:
             profit = NEXT_enter - NEXT_price
             if profit > TRAIL_POINTS:
                 NEXT_TSL = min(NEXT_TSL, NEXT_price + TRAIL_POINTS)
 
-    # ================= EXIT CONDITIONS =================
+    # ================= EXIT CONDITIONS (FORCE BOTH EXIT) =================
     exit_reason = None
 
     if trade_active:
