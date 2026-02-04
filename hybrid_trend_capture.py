@@ -3,7 +3,7 @@ import time
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import pandas_ta as ta
 from scipy.signal import argrelextrema
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture")
+SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -155,7 +155,13 @@ def process_symbol(symbol, df, price, state):
     cross_up = prev.HA_close <= prev.trendline and last.HA_close > last.trendline
     cross_down = prev.HA_close >= prev.trendline and last.HA_close < last.trendline
 
-    # ===== ENTRY =====
+    # ===== ENTRY TIME WINDOW =====
+    now_ist = datetime.now()
+    entry_window_start = dt_time(4, 0)   # 4 AM IST
+    entry_window_end = dt_time(18, 0)    # 6 PM IST
+    in_entry_window = entry_window_start <= now_ist.time() <= entry_window_end
+
+    # ===== ENTRY LOGIC =====
     if pos is None and state["last_candle"] != candle_time:
         if cross_up:
             state["position"] = {
@@ -183,7 +189,8 @@ def process_symbol(symbol, df, price, state):
             log(f"{symbol} SHORT ENTRY @ {price}")
             return
 
-    # ===== TRAILING + EXIT =====
+    # ===== EXIT + TRAILING LOGIC =====
+    # Exit can happen anytime, regardless of time window
     if pos:
         step = TRAIL_STEP[symbol]
 
@@ -194,7 +201,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
 
-            if last.HA_close < last.trendline or price > pos['entry'] + STOP_LOSS[symbol]:
+            if price < pos['stop'] or price > pos['entry'] + STOP_LOSS[symbol]:
                 exit_trade(symbol, price, pos, state)
 
         if pos["side"] == "short":
@@ -204,7 +211,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
 
-            if last.HA_close > last.trendline or price < pos['entry'] - STOP_LOSS[symbol]:
+            if price > pos['stop'] or price < pos['entry'] - STOP_LOSS[symbol]:
                 exit_trade(symbol, price, pos, state)
 
 def exit_trade(symbol, price, pos, state):
@@ -229,7 +236,7 @@ def exit_trade(symbol, price, pos, state):
     log(f"{symbol} {pos['side'].upper()} EXIT | Net PnL: {round(net, 6)}")
     state["position"] = None
 
-# ================= MAIN =================
+# ================= MAIN LOOP =================
 def run():
     if not os.path.exists(TRADE_CSV):
         pd.DataFrame(
