@@ -157,7 +157,7 @@ def process_symbol(symbol, state):
     pos = state["position"]
 
     # ===== ENTRY =====
-    if pos is None and now.minute % 15 == 0:
+    if pos is None and state["last_candle"] != candle_time and now.minute % 15 == 0:
 
         if last_5m_close > one_hour_trendline and last_5m_close > last_5m_prv_close and last_5m_close > last_5m_open:
             state["position"] = {
