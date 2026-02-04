@@ -306,7 +306,7 @@ token_loaded = model_loaded = symbols_loaded = False
 
 while True:
     try:
-        market_open = time(9, 15)
+        market_open = time(9, 10)
         market_close = time(15, 30)
 
         if ist_time() > market_close and current_trading_date == ist_today():
@@ -326,7 +326,7 @@ while True:
                 token_df = load_symbols(fyers)
                 symbols_loaded = True
 
-        if time(9, 30) <= ist_time() <= market_close and symbols_loaded:
+        if time(9, 16) <= ist_time() <= market_close and symbols_loaded:
             run_strategy()
 
         t.sleep(2)
