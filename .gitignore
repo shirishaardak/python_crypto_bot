@@ -12,4 +12,3 @@ data/price_trend_following_strategy/*_processed.csv
 
 # Logs
 *.log
-*.csv
