@@ -158,7 +158,7 @@ def calculate_trendline(df):
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
     ha = calculate_trendline(df)
-    save_processed_data(df, ha, symbol)
+    # save_processed_data(df, ha, symbol)
 
     last = ha.iloc[-2]   # last closed candle
     prev = ha.iloc[-3]
