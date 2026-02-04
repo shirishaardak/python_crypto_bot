@@ -63,7 +63,7 @@ QTY = 30
 
 SL_POINTS = 100
 TARGET_POINTS = 250
-TRAIL_POINTS = 50
+TRAIL_POINTS = 100
 
 COMMISSION_RATE = 0.0004
 
@@ -228,50 +228,75 @@ def run_strategy():
             if profit > TRAIL_POINTS:
                 NEXT_TSL = min(NEXT_TSL, NEXT_price + TRAIL_POINTS)
 
-    # ================= EXIT CONDITIONS (FORCE BOTH EXIT) =================
-    exit_reason = None
-
+    # ================= EXIT CONDITIONS (SEPARATE LEG EXIT) =================
     if trade_active:
-        if CURR_price <= CURR_TSL or (CURR_price - CURR_enter) >= TARGET_POINTS:
-            exit_reason = "CURR_EXIT"
+        # Exit CURR only
+        if CURR_position == 1 and (CURR_price <= CURR_TSL or (CURR_price - CURR_enter) >= TARGET_POINTS):
+            net_curr = calculate_pnl(CURR_enter, CURR_price, QTY, "BUY") - commission(CURR_price, QTY)
+            save_trade({
+                "entry_time": CURR_enter_time.isoformat(),
+                "exit_time": ist_now().isoformat(),
+                "symbol": CURR_SYMBOL,
+                "side": "BUY",
+                "entry_price": CURR_enter,
+                "exit_price": CURR_price,
+                "qty": QTY,
+                "net_pnl": net_curr
+            })
+            send_telegram(f"🔁 EXIT CURR ONLY | Net ₹{round(net_curr,2)} | Reason: CURR_EXIT")
+            CURR_position = 0
 
-        if NEXT_price >= NEXT_TSL or (NEXT_enter - NEXT_price) >= TARGET_POINTS:
-            exit_reason = "NEXT_EXIT"
+        # Exit NEXT only
+        if NEXT_position == -1 and (NEXT_price >= NEXT_TSL or (NEXT_enter - NEXT_price) >= TARGET_POINTS):
+            net_next = calculate_pnl(NEXT_enter, NEXT_price, QTY, "SELL") - commission(NEXT_price, QTY)
+            save_trade({
+                "entry_time": NEXT_enter_time.isoformat(),
+                "exit_time": ist_now().isoformat(),
+                "symbol": NEXT_SYMBOL,
+                "side": "SELL",
+                "entry_price": NEXT_enter,
+                "exit_price": NEXT_price,
+                "qty": QTY,
+                "net_pnl": net_next
+            })
+            send_telegram(f"🔁 EXIT NEXT ONLY | Net ₹{round(net_next,2)} | Reason: NEXT_EXIT")
+            NEXT_position = 0
 
+        # Exit remaining leg at 3:15 PM
         if ist_time() >= time(15, 15):
-            exit_reason = "TIME_EXIT"
+            if CURR_position == 1:
+                net_curr = calculate_pnl(CURR_enter, CURR_price, QTY, "BUY") - commission(CURR_price, QTY)
+                save_trade({
+                    "entry_time": CURR_enter_time.isoformat(),
+                    "exit_time": ist_now().isoformat(),
+                    "symbol": CURR_SYMBOL,
+                    "side": "BUY",
+                    "entry_price": CURR_enter,
+                    "exit_price": CURR_price,
+                    "qty": QTY,
+                    "net_pnl": net_curr
+                })
+                send_telegram(f"⏰ TIME EXIT CURR | Net ₹{round(net_curr,2)}")
+                CURR_position = 0
 
-    if trade_active and exit_reason:
-        # Exit BUY
-        net_curr = calculate_pnl(CURR_enter, CURR_price, QTY, "BUY") - commission(CURR_price, QTY)
-        save_trade({
-            "entry_time": CURR_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat(),
-            "symbol": CURR_SYMBOL,
-            "side": "BUY",
-            "entry_price": CURR_enter,
-            "exit_price": CURR_price,
-            "qty": QTY,
-            "net_pnl": net_curr
-        })
+            if NEXT_position == -1:
+                net_next = calculate_pnl(NEXT_enter, NEXT_price, QTY, "SELL") - commission(NEXT_price, QTY)
+                save_trade({
+                    "entry_time": NEXT_enter_time.isoformat(),
+                    "exit_time": ist_now().isoformat(),
+                    "symbol": NEXT_SYMBOL,
+                    "side": "SELL",
+                    "entry_price": NEXT_enter,
+                    "exit_price": NEXT_price,
+                    "qty": QTY,
+                    "net_pnl": net_next
+                })
+                send_telegram(f"⏰ TIME EXIT NEXT | Net ₹{round(net_next,2)}")
+                NEXT_position = 0
 
-        # Exit SELL
-        net_next = calculate_pnl(NEXT_enter, NEXT_price, QTY, "SELL") - commission(NEXT_price, QTY)
-        save_trade({
-            "entry_time": NEXT_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat(),
-            "symbol": NEXT_SYMBOL,
-            "side": "SELL",
-            "entry_price": NEXT_enter,
-            "exit_price": NEXT_price,
-            "qty": QTY,
-            "net_pnl": net_next
-        })
-
-        send_telegram(f"🔁 EXIT BOTH | CURR Net ₹{round(net_curr,2)} | NEXT Net ₹{round(net_next,2)} | Reason: {exit_reason}")
-
-        CURR_position = NEXT_position = 0
-        trade_active = False
+        # Reset only when BOTH legs are flat
+        if CURR_position == 0 and NEXT_position == 0:
+            trade_active = False
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 Simple Hedge Algo with Volatility Filter Started")
