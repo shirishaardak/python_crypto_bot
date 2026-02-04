@@ -34,7 +34,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1h"  # minutes
+TIMEFRAME = "1h"
 DAYS = 15
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
@@ -159,13 +159,14 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state):
     ha = calculate_trendline(df)
     save_processed_data(df, ha, symbol)
-    last = ha.iloc[-2]
+
+    last = ha.iloc[-2]   # last closed candle
     prev = ha.iloc[-3]
     pos  = state["position"]
     now = datetime.now()
 
     # ===== ENTRY =====
-    if now.minute % 5 == 0 and pos is None and last.ATR > last.ATR_MA:
+    if pos is None and last.ATR > last.ATR_MA:
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.HA_close > last.SUPERTREND:
             state["position"] = {
                 "side": "long", "entry": price, "stop": price - STOP_LOSS[symbol], "tp": price + TAKE_PROFIT[symbol],
@@ -173,6 +174,7 @@ def process_symbol(symbol, df, price, state):
             }
             log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
             return
+
         if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.HA_close < last.SUPERTREND:
             state["position"] = {
                 "side": "short", "entry": price, "stop": price + STOP_LOSS[symbol], "tp": price - TAKE_PROFIT[symbol],
@@ -205,8 +207,9 @@ def process_symbol(symbol, df, price, state):
 def run():
     if not os.path.exists(TRADE_CSV):
         pd.DataFrame(columns=["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]).to_csv(TRADE_CSV, index=False)
-    state = {s: {"position": None} for s in SYMBOLS}
-    log("🚀 HA Trendline Breakout Strategy LIVE", tg=True)
+
+    state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
+    log("🚀 HA Trendline Breakout Strategy LIVE (Hourly Candle Check)", tg=True)
 
     while True:
         try:
@@ -214,11 +217,22 @@ def run():
                 df = fetch_candles(symbol)
                 if df is None or len(df) < 100:
                     continue
+
+                latest_candle_time = df.index[-1]
+
+                # Only process when a new candle forms
+                if state[symbol]["last_candle_time"] == latest_candle_time:
+                    continue
+
+                state[symbol]["last_candle_time"] = latest_candle_time
+
                 price = fetch_price(symbol)
                 if price is None:
                     continue
+
                 process_symbol(symbol, df, price, state[symbol])
-            time.sleep(20)
+
+            time.sleep(60)  # check once per minute
         except Exception as e:
             log(f"🚨 Runtime error: {e}", tg=True, key="runtime")
             time.sleep(5)
