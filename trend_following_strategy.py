@@ -44,8 +44,8 @@ def ist_time():
     return ist_now().time()
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOTfg_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("fg")
 
 def send_telegram(msg):
     try:
@@ -61,9 +61,9 @@ def send_telegram(msg):
 CLIENT_ID = "98E1TAKD4T-100"
 QTY = 30
 
-SL_POINTS = 100
+SL_POINTS = 50
 TARGET_POINTS = 250
-TRAIL_POINTS = 50
+TRAIL_POINTS = 1
 
 COMMISSION_RATE = 0.0004
 
@@ -177,101 +177,141 @@ def volatility_ok(symbol, fyers):
     if pd.isna(atr.iloc[-1]) or pd.isna(atr_ema.iloc[-1]):
         return False
 
-    return atr.iloc[-1] > atr_ema.iloc[-1]
+    return atr.iloc[-1] < atr_ema.iloc[-1]
 
 # ================= STRATEGY =================
 def run_strategy():
-    global CURR_position, NEXT_position, CURR_enter, NEXT_enter, CURR_SL, NEXT_SL
-    global CURR_TSL, NEXT_TSL, CURR_enter_time, NEXT_enter_time, trade_active
+    global CURR_position, CURR_enter, CURR_SL, CURR_TSL
+    global CURR_enter_time, trade_active
 
     CURR_SYMBOL = "NSE:" + token_df.loc[0, "tradingsymbol"]
-    NEXT_SYMBOL = "NSE:" + token_df.loc[1, "tradingsymbol"]
 
-    quotes = fyers.quotes({"symbols": f"{CURR_SYMBOL},{NEXT_SYMBOL}"})["d"]
-    price_map = {q["v"]["short_name"]: q["v"]["lp"] for q in quotes}
+    # ===== GET PRICE =====
+    quotes = fyers.quotes({"symbols": CURR_SYMBOL})["d"]
+    CURR_price = quotes[0]["v"]["lp"]
 
-    CURR_price = price_map[token_df.loc[0, "tradingsymbol"]]
-    NEXT_price = price_map[token_df.loc[1, "tradingsymbol"]]
+    # ===== GET CANDLE DATA FOR SUPERTREND =====
+    hist_data = {
+        "symbol": CURR_SYMBOL,
+        "resolution": "5",
+        "date_format": "1",
+        "range_from": (ist_today() - timedelta(days=5)).strftime("%Y-%m-%d"),
+        "range_to": ist_today().strftime("%Y-%m-%d"),
+        "cont_flag": "1"
+    }
 
-    # ========== ENTRY ONLY IF BOTH LEGS ARE FREE ==========
+    df = get_stock_historical_data(hist_data, fyers)
+
+    if len(df) < 50:
+        return
+
+    # ===== CALCULATE SUPERTREND =====
+    st = ta.supertrend(
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        length=21,
+        multiplier=1.5
+    )
+
+    df["SUPERTREND"] = st["SUPERT_21_1.5"]
+
+    last = df.iloc[-2]
+    prev = df.iloc[-3]
+
+    # ===== ENTRY =====
     if not trade_active and ist_time() >= time(9, 30):
+
         if not volatility_ok(CURR_SYMBOL, fyers):
             return
 
-        CURR_position = 1   # BUY
-        NEXT_position = -1  # SELL
+        # ----- REVERSE LOGIC -----
+        if last.Close < last.SUPERTREND and prev.Close > prev.SUPERTREND:
+            CURR_position = 1   # BUY
+            side = "BUY"
+
+        elif last.Close > last.SUPERTREND and prev.Close < prev.SUPERTREND:
+            CURR_position = -1  # SELL
+            side = "SELL"
+
+        else:
+            return
 
         CURR_enter = CURR_price
-        NEXT_enter = NEXT_price
 
-        CURR_SL = CURR_price - SL_POINTS
-        NEXT_SL = NEXT_price + SL_POINTS
+        if CURR_position == 1:
+            CURR_SL = CURR_price - SL_POINTS
+        else:
+            CURR_SL = CURR_price + SL_POINTS
 
         CURR_TSL = CURR_SL
-        NEXT_TSL = NEXT_SL
-
-        CURR_enter_time = NEXT_enter_time = ist_now()
+        CURR_enter_time = ist_now()
         trade_active = True
 
-        send_telegram(f"🟢 BUY CURR FUT @ {CURR_price}")
-        send_telegram(f"🔴 SELL NEXT FUT @ {NEXT_price}")
+        send_telegram(f"⚡ {side} BANKNIFTY FUT @ {CURR_price}")
 
-    # ================= TRAILING SL =================
+    # ===== TRAILING SL =====
     if trade_active:
+
         if CURR_position == 1:
             profit = CURR_price - CURR_enter
             if profit > TRAIL_POINTS:
                 CURR_TSL = max(CURR_TSL, CURR_price - TRAIL_POINTS)
 
-        if NEXT_position == -1:
-            profit = NEXT_enter - NEXT_price
+        if CURR_position == -1:
+            profit = CURR_enter - CURR_price
             if profit > TRAIL_POINTS:
-                NEXT_TSL = min(NEXT_TSL, NEXT_price + TRAIL_POINTS)
+                CURR_TSL = min(CURR_TSL, CURR_price + TRAIL_POINTS)
 
-    # ================= EXIT CONDITIONS (FORCE BOTH EXIT) =================
+    # ===== EXIT CONDITIONS =====
     exit_reason = None
 
     if trade_active:
-        if CURR_price <= CURR_TSL or (CURR_price - CURR_enter) >= TARGET_POINTS:
-            exit_reason = "CURR_EXIT"
 
-        if NEXT_price >= NEXT_TSL or (NEXT_enter - NEXT_price) >= TARGET_POINTS:
-            exit_reason = "NEXT_EXIT"
+        if CURR_position == 1 and CURR_price > last.SUPERTREND:
+            exit_reason = "TSL_EXIT"
+
+        if CURR_position == -1 and CURR_price < last.SUPERTREND:
+            exit_reason = "TSL_EXIT"
+
+        if CURR_position == 1 and (CURR_price - CURR_enter) >= TARGET_POINTS:
+            exit_reason = "TARGET_EXIT"
+
+        if CURR_position == -1 and (CURR_enter - CURR_price) >= TARGET_POINTS:
+            exit_reason = "TARGET_EXIT"
 
         if ist_time() >= time(15, 15):
             exit_reason = "TIME_EXIT"
 
     if trade_active and exit_reason:
-        # Exit BUY
-        net_curr = calculate_pnl(CURR_enter, CURR_price, QTY, "BUY") - commission(CURR_price, QTY)
+
+        side = "BUY" if CURR_position == 1 else "SELL"
+
+        net = calculate_pnl(
+            CURR_enter,
+            CURR_price,
+            QTY,
+            side
+        ) - commission(CURR_price, QTY)
+
         save_trade({
             "entry_time": CURR_enter_time.isoformat(),
             "exit_time": ist_now().isoformat(),
             "symbol": CURR_SYMBOL,
-            "side": "BUY",
+            "side": side,
             "entry_price": CURR_enter,
             "exit_price": CURR_price,
             "qty": QTY,
-            "net_pnl": net_curr
+            "net_pnl": net
         })
 
-        # Exit SELL
-        net_next = calculate_pnl(NEXT_enter, NEXT_price, QTY, "SELL") - commission(NEXT_price, QTY)
-        save_trade({
-            "entry_time": NEXT_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat(),
-            "symbol": NEXT_SYMBOL,
-            "side": "SELL",
-            "entry_price": NEXT_enter,
-            "exit_price": NEXT_price,
-            "qty": QTY,
-            "net_pnl": net_next
-        })
+        send_telegram(
+            f"🔁 EXIT BANKNIFTY FUT | Net ₹{round(net,2)} | Reason: {exit_reason}"
+        )
 
-        send_telegram(f"🔁 EXIT BOTH | CURR Net ₹{round(net_curr,2)} | NEXT Net ₹{round(net_next,2)} | Reason: {exit_reason}")
-
-        CURR_position = NEXT_position = 0
+        CURR_position = 0
         trade_active = False
+
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 Simple Hedge Algo with Volatility Filter Started")
