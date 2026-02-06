@@ -151,8 +151,8 @@ def calculate_trendline(df):
         low=df["Low"],
         close=df["Close"],
         length=21,
-        multiplier=2.5
-    )["SUPERT_21_2.5"]
+        multiplier=1.5
+    )["SUPERT_21_1.5"]
 
     return df
 
@@ -167,7 +167,7 @@ def process_symbol(symbol, df, price, state):
     now = datetime.now()
 
     # ===== ENTRY =====
-    if pos is None:
+    if pos is None and last.ATR < last.ATR_MA:
 
         if last.Close < last.SUPERTREND:
             state["position"] = {
