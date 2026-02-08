@@ -44,8 +44,8 @@ def ist_time():
     return ist_now().time()
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOTfg_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("fg")
+TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
