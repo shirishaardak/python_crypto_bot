@@ -152,7 +152,7 @@ def calculate_trendline(df, order=9):
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
     data = calculate_trendline(df)
-    save_processed_data(data, symbol)
+    # save_processed_data(data, symbol)
 
     last = data.iloc[-2]
     prev = data.iloc[-3]
@@ -169,7 +169,7 @@ def process_symbol(symbol, df, price, state):
     in_entry_window = entry_window_start <= now_ist.time() <= entry_window_end
 
     # ===== ENTRY LOGIC =====
-    if pos is None and state["last_candle"] != candle_time and last.ATR > last.ATR_MA and in_entry_window:
+    if pos is None and state["last_candle"] != candle_time and last.ATR > last.ATR_MA:
         if cross_up:
             state["position"] = {
                 "side": "long",
