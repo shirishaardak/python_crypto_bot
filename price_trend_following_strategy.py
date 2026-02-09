@@ -148,7 +148,7 @@ def process_symbol(symbol, state):
     trend_5m = calculate_trendline(df_5m)
     one_hour_trendline = trend_1h["trendline"].iloc[-2]
     one_hour_close = trend_1h["HA_close"].iloc[-2]
-    one_hour_preclose = trend_1h["HA_close"].iloc[-2]
+    one_hour_preclose = trend_1h["HA_close"].iloc[-3]
     one_hour_preopen = trend_1h["HA_open"].iloc[-3]
 
     last_5m_close = trend_5m["HA_close"].iloc[-2]
