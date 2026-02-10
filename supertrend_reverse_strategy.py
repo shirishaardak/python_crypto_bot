@@ -4,14 +4,15 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import pandas_ta as ta
 from dotenv import load_dotenv
+from scipy.signal import argrelextrema
+import pandas_ta as ta
 
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BqwOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAMwq_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOsdT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("ds")
 
 _last_tg = {}
 
@@ -35,18 +36,18 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
+TIMEFRAME = "5m"
+DAYS = 5
 
-TIMEFRAME = "1m"
-DAYS = 15
+STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
 
-TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS   = {"BTCUSD": 200, "ETHUSD": 20}
+BASE_DIR=os.getcwd()
+SAVE_DIR=os.path.join(BASE_DIR,"data","supertrend_reverse_strategy")
+os.makedirs(SAVE_DIR,exist_ok=True)
 
-BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
-os.makedirs(SAVE_DIR, exist_ok=True)
+TRADE_CSV=os.path.join(SAVE_DIR,"live_trades.csv")
 
-TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
+LAST_CANDLE_TIME = {}
 
 # ================= UTILITIES =================
 def log(msg, tg=False, key=None):
@@ -61,7 +62,6 @@ def commission(price, qty, symbol):
 
 def save_trade(trade):
     trade_copy = trade.copy()
-
     for t in ["entry_time", "exit_time"]:
         trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
 
@@ -75,17 +75,16 @@ def save_trade(trade):
     )
 
 def save_processed_data(df, symbol):
+
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
 
     out = pd.DataFrame({
         "time": df.index,
-        "HA_open": df["Open"],
-        "HA_high": df["High"],
-        "HA_low": df["Low"],
-        "HA_close": df["Close"],
-        "Trendline": df["SUPERTREND"],
-        "ATR": df["ATR"],
-        "ATR_MA": df["ATR_MA"]
+        "HA_open": df["HA_open"],
+        "HA_high": df["HA_high"],
+        "HA_low": df["HA_low"],
+        "HA_close": df["HA_close"],
+        "trendline": df["trendline"]
     })
 
     out.to_csv(path, index=False)
@@ -96,7 +95,7 @@ def fetch_price(symbol):
         r = requests.get(f"https://api.india.delta.exchange/v2/tickers/{symbol}", timeout=5)
         return float(r.json()["result"]["mark_price"])
     except Exception as e:
-        log(f"{symbol} PRICE fetch error: {e}", tg=True, key=f"{symbol}_price")
+        log(f"{symbol} PRICE fetch error: {e}")
         return None
 
 def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
@@ -115,8 +114,6 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
             params=params,
             timeout=10
         )
-
-        r.raise_for_status()
 
         df = pd.DataFrame(
             r.json()["result"],
@@ -141,74 +138,142 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
         log(f"{symbol} fetch error: {e}")
         return None
 
+# ================= HEIKIN ASHI =================
+def calculate_heikin_ashi(df):
+    ha_df = df.copy()
+
+    ha_df["HA_close"] = (ha_df["Open"] + ha_df["High"] + ha_df["Low"] + ha_df["Close"]) / 4
+
+    ha_open = []
+    for i in range(len(ha_df)):
+        if i == 0:
+            ha_open.append((ha_df["Open"].iloc[0] + ha_df["Close"].iloc[0]) / 2)
+        else:
+            ha_open.append((ha_open[i-1] + ha_df["HA_close"].iloc[i-1]) / 2)
+
+    ha_df["HA_open"] = ha_open
+    ha_df["HA_high"] = ha_df[["High", "HA_open", "HA_close"]].max(axis=1)
+    ha_df["HA_low"] = ha_df[["Low", "HA_open", "HA_close"]].min(axis=1)
+
+    return ha_df
+
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    df["ATR_MA"] = df["ATR"].rolling(21).mean()
 
-    df["SUPERTREND"] = ta.supertrend(
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        length=21,
-        multiplier=1.5
-    )["SUPERT_21_1.5"]
+    ha = df.copy()
 
-    return df
+    ha["ATR"]=ta.atr(ha["HA_high"],ha["HA_low"],ha["HA_close"],length=14) 
+
+    order = 21
+
+    ha["swing_high"] = np.nan
+    ha["swing_low"] = np.nan
+
+    high_idx = argrelextrema(
+        ha["HA_high"].values,
+        np.greater_equal,
+        order=order
+    )[0]
+
+    low_idx = argrelextrema(
+        ha["HA_low"].values,
+        np.less_equal,
+        order=order
+    )[0]
+
+    ha.iloc[high_idx, ha.columns.get_loc("swing_high")] = ha.iloc[high_idx]["HA_high"].values
+    ha.iloc[low_idx, ha.columns.get_loc("swing_low")] = ha.iloc[low_idx]["HA_low"].values
+
+    ha["trendline"] = np.nan
+    trend = ha["HA_close"].iloc[0]
+    ha.iloc[0, ha.columns.get_loc("trendline")] = trend
+
+    for i in range(1, len(ha)):
+        if not np.isnan(ha.iloc[i]["swing_high"]):
+            trend = ha.iloc[i]["HA_high"]
+        elif not np.isnan(ha.iloc[i]["swing_low"]):
+            trend = ha.iloc[i]["HA_low"]
+
+        ha.iloc[i, ha.columns.get_loc("trendline")] = trend
+
+    return ha
+
+# ================= CANDLE CHECK =================
+def is_new_candle(symbol, df):
+
+    last_closed_time = df.index[-2]
+
+    if symbol not in LAST_CANDLE_TIME:
+        LAST_CANDLE_TIME[symbol] = last_closed_time
+        return True
+
+    if last_closed_time != LAST_CANDLE_TIME[symbol]:
+        LAST_CANDLE_TIME[symbol] = last_closed_time
+        return True
+
+    return False
 
 # ================= STRATEGY =================
-def process_symbol(symbol, df, price, state):
+def process_symbol(symbol, df, price, state, allow_entry):
 
+    df = calculate_heikin_ashi(df)
     df = calculate_trendline(df)
+
     save_processed_data(df, symbol)
 
     last = df.iloc[-2]
+    prev = df.iloc[-3]
+
     pos  = state["position"]
     now = datetime.now()
 
-    # ===== ENTRY =====
-    if pos is None and last.ATR < last.ATR_MA:
+    if allow_entry and pos is None:
 
-        if last.Close < last.SUPERTREND:
+        if (
+            last.HA_close > last.trendline and
+            last.HA_close > prev.HA_open and
+            last.HA_close > prev.HA_close
+        ):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - STOP_LOSS[symbol],
-                "tp": price + TAKE_PROFIT[symbol],
+                "stop": last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
+            log(f"🟢 {symbol} LONG ENTRY @ {price}")
             return
 
-        if last.Close > last.SUPERTREND:
+        if (
+            last.HA_close < last.trendline and
+            last.HA_close < prev.HA_open and
+            last.HA_close < prev.HA_close
+        ):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + STOP_LOSS[symbol],
-                "tp": price - TAKE_PROFIT[symbol],
+                "stop": last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
+            log(f"🔴 {symbol} SHORT ENTRY @ {price}")
             return
 
-    # ===== EXIT =====
     if pos:
-
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price > last.SUPERTREND:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+        if pos["side"] == "long":
+            if price < pos["stop"] or last.HA_close < last.trendline:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
-        if pos["side"] == "short" and price < last.SUPERTREND:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+        if pos["side"] == "short":
+            if price > pos["stop"] or last.HA_close > last.trendline:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
         if exit_trade:
-
             fee = commission(price, pos["qty"], symbol)
             net = pnl - fee
 
@@ -224,31 +289,20 @@ def process_symbol(symbol, df, price, state):
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-
-            log(
-                f"{emoji} {symbol} {pos['side'].upper()} EXIT @ {price}\nPNL: {round(net,6)}",
-                tg=True
-            )
+            log(f"{emoji} {symbol} EXIT @ {price}  PNL: {round(net,6)}")
 
             state["position"] = None
 
 # ================= MAIN =================
 def run():
 
-    if not os.path.exists(TRADE_CSV):
-        pd.DataFrame(columns=[
-            "entry_time","exit_time","symbol","side",
-            "entry_price","exit_price","qty","net_pnl"
-        ]).to_csv(TRADE_CSV, index=False)
-
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Supertrend Reverse Strategy LIVE", tg=True)
+    log("🚀 Strategy LIVE (Price Stop + Candle Entry + Data Saving)")
 
     while True:
         try:
             for symbol in SYMBOLS:
-
                 df = fetch_candles(symbol)
 
                 if df is None or len(df) < 100:
@@ -259,12 +313,18 @@ def run():
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol])
+                new_candle = is_new_candle(symbol, df)
 
-            time.sleep(20)
+                if state[symbol]["position"]:
+                    process_symbol(symbol, df, price, state[symbol], allow_entry=False)
+
+                elif new_candle:
+                    process_symbol(symbol, df, price, state[symbol], allow_entry=True)
+
+            time.sleep(5)
 
         except Exception as e:
-            log(f"🚨 Runtime error: {e}", tg=True, key="runtime")
+            log(f"🚨 Runtime error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
