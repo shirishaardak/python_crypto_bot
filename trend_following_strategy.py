@@ -13,15 +13,16 @@ class SafeZoneInfo(zoneinfo.ZoneInfo):
 zoneinfo.ZoneInfo = SafeZoneInfo
 
 # ================= IMPORTS =================
-import os
-import sys
+import os, sys
 import time as t
 import requests
 import pandas as pd
+import numpy as np
 import pandas_ta as ta
 from fyers_apiv3 import fyersModel
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone, date
 from dotenv import load_dotenv
+from scipy.signal import argrelextrema
 
 # ================= PATH =================
 sys.path.append(os.getcwd())
@@ -40,68 +41,57 @@ def ist_time():
     return ist_now().time()
 
 # ================= TELEGRAM =================
-BOT = os.getenv("TEL_BOT_TOKEN")
-CHAT = os.getenv("TEL_CHAT_ID")
+BOT=os.getenv("TEL_BOT_TOKEN")
+CHAT=os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT}/sendMessage",
-            json={"chat_id": CHAT, "text": msg},
+            json={"chat_id":CHAT,"text":msg},
             timeout=5
         )
     except:
         pass
 
 # ================= CONFIG =================
-CLIENT_ID = "98E1TAKD4T-100"
-QTY = 30
-TARGET_POINTS = 250
-ATR_MULTIPLIER = 1.2
-COMMISSION_RATE = 0.0004
+CLIENT_ID="98E1TAKD4T-100"
+QTY=30
+COMMISSION_RATE=0.0004
+SPOT_SYMBOL="NSE:NIFTYBANK-INDEX"
 
-TOKEN_FILE = "auth/api_key/access_token.txt"
-TOKEN_CSV = "data/Trend_Following/instrument_token.csv"
-
-folder = "data/Trend_Following"
-os.makedirs(folder, exist_ok=True)
-TRADES_FILE = f"{folder}/live_trades.csv"
+folder="data/Trend_Following"
+os.makedirs(folder,exist_ok=True)
+TRADES_FILE=f"{folder}/live_trades.csv"
+TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= STATE =================
-fyers = None
-token_df = None
-CURR_position = 0
-CURR_enter = 0
-CURR_TSL = 0
-CURR_enter_time = None
-trade_active = False
-entry_meta = {}
-
-# ================= HEIKIN ASHI =================
-def add_heiken_ashi(df):
-    ha = df.copy()
-    ha["HA_Close"] = (df["Open"]+df["High"]+df["Low"]+df["Close"])/4
-    ha_open=[(df["Open"].iloc[0]+df["Close"].iloc[0])/2]
-    for i in range(1,len(df)):
-        ha_open.append((ha_open[i-1]+ha["HA_Close"].iloc[i-1])/2)
-    ha["HA_Open"]=ha_open
-    ha["HA_High"]=ha[["HA_Open","HA_Close","High"]].max(axis=1)
-    ha["HA_Low"]=ha[["HA_Open","HA_Close","Low"]].min(axis=1)
-    return ha
+fyers=None
+CE_active=False
+PE_active=False
+CE_entry=0
+PE_entry=0
+CE_TSL=0
+PE_TSL=0
+CE_symbol=None
+PE_symbol=None
+CE_enter_time=None
+PE_enter_time=None
+last_signal_candle=None
 
 # ================= UTILS =================
 def commission(price,qty):
     return round(price*qty*COMMISSION_RATE,6)
 
-def calculate_pnl(entry,exit,qty,side):
-    return round((exit-entry)*qty,6) if side=="BUY" else round((entry-exit)*qty,6)
+def calculate_pnl(entry,exit,qty):
+    return round((exit-entry)*qty,6)
 
 def save_trade(data):
-    df = pd.DataFrame([data])
+    df=pd.DataFrame([data])
     if not os.path.exists(TRADES_FILE):
-        df.to_csv(TRADES_FILE, index=False)
+        df.to_csv(TRADES_FILE,index=False)
     else:
-        df.to_csv(TRADES_FILE, mode="a", header=False, index=False)
+        df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
 
 # ================= AUTH =================
 def load_token():
@@ -110,12 +100,7 @@ def load_token():
 
 def load_model():
     token=open(TOKEN_FILE).read().strip()
-    return fyersModel.FyersModel(
-        client_id=CLIENT_ID,
-        token=token,
-        is_async=False,
-        log_path=""
-    )
+    return fyersModel.FyersModel(client_id=CLIENT_ID,token=token,is_async=False,log_path="")
 
 # ================= DATA =================
 def get_stock_historical_data(data,fyers):
@@ -126,16 +111,90 @@ def get_stock_historical_data(data,fyers):
     df.set_index("Date",inplace=True)
     return df
 
+# ================= TRENDLINE =================
+def calculate_trendline(df):
+
+    ha=ta.ha(df["Open"],df["High"],df["Low"],df["Close"]).reset_index(drop=True)
+    data=df.copy().reset_index(drop=True)
+
+    data["HA_Close"]=ha["HA_close"]
+    data["HA_Open"]=ha["HA_open"]
+    data["HA_High"]=ha["HA_high"]
+    data["HA_Low"]=ha["HA_low"]
+
+    high_vals=data["HA_High"].values
+    low_vals=data["HA_Low"].values
+
+    max_idx=argrelextrema(high_vals,np.greater_equal,order=21)[0]
+    min_idx=argrelextrema(low_vals,np.less_equal,order=21)[0]
+
+    data["smoothed_high"]=np.nan
+    data["smoothed_low"]=np.nan
+
+    data.iloc[max_idx,data.columns.get_loc("smoothed_high")]=data["HA_High"].iloc[max_idx]
+    data.iloc[min_idx,data.columns.get_loc("smoothed_low")]=data["HA_Low"].iloc[min_idx]
+
+    data[["smoothed_high","smoothed_low"]]=data[["smoothed_high","smoothed_low"]].ffill()
+
+    trendline=data["HA_Close"].iloc[0]
+    data["trendline"]=trendline
+
+    for i in range(1,len(data)):
+        if data["HA_High"].iloc[i]==data["smoothed_high"].iloc[i]:
+            trendline=data["HA_High"].iloc[i]
+        elif data["HA_Low"].iloc[i]==data["smoothed_low"].iloc[i]:
+            trendline=data["HA_Low"].iloc[i]
+        data.loc[i,"trendline"]=trendline
+
+    data.index=df.index
+    return data
+
+# ================= MONTHLY EXPIRY =================
+def last_thursday(year,month):
+    last_day=date(year,month,28)+timedelta(days=4)
+    last_day=last_day-timedelta(days=last_day.day)
+    offset=(last_day.weekday()-3)%7
+    return last_day-timedelta(days=offset)
+
+def monthly_expiry():
+    today=ist_today()
+    exp=last_thursday(today.year,today.month)
+    if today>exp:
+        if today.month==12:
+            exp=last_thursday(today.year+1,1)
+        else:
+            exp=last_thursday(today.year,today.month+1)
+    return exp.strftime("%y%b").upper()
+
+# ================= OPTION BUILDER =================
+def build_option_symbol(spot_price,opt_type):
+    strike=round(spot_price/100)*100
+    expiry=monthly_expiry()
+    return f"NFO:BANKNIFTY{expiry}{strike}{opt_type}"
+
+# ================= TRAILING =================
+def update_trailing(entry,current,sl):
+    profit=current-entry
+    if profit<=0:
+        return sl
+    steps=int(profit//10)
+    new_sl=entry-50+(steps*10)
+    return max(sl,new_sl)
+
 # ================= STRATEGY =================
 def run_strategy():
-    global CURR_position,CURR_enter,CURR_TSL
-    global trade_active,CURR_enter_time,entry_meta
 
-    CURR_SYMBOL="NSE:"+token_df.loc[0,"tradingsymbol"]
-    CURR_price=fyers.quotes({"symbols":CURR_SYMBOL})["d"][0]["v"]["lp"]
+    global CE_active,PE_active
+    global CE_entry,PE_entry
+    global CE_TSL,PE_TSL
+    global CE_symbol,PE_symbol
+    global CE_enter_time,PE_enter_time
+    global last_signal_candle
+
+    spot_price=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
 
     hist={
-        "symbol":CURR_SYMBOL,
+        "symbol":SPOT_SYMBOL,
         "resolution":"5",
         "date_format":"1",
         "range_from":(ist_today()-timedelta(days=5)).strftime("%Y-%m-%d"),
@@ -147,109 +206,96 @@ def run_strategy():
     if len(df)<50:
         return
 
-    df=add_heiken_ashi(df)
-
-    st=ta.supertrend(
-        high=df["HA_High"],
-        low=df["HA_Low"],
-        close=df["HA_Close"],
-        length=21,
-        multiplier=2.5
-    )
-    df["SUPERTREND"]=st["SUPERT_21_2.5"]
-
-    df["ATR"]=ta.atr(df["HA_High"],df["HA_Low"],df["HA_Close"],length=14)
-    df["ATR_AM"]=ta.ema(df["ATR"],length=21)
+    df=calculate_trendline(df)
 
     last=df.iloc[-2]
     prev=df.iloc[-3]
+    candle_time=df.index[-2]
 
-    atr_filter=(last.ATR>last.ATR_AM)
+    if last_signal_candle==candle_time:
+        return
 
-    # ===== ENTRY =====
-    if not trade_active and ist_time()>=time(9,30):
+    buy_signal=last.HA_Close>last.trendline and last.HA_Close>prev.HA_Close
+    sell_signal=last.HA_Close<last.trendline and last.HA_Close<prev.HA_Close
 
-        if not atr_filter:
-            return
+    if buy_signal and not CE_active and ist_time()>=time(9,30):
 
-        if last.HA_Close > last.SUPERTREND and last.HA_Close > prev.HA_Close and last.HA_Close > prev.HA_Open:
-            CURR_position=1
-            side="BUY"
-        elif last.HA_Close < last.SUPERTREND and last.HA_Close < prev.HA_Close and last.HA_Close < prev.HA_Open:
-            CURR_position=-1
-            side="SELL"
-        else:
-            return
+        CE_symbol=build_option_symbol(spot_price,"CE")
+        price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
 
-        CURR_enter=CURR_price
-        CURR_TSL=CURR_price-(last.ATR*ATR_MULTIPLIER) if CURR_position==1 else CURR_price+(last.ATR*ATR_MULTIPLIER)
+        CE_entry=price
+        CE_TSL=price-50
+        CE_enter_time=ist_now()
+        CE_active=True
+        last_signal_candle=candle_time
 
-        trade_active=True
-        CURR_enter_time=ist_now()
+        send_telegram(f"⚡ BUY CE {CE_symbol} @ {price}")
 
-        entry_meta={
-            "entry_atr":last.ATR,
-            "entry_atr_am":last.ATR_AM,
-            "entry_supertrend":last.SUPERTREND
-        }
+    if sell_signal and not PE_active and ist_time()>=time(9,30):
 
-        send_telegram(f"⚡ {side} @ {CURR_price}")
+        PE_symbol=build_option_symbol(spot_price,"PE")
+        price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
 
-    # ===== TRAILING =====
-    if trade_active:
+        PE_entry=price
+        PE_TSL=price-50
+        PE_enter_time=ist_now()
+        PE_active=True
+        last_signal_candle=candle_time
 
-        if CURR_position==1:
-            CURR_TSL=max(CURR_TSL,CURR_price-(last.ATR*ATR_MULTIPLIER))
-        else:
-            CURR_TSL=min(CURR_TSL,CURR_price+(last.ATR*ATR_MULTIPLIER))
+        send_telegram(f"⚡ BUY PE {PE_symbol} @ {price}")
 
-    # ===== EXIT =====
-    exit_reason=None
+    if CE_active:
+        price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
+        CE_TSL=update_trailing(CE_entry,price,CE_TSL)
 
-    if trade_active:
+        if price<=CE_TSL or ist_time()>=time(15,15):
 
-        if CURR_position==1 and CURR_price<=CURR_TSL:
-            exit_reason="ATR_TRAIL_EXIT"
-        if CURR_position==-1 and CURR_price>=CURR_TSL:
-            exit_reason="ATR_TRAIL_EXIT"
+            net=calculate_pnl(CE_entry,price,QTY)-commission(price,QTY)
 
-        if CURR_position==1 and (CURR_price-CURR_enter)>=TARGET_POINTS:
-            exit_reason="TARGET_EXIT"
-        if CURR_position==-1 and (CURR_enter-CURR_price)>=TARGET_POINTS:
-            exit_reason="TARGET_EXIT"
+            save_trade({
+                "entry_time":CE_enter_time.isoformat(),
+                "exit_time":ist_now().isoformat(),
+                "symbol":CE_symbol,
+                "side":"BUY_CE",
+                "entry_price":CE_entry,
+                "exit_price":price,
+                "qty":QTY,
+                "net_pnl":net
+            })
 
-        if ist_time()>=time(15,15):
-            exit_reason="TIME_EXIT"
+            send_telegram(f"🔁 EXIT CE ₹{round(net,2)}")
+            CE_active=False
 
-    if trade_active and exit_reason:
+    if PE_active:
+        price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
+        PE_TSL=update_trailing(PE_entry,price,PE_TSL)
 
-        side="BUY" if CURR_position==1 else "SELL"
+        if price<=PE_TSL or ist_time()>=time(15,15):
 
-        net=calculate_pnl(CURR_enter,CURR_price,QTY,side)-commission(CURR_price,QTY)
+            net=calculate_pnl(PE_entry,price,QTY)-commission(price,QTY)
 
-        save_trade({
-            "entry_time": CURR_enter_time.isoformat(),
-            "exit_time": ist_now().isoformat(),
-            "symbol": CURR_SYMBOL,
-            "side": side,
-            "entry_price": CURR_enter,
-            "exit_price": CURR_price,
-            "qty": QTY,
-            "net_pnl": net
-        })
+            save_trade({
+                "entry_time":PE_enter_time.isoformat(),
+                "exit_time":ist_now().isoformat(),
+                "symbol":PE_symbol,
+                "side":"BUY_PE",
+                "entry_price":PE_entry,
+                "exit_price":price,
+                "qty":QTY,
+                "net_pnl":net
+            })
 
-        send_telegram(f"🔁 EXIT | ₹{round(net,2)} | {exit_reason}")
-
-        CURR_position=0
-        trade_active=False
+            send_telegram(f"🔁 EXIT PE ₹{round(net,2)}")
+            PE_active=False
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 ATR Managed HA Supertrend Algo Started")
+send_telegram("🚀 BankNifty Monthly Options Algo Started")
 
-token_loaded=model_loaded=symbols_loaded=False
+token_loaded=model_loaded=False
 
 while True:
     try:
+
         market_open=time(9,15)
         market_close=time(15,30)
 
@@ -259,11 +305,8 @@ while True:
             if not model_loaded:
                 fyers=load_model()
                 model_loaded=True
-            if not symbols_loaded:
-                token_df=pd.read_csv(TOKEN_CSV)
-                symbols_loaded=True
 
-        if time(9,30)<=ist_time()<=market_close and symbols_loaded:
+        if time(9,30)<=ist_time()<=market_close and model_loaded:
             run_strategy()
 
         t.sleep(2)
