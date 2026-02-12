@@ -35,7 +35,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-STOP_LOSS = {"BTCUSD": 50, "ETHUSD": 5}
+STOP_LOSS = {"BTCUSD": 150, "ETHUSD": 10}
 
 TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
@@ -272,13 +272,13 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         # ===== TRAILING STOP =====
         if pos["side"] == "long":
-            new_stop = price - STOP_LOSS[symbol]
+            new_stop = price - last.trendline
             if new_stop > pos["stop"]:
                 pos["stop"] = new_stop
                 log(f"🔄 {symbol} LONG TRAIL SL → {round(new_stop,2)}")
 
         elif pos["side"] == "short":
-            new_stop = price + STOP_LOSS[symbol]
+            new_stop = price + last.trendline
             if new_stop < pos["stop"]:
                 pos["stop"] = new_stop
                 log(f"🔄 {symbol} SHORT TRAIL SL → {round(new_stop,2)}")
