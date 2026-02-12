@@ -173,8 +173,8 @@ def update_trailing(entry,current,sl):
     profit=current-entry
     if profit<=0:
         return sl
-    steps=int(profit//10)
-    new_sl=entry-50+(steps*10)
+    steps=int(profit//1)
+    new_sl=entry-25+(steps*1)
     return max(sl,new_sl)
 
 # ================= STRATEGY =================
@@ -224,7 +224,7 @@ def run_strategy():
         price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
 
         CE_entry=price
-        CE_TSL=price-50
+        CE_TSL=price-25
         CE_enter_time=ist_now()
         CE_active=True
         last_signal_candle=candle_time
@@ -240,7 +240,7 @@ def run_strategy():
         price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
 
         PE_entry=price
-        PE_TSL=price-50
+        PE_TSL=price-25
         PE_enter_time=ist_now()
         PE_active=True
         last_signal_candle=candle_time
