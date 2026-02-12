@@ -272,13 +272,13 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         # ===== TRAILING STOP =====
         if pos["side"] == "long":
-            new_stop = price - last.trendline
+            new_stop = price - pos["risk"]
             if new_stop > pos["stop"]:
                 pos["stop"] = new_stop
                 log(f"🔄 {symbol} LONG TRAIL SL → {round(new_stop,2)}")
 
         elif pos["side"] == "short":
-            new_stop = price + last.trendline
+            new_stop = price + pos["risk"]
             if new_stop < pos["stop"]:
                 pos["stop"] = new_stop
                 log(f"🔄 {symbol} SHORT TRAIL SL → {round(new_stop,2)}")

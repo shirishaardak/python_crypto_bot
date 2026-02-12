@@ -208,9 +208,6 @@ def run_strategy():
     prev=df.iloc[-3]
     candle_time=df.index[-2]
 
-    CE_symbol=build_option_symbol(spot_price,"CE")
-    price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
-    print(price)
 
     if last_signal_candle==candle_time:
         return
