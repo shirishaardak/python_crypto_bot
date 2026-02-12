@@ -11,8 +11,8 @@ import pandas_ta as ta
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOsdT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("ds")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 _last_tg = {}
 
@@ -35,14 +35,14 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
+STOP_LOSS = {"BTCUSD": 50, "ETHUSD": 5}
+
 TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 5
 
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
-
 BASE_DIR=os.getcwd()
-SAVE_DIR=os.path.join(BASE_DIR,"data","trendline_reverse_strategy")
+SAVE_DIR=os.path.join(BASE_DIR,"data","trend_reverse_strategy")
 os.makedirs(SAVE_DIR,exist_ok=True)
 
 TRADE_CSV=os.path.join(SAVE_DIR,"live_trades.csv")
@@ -162,7 +162,8 @@ def calculate_trendline(df):
 
     ha = df.copy()
 
-    ha["ATR"]=ta.atr(ha["HA_high"],ha["HA_low"],ha["HA_close"],length=14) 
+    ha["ATR"]=ta.atr(ha["HA_high"],ha["HA_low"],ha["HA_close"],length=14)
+    ha["ATR_MA"]=ha["ATR"].rolling(14).min() 
 
     order = 21
 
@@ -190,9 +191,9 @@ def calculate_trendline(df):
 
     for i in range(1, len(ha)):
         if not np.isnan(ha.iloc[i]["swing_high"]):
-            trend = ha.iloc[i]["HA_low"]
-        elif not np.isnan(ha.iloc[i]["swing_low"]):
             trend = ha.iloc[i]["HA_high"]
+        elif not np.isnan(ha.iloc[i]["swing_low"]):
+            trend = ha.iloc[i]["HA_low"]
 
         ha.iloc[i, ha.columns.get_loc("trendline")] = trend
 
@@ -227,17 +228,21 @@ def process_symbol(symbol, df, price, state, allow_entry):
     pos  = state["position"]
     now = datetime.now()
 
-    if allow_entry and pos is None:
+    # ===== ENTRY =====
+    if allow_entry and pos is None and last.ATR > last.ATR_MA:
 
         if (
             last.HA_close > last.trendline and
             last.HA_close > prev.HA_open and
             last.HA_close > prev.HA_close
         ):
+            risk = abs(price - last.trendline)
+
             state["position"] = {
                 "side": "long",
                 "entry": price,
                 "stop": last.trendline,
+                "risk": risk,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
@@ -249,27 +254,45 @@ def process_symbol(symbol, df, price, state, allow_entry):
             last.HA_close < prev.HA_open and
             last.HA_close < prev.HA_close
         ):
+            risk = abs(price - last.trendline)
+
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "stop": last.trendline,
+                "risk": risk,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
             log(f"🔴 {symbol} SHORT ENTRY @ {price}")
             return
 
+    # ===== POSITION MANAGEMENT =====
     if pos:
+
+        # ===== TRAILING STOP =====
+        if pos["side"] == "long":
+            new_stop = price - STOP_LOSS[symbol]
+            if new_stop > pos["stop"]:
+                pos["stop"] = new_stop
+                log(f"🔄 {symbol} LONG TRAIL SL → {round(new_stop,2)}")
+
+        elif pos["side"] == "short":
+            new_stop = price + STOP_LOSS[symbol]
+            if new_stop < pos["stop"]:
+                pos["stop"] = new_stop
+                log(f"🔄 {symbol} SHORT TRAIL SL → {round(new_stop,2)}")
+
         exit_trade = False
         pnl = 0
 
         if pos["side"] == "long":
-            if price < pos["stop"] or last.HA_close < last.trendline:
+            if last.HA_close < pos["stop"]:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         if pos["side"] == "short":
-            if price > pos["stop"] or last.HA_close > last.trendline:
+            if last.HA_close > pos["stop"]:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
@@ -298,7 +321,7 @@ def run():
 
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Strategy LIVE (Price Stop + Candle Entry + Data Saving)")
+    log("🚀 Strategy LIVE (Trendline Trailing Stop Enabled)")
 
     while True:
         try:
