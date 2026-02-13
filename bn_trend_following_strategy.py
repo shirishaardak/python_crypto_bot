@@ -15,7 +15,6 @@ zoneinfo.ZoneInfo = SafeZoneInfo
 # ================= IMPORTS =================
 import os, sys
 import time as t
-import requests
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
@@ -39,20 +38,6 @@ def ist_today():
 
 def ist_time():
     return ist_now().time()
-
-# ================= TELEGRAM =================
-BOT=os.getenv("TEL_BOT_TOKEN")
-CHAT=os.getenv("TEL_CHAT_ID")
-
-def send_telegram(msg):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT}/sendMessage",
-            json={"chat_id":CHAT,"text":msg},
-            timeout=5
-        )
-    except:
-        pass
 
 # ================= CONFIG =================
 CLIENT_ID="98E1TAKD4T-100"
@@ -156,29 +141,40 @@ def last_thursday(year,month):
     offset=(last_day.weekday()-3)%7
     return last_day-timedelta(days=offset)
 
-def monthly_expiry():
+def monthly_expiry_code():
     today=ist_today()
     exp=last_thursday(today.year,today.month)
+
     if today>exp:
         if today.month==12:
             exp=last_thursday(today.year+1,1)
         else:
             exp=last_thursday(today.year,today.month+1)
+
     return exp.strftime("%y%b").upper()
 
 # ================= OPTION BUILDER =================
 def build_option_symbol(spot_price,opt_type):
-    strike=round(spot_price/100)*100
-    expiry=monthly_expiry()
-    return f"NFO:BANKNIFTY{expiry}{strike}{opt_type}"
+
+    strike=int(round(spot_price/100)*100)
+    expiry=monthly_expiry_code()
+
+    symbol=f"NSE:BANKNIFTY{expiry}{strike}{opt_type}"
+
+    try:
+        test=fyers.quotes({"symbols":symbol})
+        if "d" in test:
+            return symbol
+    except:
+        return None
 
 # ================= TRAILING =================
 def update_trailing(entry,current,sl):
     profit=current-entry
     if profit<=0:
         return sl
-    steps=int(profit//10)
-    new_sl=entry-50+(steps*10)
+    steps=int(profit//1)
+    new_sl=entry-25+(steps*1)
     return max(sl,new_sl)
 
 # ================= STRATEGY =================
@@ -212,6 +208,7 @@ def run_strategy():
     prev=df.iloc[-3]
     candle_time=df.index[-2]
 
+
     if last_signal_candle==candle_time:
         return
 
@@ -221,28 +218,34 @@ def run_strategy():
     if buy_signal and not CE_active and ist_time()>=time(9,30):
 
         CE_symbol=build_option_symbol(spot_price,"CE")
+        if not CE_symbol:
+            return
+
         price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
 
         CE_entry=price
-        CE_TSL=price-50
+        CE_TSL=price-25
         CE_enter_time=ist_now()
         CE_active=True
         last_signal_candle=candle_time
 
-        send_telegram(f"⚡ BUY CE {CE_symbol} @ {price}")
+        print(f"⚡ BUY CE {CE_symbol} @ {price}")
 
     if sell_signal and not PE_active and ist_time()>=time(9,30):
 
         PE_symbol=build_option_symbol(spot_price,"PE")
+        if not PE_symbol:
+            return
+
         price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
 
         PE_entry=price
-        PE_TSL=price-50
+        PE_TSL=price-25
         PE_enter_time=ist_now()
         PE_active=True
         last_signal_candle=candle_time
 
-        send_telegram(f"⚡ BUY PE {PE_symbol} @ {price}")
+        print(f"⚡ BUY PE {PE_symbol} @ {price}")
 
     if CE_active:
         price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
@@ -263,7 +266,7 @@ def run_strategy():
                 "net_pnl":net
             })
 
-            send_telegram(f"🔁 EXIT CE ₹{round(net,2)}")
+            print(f"🔁 EXIT CE ₹{round(net,2)}")
             CE_active=False
 
     if PE_active:
@@ -285,11 +288,11 @@ def run_strategy():
                 "net_pnl":net
             })
 
-            send_telegram(f"🔁 EXIT PE ₹{round(net,2)}")
+            print(f"🔁 EXIT PE ₹{round(net,2)}")
             PE_active=False
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 BankNifty Monthly Options Algo Started")
+print("🚀 BankNifty Monthly Algo Started (NSE FORMAT)")
 
 token_loaded=model_loaded=False
 
@@ -312,5 +315,5 @@ while True:
         t.sleep(2)
 
     except Exception as e:
-        send_telegram(f"❌ Algo error {e}")
+        print(f"❌ Algo error {e}")
         t.sleep(5)
