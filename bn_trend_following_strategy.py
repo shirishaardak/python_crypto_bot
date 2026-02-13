@@ -29,8 +29,8 @@ sys.path.append(os.getcwd())
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 _last_tg = {}
 
