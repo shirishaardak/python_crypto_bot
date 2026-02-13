@@ -17,7 +17,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
+TIMEFRAME = "5m"
 DAYS = 15
 
 STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
@@ -174,7 +174,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - last.ATR,
+                "stop": price - STOP_LOSS[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
@@ -187,7 +187,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + last.ATR,
+                "stop": price + STOP_LOSS[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
