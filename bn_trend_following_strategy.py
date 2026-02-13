@@ -15,6 +15,7 @@ zoneinfo.ZoneInfo = SafeZoneInfo
 # ================= IMPORTS =================
 import os, sys
 import time as t
+import requests
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
@@ -26,6 +27,25 @@ from scipy.signal import argrelextrema
 # ================= PATH =================
 sys.path.append(os.getcwd())
 load_dotenv()
+
+# ================= TELEGRAM =================
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+_last_tg = {}
+
+def send_telegram(msg, key=None, cooldown=30):
+    try:
+        now = t.time()
+        if key and key in _last_tg and now - _last_tg[key] < cooldown:
+            return
+        if key:
+            _last_tg[key] = now
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
+    except Exception:
+        pass
 
 # ================= IST =================
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -80,12 +100,24 @@ def save_trade(data):
 
 # ================= AUTH =================
 def load_token():
-    os.system("python auth/fyers_auth.py")
-    return True
+    try:
+        send_telegram("🔐 Starting Fyers Login...", "login_start")
+        os.system("python auth/fyers_auth.py")
+        send_telegram("✅ Fyers Login Successful", "login_success")
+        return True
+    except Exception as e:
+        send_telegram(f"❌ Login Error: {e}", "login_error", 0)
+        return False
 
 def load_model():
-    token=open(TOKEN_FILE).read().strip()
-    return fyersModel.FyersModel(client_id=CLIENT_ID,token=token,is_async=False,log_path="")
+    try:
+        token=open(TOKEN_FILE).read().strip()
+        model=fyersModel.FyersModel(client_id=CLIENT_ID,token=token,is_async=False,log_path="")
+        send_telegram("📡 Fyers Model Loaded Successfully", "model_loaded")
+        return model
+    except Exception as e:
+        send_telegram(f"❌ Model Load Error: {e}", "model_error", 0)
+        raise
 
 # ================= DATA =================
 def get_stock_historical_data(data,fyers):
@@ -208,7 +240,6 @@ def run_strategy():
     prev=df.iloc[-3]
     candle_time=df.index[-2]
 
-
     if last_signal_candle==candle_time:
         return
 
@@ -230,6 +261,7 @@ def run_strategy():
         last_signal_candle=candle_time
 
         print(f"⚡ BUY CE {CE_symbol} @ {price}")
+        send_telegram(f"⚡ ENTRY CE\n{CE_symbol}\nPrice: ₹{price}\nTime: {CE_enter_time.strftime('%H:%M:%S')}","entry_ce",5)
 
     if sell_signal and not PE_active and ist_time()>=time(9,30):
 
@@ -246,6 +278,7 @@ def run_strategy():
         last_signal_candle=candle_time
 
         print(f"⚡ BUY PE {PE_symbol} @ {price}")
+        send_telegram(f"⚡ ENTRY PE\n{PE_symbol}\nPrice: ₹{price}\nTime: {PE_enter_time.strftime('%H:%M:%S')}","entry_pe",5)
 
     if CE_active:
         price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
@@ -267,6 +300,7 @@ def run_strategy():
             })
 
             print(f"🔁 EXIT CE ₹{round(net,2)}")
+            send_telegram(f"🔁 EXIT CE\n{CE_symbol}\nExit: ₹{price}\nPnL: ₹{round(net,2)}","exit_ce",5)
             CE_active=False
 
     if PE_active:
@@ -289,6 +323,7 @@ def run_strategy():
             })
 
             print(f"🔁 EXIT PE ₹{round(net,2)}")
+            send_telegram(f"🔁 EXIT PE\n{PE_symbol}\nExit: ₹{price}\nPnL: ₹{round(net,2)}","exit_pe",5)
             PE_active=False
 
 # ================= MAIN LOOP =================
@@ -316,4 +351,5 @@ while True:
 
     except Exception as e:
         print(f"❌ Algo error {e}")
+        send_telegram(f"❌ ALGO ERROR\n{str(e)}","algo_error",10)
         t.sleep(5)
