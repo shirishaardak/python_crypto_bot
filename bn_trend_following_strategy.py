@@ -327,7 +327,7 @@ def run_strategy():
             PE_active=False
 
 # ================= MAIN LOOP =================
-print("🚀 BankNifty Monthly Algo Started (NSE FORMAT)")
+send_telegram("🚀 BankNifty Monthly Algo Started (NSE FORMAT)")
 
 token_loaded=model_loaded=False
 
