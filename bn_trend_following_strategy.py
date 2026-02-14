@@ -209,7 +209,6 @@ def run_strategy():
     global CE_enter_time,PE_enter_time
     global last_signal_candle
 
-    send_telegram("⚙️ Strategy Cycle Running")
 
     spot_price=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
 
