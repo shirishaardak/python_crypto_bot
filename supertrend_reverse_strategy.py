@@ -2,17 +2,15 @@ import os
 import time
 import requests
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from scipy.signal import argrelextrema
 import pandas_ta as ta
 
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOsdT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("ds")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
 
 _last_tg = {}
 
@@ -24,8 +22,9 @@ def send_telegram(msg, key=None, cooldown=30):
         if key:
             _last_tg[key] = now
 
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
     except Exception:
         pass
 
@@ -39,13 +38,13 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 5
 
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
+TP_DISTANCE = {"BTCUSD": 250, "ETHUSD": 25}
 
-BASE_DIR=os.getcwd()
-SAVE_DIR=os.path.join(BASE_DIR,"data","supertrend_reverse_strategy")
-os.makedirs(SAVE_DIR,exist_ok=True)
+BASE_DIR = os.getcwd()
+SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV=os.path.join(SAVE_DIR,"live_trades.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
 LAST_CANDLE_TIME = {}
 
@@ -75,7 +74,6 @@ def save_trade(trade):
     )
 
 def save_processed_data(df, symbol):
-
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
 
     out = pd.DataFrame({
@@ -84,7 +82,7 @@ def save_processed_data(df, symbol):
         "HA_high": df["HA_high"],
         "HA_low": df["HA_low"],
         "HA_close": df["HA_close"],
-        "trendline": df["trendline"]
+        "trendline": df["SUPERTREND"]
     })
 
     out.to_csv(path, index=False)
@@ -95,7 +93,7 @@ def fetch_price(symbol):
         r = requests.get(f"https://api.india.delta.exchange/v2/tickers/{symbol}", timeout=5)
         return float(r.json()["result"]["mark_price"])
     except Exception as e:
-        log(f"{symbol} PRICE fetch error: {e}")
+        log(f"{symbol} PRICE fetch error: {e}", tg=True)
         return None
 
 def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
@@ -130,12 +128,10 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
         df.set_index("Time", inplace=True)
         df.sort_index(inplace=True)
 
-        df = df.astype(float)
-
-        return df.dropna()
+        return df.astype(float).dropna()
 
     except Exception as e:
-        log(f"{symbol} fetch error: {e}")
+        log(f"{symbol} fetch error: {e}", tg=True)
         return None
 
 # ================= HEIKIN ASHI =================
@@ -159,48 +155,22 @@ def calculate_heikin_ashi(df):
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-
     ha = df.copy()
 
-    ha["ATR"]=ta.atr(ha["HA_high"],ha["HA_low"],ha["HA_close"],length=14) 
+    st = ta.supertrend(
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
+        length=21,
+        multiplier=2.5
+    )
 
-    order = 21
-
-    ha["swing_high"] = np.nan
-    ha["swing_low"] = np.nan
-
-    high_idx = argrelextrema(
-        ha["HA_high"].values,
-        np.greater_equal,
-        order=order
-    )[0]
-
-    low_idx = argrelextrema(
-        ha["HA_low"].values,
-        np.less_equal,
-        order=order
-    )[0]
-
-    ha.iloc[high_idx, ha.columns.get_loc("swing_high")] = ha.iloc[high_idx]["HA_high"].values
-    ha.iloc[low_idx, ha.columns.get_loc("swing_low")] = ha.iloc[low_idx]["HA_low"].values
-
-    ha["trendline"] = np.nan
-    trend = ha["HA_close"].iloc[0]
-    ha.iloc[0, ha.columns.get_loc("trendline")] = trend
-
-    for i in range(1, len(ha)):
-        if not np.isnan(ha.iloc[i]["swing_high"]):
-            trend = ha.iloc[i]["HA_high"]
-        elif not np.isnan(ha.iloc[i]["swing_low"]):
-            trend = ha.iloc[i]["HA_low"]
-
-        ha.iloc[i, ha.columns.get_loc("trendline")] = trend
+    ha["SUPERTREND"] = st.iloc[:,0]
 
     return ha
 
 # ================= CANDLE CHECK =================
 def is_new_candle(symbol, df):
-
     last_closed_time = df.index[-2]
 
     if symbol not in LAST_CANDLE_TIME:
@@ -215,66 +185,63 @@ def is_new_candle(symbol, df):
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state, allow_entry):
-
     df = calculate_heikin_ashi(df)
     df = calculate_trendline(df)
 
-    save_processed_data(df, symbol)
 
     last = df.iloc[-2]
     prev = df.iloc[-3]
 
-    pos  = state["position"]
+    pos = state["position"]
     now = datetime.now()
 
+    # ===== ENTRY =====
     if allow_entry and pos is None:
 
-        if (
-            last.HA_close > last.trendline and
-            last.HA_close > prev.HA_open and
-            last.HA_close > prev.HA_close
-        ):
+        if last.HA_close > last.SUPERTREND and prev.HA_close < prev.SUPERTREND:
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": last.trendline,
+                "stop": last.SUPERTREND,
+                "tp": price + TP_DISTANCE[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🟢 {symbol} LONG ENTRY @ {price}")
+            log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
             return
 
-        if (
-            last.HA_close < last.trendline and
-            last.HA_close < prev.HA_open and
-            last.HA_close < prev.HA_close
-        ):
+        if last.HA_close < last.SUPERTREND and prev.HA_close > prev.SUPERTREND:
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last.trendline,
+                "stop": last.SUPERTREND,
+                "tp": price - TP_DISTANCE[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🔴 {symbol} SHORT ENTRY @ {price}")
+            log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
             return
 
+    # ===== POSITION MANAGEMENT =====
     if pos:
+
+        # trailing stop update
+        pos["stop"] = last.SUPERTREND
+
         exit_trade = False
-        pnl = 0
 
         if pos["side"] == "long":
-            if price < pos["stop"] or last.HA_close < last.trendline:
-                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            if price < pos["stop"] or price > pos["tp"]:
                 exit_trade = True
 
         if pos["side"] == "short":
-            if price > pos["stop"] or last.HA_close > last.trendline:
-                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            if price > pos["stop"] or price < pos["tp"]:
                 exit_trade = True
 
         if exit_trade:
-            fee = commission(price, pos["qty"], symbol)
+            fee = commission(price, pos["qty"], symbol) + commission(pos["entry"], pos["qty"], symbol)
             net = pnl - fee
 
             save_trade({
@@ -289,16 +256,15 @@ def process_symbol(symbol, df, price, state, allow_entry):
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-            log(f"{emoji} {symbol} EXIT @ {price}  PNL: {round(net,6)}")
+            log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
             state["position"] = None
 
 # ================= MAIN =================
 def run():
-
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Strategy LIVE (Price Stop + Candle Entry + Data Saving)")
+    log("🚀 Strategy LIVE Started", tg=True)
 
     while True:
         try:
@@ -324,7 +290,7 @@ def run():
             time.sleep(5)
 
         except Exception as e:
-            log(f"🚨 Runtime error: {e}")
+            log(f"🚨 Runtime error: {e}", tg=True)
             time.sleep(5)
 
 if __name__ == "__main__":
