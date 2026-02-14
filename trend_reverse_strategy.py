@@ -35,7 +35,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-STOP_LOSS = {"BTCUSD": 150, "ETHUSD": 10}
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
 
 TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
@@ -225,74 +225,97 @@ def process_symbol(symbol, df, price, state, allow_entry):
     last = df.iloc[-2]
     prev = df.iloc[-3]
 
-    pos  = state["position"]
+    pos = state["position"]
     now = datetime.now()
 
-    # ===== ENTRY =====
-    if allow_entry and pos is None and last.ATR > last.ATR_MA:
+    # ===== ENTRY (REVERSED LOGIC) =====
+    if allow_entry and pos is None:
 
+        # ORIGINAL LONG SIGNAL → NOW SHORT
         if (
             last.HA_close > last.trendline and
             last.HA_close > prev.HA_open and
             last.HA_close > prev.HA_close
         ):
-            risk = abs(price - last.trendline)
+
+            initial_risk = abs(price - last.trendline)
+            if initial_risk > STOP_LOSS[symbol]:
+                initial_risk = STOP_LOSS[symbol]
+
+            stop_price = price + initial_risk
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": last.trendline,
-                "risk": risk,
+                "stop": round(stop_price,2),
+                "risk": price + STOP_LOSS[symbol],
+                "trail_step": 100 if symbol=="BTCUSD" else 1,
+                "last_trail_level": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🟢 {symbol} LONG ENTRY @ {price}")
+
+            log(f"🔴 {symbol} REVERSED SHORT ENTRY @ {price}")
             return
 
+        # ORIGINAL SHORT SIGNAL → NOW LONG
         if (
             last.HA_close < last.trendline and
             last.HA_close < prev.HA_open and
             last.HA_close < prev.HA_close
         ):
-            risk = abs(price - last.trendline)
+
+            initial_risk = abs(price - last.trendline)
+            if initial_risk > STOP_LOSS[symbol]:
+                initial_risk = STOP_LOSS[symbol]
+
+            stop_price = price - initial_risk
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last.trendline,
-                "risk": risk,
+                "stop": round(stop_price,2),
+                "risk": price - STOP_LOSS[symbol],
+                "trail_step": 25 if symbol=="BTCUSD" else 1,
+                "last_trail_level": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now
             }
-            log(f"🔴 {symbol} SHORT ENTRY @ {price}")
+
+            log(f"🟢 {symbol} REVERSED LONG ENTRY @ {price}")
             return
 
     # ===== POSITION MANAGEMENT =====
     if pos:
 
-        # ===== TRAILING STOP =====
         if pos["side"] == "long":
-            new_stop = price - pos["risk"]
-            if new_stop > pos["stop"]:
-                pos["stop"] = new_stop
-                log(f"🔄 {symbol} LONG TRAIL SL → {round(new_stop,2)}")
+
+            move = last.HA_close - pos["last_trail_level"]
+
+            if move >= pos["trail_step"]:
+                steps = int(move / pos["trail_step"])
+                pos["stop"] += steps * pos["trail_step"]
+                pos["last_trail_level"] += steps * pos["trail_step"]
 
         elif pos["side"] == "short":
-            new_stop = price + pos["risk"]
-            if new_stop < pos["stop"]:
-                pos["stop"] = new_stop
-                log(f"🔄 {symbol} SHORT TRAIL SL → {round(new_stop,2)}")
+
+            move = pos["last_trail_level"] - last.HA_close
+
+            if move >= pos["trail_step"]:
+                steps = int(move / pos["trail_step"])
+                pos["stop"] -= steps * pos["trail_step"]
+                pos["last_trail_level"] -= steps * pos["trail_step"]
 
         exit_trade = False
         pnl = 0
 
         if pos["side"] == "long":
-            if last.HA_close < pos["stop"]:
+            if price < pos["stop"]:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        if pos["side"] == "short":
-            if last.HA_close > pos["stop"]:
+        elif pos["side"] == "short":
+            if price > pos["stop"]:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
@@ -306,7 +329,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
                 "entry_price": pos["entry"],
                 "exit_price": price,
                 "qty": pos["qty"],
-                "net_pnl": round(net,6),
+                "net_pnl": round(net, 6),
                 "entry_time": pos["entry_time"],
                 "exit_time": now
             })
@@ -321,7 +344,7 @@ def run():
 
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Strategy LIVE (Trendline Trailing Stop Enabled)")
+    log("🚀 Strategy LIVE (PURE REVERSED VERSION)")
 
     while True:
         try:
