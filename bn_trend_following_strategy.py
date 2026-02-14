@@ -52,8 +52,8 @@ TRADES_FILE=f"{folder}/live_trades.csv"
 TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN="TEL_BOT_TOKEN"
-TELEGRAM_CHAT_ID="TEL_CHAT_ID"
+TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
