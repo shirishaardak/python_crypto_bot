@@ -38,7 +38,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 5
 
-TP_DISTANCE = {"BTCUSD": 250, "ETHUSD": 25}
+TP_DISTANCE = {"BTCUSD": 250, "ETHUSD": 12}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
