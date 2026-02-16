@@ -35,7 +35,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
-TIMEFRAME = "5m"
+TIMEFRAME = "1m"
 DAYS = 5
 
 TP_DISTANCE = {"BTCUSD": 250, "ETHUSD": 12}
@@ -232,12 +232,12 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if price < pos["stop"] or price > pos["tp"]:
+            if price < pos["stop"]:
                 exit_trade = True
 
         if pos["side"] == "short":
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if price > pos["stop"] or price < pos["tp"]:
+            if price > pos["stop"]:
                 exit_trade = True
 
         if exit_trade:

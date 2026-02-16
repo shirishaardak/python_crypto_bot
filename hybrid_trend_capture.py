@@ -21,7 +21,7 @@ TIMEFRAME = "5m"
 DAYS = 15
 
 STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
-TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
+TRAIL_STEP = {"BTCUSD": 50, "ETHUSD": 5}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
@@ -96,7 +96,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
     return df.astype(float).sort_index()
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=9):
+def calculate_trendline(df, order=5):
     data = df.copy().reset_index(drop=True)
 
     # ========= Heikin Ashi =========
@@ -137,10 +137,10 @@ def calculate_trendline(df, order=9):
     for i in range(1, len(data)):
         if not np.isnan(upper[i - 1]) and not np.isnan(lower[i - 1]):
 
-            if ha_close[i] > upper[i - 1] and ha_close[i] > trend:
+            if ha_close[i] > ha_close[i - 1] and ha_close[i] > trend:
                 trend = lower[i]
 
-            elif ha_close[i] < lower[i - 1] and ha_close[i] < trend:
+            elif ha_close[i] < ha_close[i - 1] and ha_close[i] < trend:
                 trend = upper[i]
 
         trendline[i] = trend
@@ -159,8 +159,8 @@ def process_symbol(symbol, df, price, state):
     candle_time = data.index[-2]
     pos = state["position"]
 
-    cross_up = last.HA_close > prev.HA_open and last.HA_close > prev.HA_close and last.HA_close > last.trendline
-    cross_down = last.HA_close < prev.HA_open and last.HA_close < prev.HA_close and last.HA_close < last.trendline
+    cross_up =  prev.HA_close < prev.trendline and last.HA_close > last.trendline
+    cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
 
     # ===== ENTRY TIME WINDOW =====
     now_ist = datetime.now()
@@ -174,7 +174,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - STOP_LOSS[symbol],
+                "stop": price - last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
@@ -187,7 +187,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + STOP_LOSS[symbol],
+                "stop": price + last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
