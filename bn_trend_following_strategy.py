@@ -24,11 +24,10 @@ from dotenv import load_dotenv
 from scipy.signal import argrelextrema
 import requests
 
-# ================= PATH =================
 sys.path.append(os.getcwd())
 load_dotenv()
 
-# ================= IST =================
+# ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def ist_now():
@@ -60,22 +59,21 @@ def send_telegram(msg):
         url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
         requests.post(url,json=payload,timeout=5)
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    except:
+        pass
 
-# ================= STATE =================
+# ================= GLOBAL STATE =================
 fyers=None
-CE_active=False
-PE_active=False
-CE_entry=0
-PE_entry=0
-CE_TSL=0
-PE_TSL=0
-CE_symbol=None
-PE_symbol=None
-CE_enter_time=None
-PE_enter_time=None
+position_type=None
+entry_price=0
+tsl=0
+entry_time=None
+symbol=None
 last_signal_candle=None
+trade_taken_today=False
+last_reset_date=None
+token_load_date=None
+model_load_date=None
 
 # ================= UTILS =================
 def commission(price,qty):
@@ -91,26 +89,41 @@ def save_trade(data):
     else:
         df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
 
+# ================= DAILY RESET =================
+def daily_reset():
+    global position_type, entry_price, tsl
+    global entry_time, symbol, last_signal_candle
+    global trade_taken_today
+
+    position_type=None
+    entry_price=0
+    tsl=0
+    entry_time=None
+    symbol=None
+    last_signal_candle=None
+    trade_taken_today=False
+
+    send_telegram("🔄 Daily Reset Completed")
+
 # ================= AUTH =================
 def load_token():
-    send_telegram("🔑 API Token Loading Started")
+    send_telegram("🔑 Loading API Token...")
     os.system("python auth/fyers_auth.py")
-    send_telegram("✅ API Token Loaded")
     return True
 
 def load_model():
-    try:
-        send_telegram("📡 Fyers API Model Loading...")
-        token=open(TOKEN_FILE).read().strip()
-        model=fyersModel.FyersModel(client_id=CLIENT_ID,token=token,is_async=False,log_path="")
-        send_telegram("✅ Fyers API Connected Successfully")
-        return model
-    except Exception as e:
-        send_telegram(f"❌ API Load Error: {e}")
-        raise
+    token=open(TOKEN_FILE).read().strip()
+    model=fyersModel.FyersModel(
+        client_id=CLIENT_ID,
+        token=token,
+        is_async=False,
+        log_path=""
+    )
+    send_telegram("📡 Fyers Model Connected")
+    return model
 
 # ================= DATA =================
-def get_stock_historical_data(data,fyers):
+def get_stock_historical_data(data):
     final_data=fyers.history(data=data)
     df=pd.DataFrame(final_data['candles'])
     df=df.rename(columns={0:'Date',1:'Open',2:'High',3:'Low',4:'Close',5:'V'})
@@ -156,7 +169,7 @@ def calculate_trendline(df):
     data.index=df.index
     return data
 
-# ================= MONTHLY EXPIRY =================
+# ================= EXPIRY =================
 def last_thursday(year,month):
     last_day=date(year,month,28)+timedelta(days=4)
     last_day=last_day-timedelta(days=last_day.day)
@@ -166,27 +179,22 @@ def last_thursday(year,month):
 def monthly_expiry_code():
     today=ist_today()
     exp=last_thursday(today.year,today.month)
-
     if today>exp:
         if today.month==12:
             exp=last_thursday(today.year+1,1)
         else:
             exp=last_thursday(today.year,today.month+1)
-
     return exp.strftime("%y%b").upper()
 
 # ================= OPTION BUILDER =================
-def build_option_symbol(spot_price,opt_type):
-
-    strike=int(round(spot_price/100)*100)
+def build_option_symbol(spot,opt_type):
+    strike=int(round(spot/100)*100)
     expiry=monthly_expiry_code()
-
-    symbol=f"NSE:BANKNIFTY{expiry}{strike}{opt_type}"
-
+    sym=f"NSE:BANKNIFTY{expiry}{strike}{opt_type}"
     try:
-        test=fyers.quotes({"symbols":symbol})
-        if "d" in test:
-            return symbol
+        test=fyers.quotes({"symbols":sym})
+        if test.get("d"):
+            return sym
     except:
         return None
 
@@ -202,15 +210,11 @@ def update_trailing(entry,current,sl):
 # ================= STRATEGY =================
 def run_strategy():
 
-    global CE_active,PE_active
-    global CE_entry,PE_entry
-    global CE_TSL,PE_TSL
-    global CE_symbol,PE_symbol
-    global CE_enter_time,PE_enter_time
-    global last_signal_candle
+    global position_type, entry_price, tsl
+    global entry_time, symbol, last_signal_candle
+    global trade_taken_today
 
-
-    spot_price=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
 
     hist={
         "symbol":SPOT_SYMBOL,
@@ -221,7 +225,7 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    df=get_stock_historical_data(hist,fyers)
+    df=get_stock_historical_data(hist)
     if len(df)<50:
         return
 
@@ -234,119 +238,89 @@ def run_strategy():
     if last_signal_candle==candle_time:
         return
 
-    buy_signal=last.HA_Close>last.trendline and last.HA_Close>prev.HA_Close
-    sell_signal=last.HA_Close<last.trendline and last.HA_Close<prev.HA_Close
+    buy=last.HA_Close>last.trendline and last.HA_Close>prev.HA_Close
+    sell=last.HA_Close<last.trendline and last.HA_Close<prev.HA_Close
 
-    if buy_signal and not CE_active and ist_time()>=time(9,30):
+    if position_type is None and not trade_taken_today and ist_time()>=time(9,30):
 
-        CE_symbol=build_option_symbol(spot_price,"CE")
-        if not CE_symbol:
+        if buy:
+            symbol=build_option_symbol(spot,"CE")
+            position_type="CE"
+        elif sell:
+            symbol=build_option_symbol(spot,"PE")
+            position_type="PE"
+        else:
             return
 
-        price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
-
-        CE_entry=price
-        CE_TSL=price-25
-        CE_enter_time=ist_now()
-        CE_active=True
-        last_signal_candle=candle_time
-
-        msg=f"⚡ BUY CE {CE_symbol} @ {price}"
-        print(msg)
-        send_telegram(msg)
-
-    if sell_signal and not PE_active and ist_time()>=time(9,30):
-
-        PE_symbol=build_option_symbol(spot_price,"PE")
-        if not PE_symbol:
+        if not symbol:
+            position_type=None
             return
 
-        price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
+        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        PE_entry=price
-        PE_TSL=price-25
-        PE_enter_time=ist_now()
-        PE_active=True
+        entry_price=price
+        tsl=price-25
+        entry_time=ist_now()
+        trade_taken_today=True
         last_signal_candle=candle_time
 
-        msg=f"⚡ BUY PE {PE_symbol} @ {price}"
-        print(msg)
-        send_telegram(msg)
+        send_telegram(f"⚡ BUY {position_type} {symbol} @ {price}")
 
-    if CE_active:
-        price=fyers.quotes({"symbols":CE_symbol})["d"][0]["v"]["lp"]
-        CE_TSL=update_trailing(CE_entry,price,CE_TSL)
+    if position_type:
 
-        if price<=CE_TSL or ist_time()>=time(15,15):
+        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+        tsl=update_trailing(entry_price,price,tsl)
 
-            net=calculate_pnl(CE_entry,price,QTY)-commission(price,QTY)
+        if price<=tsl or ist_time()>=time(15,15):
+
+            net=calculate_pnl(entry_price,price,QTY)-commission(price,QTY)
 
             save_trade({
-                "entry_time":CE_enter_time.isoformat(),
+                "entry_time":entry_time.isoformat(),
                 "exit_time":ist_now().isoformat(),
-                "symbol":CE_symbol,
-                "side":"BUY_CE",
-                "entry_price":CE_entry,
+                "symbol":symbol,
+                "side":position_type,
+                "entry_price":entry_price,
                 "exit_price":price,
                 "qty":QTY,
                 "net_pnl":net
             })
 
-            msg=f"🔁 EXIT CE {CE_symbol} PnL ₹{round(net,2)}"
-            print(msg)
-            send_telegram(msg)
-            CE_active=False
+            send_telegram(f"🔁 EXIT {symbol} PnL ₹{round(net,2)}")
 
-    if PE_active:
-        price=fyers.quotes({"symbols":PE_symbol})["d"][0]["v"]["lp"]
-        PE_TSL=update_trailing(PE_entry,price,PE_TSL)
-
-        if price<=PE_TSL or ist_time()>=time(15,15):
-
-            net=calculate_pnl(PE_entry,price,QTY)-commission(price,QTY)
-
-            save_trade({
-                "entry_time":PE_enter_time.isoformat(),
-                "exit_time":ist_now().isoformat(),
-                "symbol":PE_symbol,
-                "side":"BUY_PE",
-                "entry_price":PE_entry,
-                "exit_price":price,
-                "qty":QTY,
-                "net_pnl":net
-            })
-
-            msg=f"🔁 EXIT PE {PE_symbol} PnL ₹{round(net,2)}"
-            print(msg)
-            send_telegram(msg)
-            PE_active=False
+            position_type=None
 
 # ================= MAIN LOOP =================
-msg="🚀 BankNifty Monthly Algo Started"
-print(msg)
-send_telegram(msg)
-
-token_loaded=model_loaded=False
+send_telegram("🚀 BankNifty Monthly Algo Started (EC2 Tokyo)")
 
 while True:
     try:
+        now=ist_time()
+        today=ist_today()
 
-        market_open=time(9,15)
-        market_close=time(15,30)
+        # 3:30 AM RESET
+        if now>=time(3,30) and last_reset_date!=today:
+            daily_reset()
+            last_reset_date=today
 
-        if market_open<=ist_time()<market_close:
-            if not token_loaded:
-                token_loaded=load_token()
-            if not model_loaded:
+        # 9:00 TOKEN LOAD
+        if time(9,0)<=now<time(15,30):
+            if token_load_date!=today:
+                load_token()
+                token_load_date=today
+
+        # 9:15 MODEL LOAD
+        if time(9,15)<=now<time(15,30):
+            if model_load_date!=today:
                 fyers=load_model()
-                model_loaded=True
+                model_load_date=today
 
-        if time(9,30)<=ist_time()<=market_close and model_loaded:
+        # 9:30 STRATEGY START
+        if time(9,30)<=now<=time(15,30) and model_load_date==today:
             run_strategy()
 
         t.sleep(2)
 
     except Exception as e:
-        print(f"❌ Algo error {e}")
-        send_telegram(f"❌ Algo error {e}")
+        send_telegram(f"❌ Algo Error: {e}")
         t.sleep(5)
