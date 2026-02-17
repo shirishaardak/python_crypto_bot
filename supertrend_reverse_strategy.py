@@ -156,7 +156,8 @@ def calculate_heikin_ashi(df):
 # ================= TRENDLINE =================
 def calculate_trendline(df):
     ha = df.copy()
-
+    ha["ATR"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14)
+    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
     st = ta.supertrend(
         high=ha["HA_high"],
         low=ha["HA_low"],
@@ -196,7 +197,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
     now = datetime.now()
 
     # ===== ENTRY =====
-    if allow_entry and pos is None:
+    if allow_entry and pos is None and last.ATR > last.ATR_MA:
 
         if last.HA_close > last.SUPERTREND and prev.HA_close < prev.SUPERTREND:
             state["position"] = {
@@ -232,12 +233,12 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if price < pos["stop"]:
+            if last.HA_close < pos["stop"]:
                 exit_trade = True
 
         if pos["side"] == "short":
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if price > pos["stop"]:
+            if last.HA_close > pos["stop"]:
                 exit_trade = True
 
         if exit_trade:
