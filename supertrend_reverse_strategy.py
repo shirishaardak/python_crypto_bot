@@ -163,7 +163,7 @@ def calculate_trendline(df):
         low=ha["HA_low"],
         close=ha["HA_close"],
         length=21,
-        multiplier=2.5
+        multiplier=3.5
     )
 
     ha["SUPERTREND"] = st.iloc[:,0]
