@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pandas_ta as ta
+import numpy as np
 
 load_dotenv()
 
@@ -25,7 +26,7 @@ def send_telegram(msg, key=None, cooldown=30):
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
-    except Exception:
+    except:
         pass
 
 
@@ -36,13 +37,11 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
-
-EXECUTION_TF = "5m"
-HTF_TF = "15m"
+EXECUTION_TF = "15m"
 DAYS = 5
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_trend_system")
+SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
@@ -50,12 +49,12 @@ TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 LAST_CANDLE_TIME = {}
 
 
-# ================= UTILITIES =================
-def log(msg, tg=False, key=None):
+# ================= UTIL =================
+def log(msg, tg=False):
     text = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
     print(text)
     if tg:
-        send_telegram(text, key)
+        send_telegram(text)
 
 
 def commission(price, qty, symbol):
@@ -64,12 +63,22 @@ def commission(price, qty, symbol):
 
 
 def save_trade(trade):
-    trade_copy = trade.copy()
-    for t in ["entry_time", "exit_time"]:
-        trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
 
-    cols = ["entry_time","exit_time","symbol","side",
-            "entry_price","exit_price","qty","net_pnl"]
+    trade_copy = trade.copy()
+
+    trade_copy["entry_time"] = trade_copy["entry_time"].strftime("%Y-%m-%d %H:%M:%S")
+    trade_copy["exit_time"] = trade_copy["exit_time"].strftime("%Y-%m-%d %H:%M:%S")
+
+    cols = [
+        "entry_time",
+        "exit_time",
+        "symbol",
+        "side",
+        "entry_price",
+        "exit_price",
+        "qty",
+        "net_pnl"
+    ]
 
     pd.DataFrame([trade_copy])[cols].to_csv(
         TRADE_CSV,
@@ -91,8 +100,9 @@ def fetch_price(symbol):
         return None
 
 
-def fetch_candles(symbol, resolution, days=DAYS, tz="Asia/Kolkata"):
-    start = int((datetime.now() - timedelta(days=days)).timestamp())
+def fetch_candles(symbol, resolution):
+
+    start = int((datetime.now() - timedelta(days=DAYS)).timestamp())
 
     params = {
         "resolution": resolution,
@@ -115,10 +125,9 @@ def fetch_candles(symbol, resolution, days=DAYS, tz="Asia/Kolkata"):
 
         df.rename(columns=str.title, inplace=True)
 
-        df["Time"] = (
-            pd.to_datetime(df["Time"], unit="s", utc=True)
-            .dt.tz_convert(tz)
-        )
+        df["Time"] = pd.to_datetime(
+            df["Time"], unit="s", utc=True
+        ).dt.tz_convert("Asia/Kolkata")
 
         df.set_index("Time", inplace=True)
         df.sort_index(inplace=True)
@@ -131,88 +140,93 @@ def fetch_candles(symbol, resolution, days=DAYS, tz="Asia/Kolkata"):
 
 # ================= HEIKIN ASHI =================
 def calculate_heikin_ashi(df):
-    ha_df = df.copy()
 
-    ha_df["HA_close"] = (
-        ha_df["Open"] +
-        ha_df["High"] +
-        ha_df["Low"] +
-        ha_df["Close"]
-    ) / 4
-
-    ha_open = []
-    for i in range(len(ha_df)):
-        if i == 0:
-            ha_open.append((ha_df["Open"].iloc[0] + ha_df["Close"].iloc[0]) / 2)
-        else:
-            ha_open.append((ha_open[i-1] + ha_df["HA_close"].iloc[i-1]) / 2)
-
-    ha_df["HA_open"] = ha_open
-    ha_df["HA_high"] = ha_df[["High", "HA_open", "HA_close"]].max(axis=1)
-    ha_df["HA_low"] = ha_df[["Low", "HA_open", "HA_close"]].min(axis=1)
-
-    return ha_df
-
-
-# ================= TRENDLINE =================
-def calculate_trendline(df):
     ha = df.copy()
 
-    ha["ATR"] = ta.atr(
-        ha["HA_high"],
-        ha["HA_low"],
-        ha["HA_close"],
-        length=14
-    )
+    ha["HA_close"] = (ha["Open"] + ha["High"] + ha["Low"] + ha["Close"]) / 4
+    ha["HA_open"] = 0.0
 
-    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
+    ha.iloc[0, ha.columns.get_loc("HA_open")] = (
+        ha["Open"].iloc[0] + ha["Close"].iloc[0]
+    ) / 2
 
-    st = ta.supertrend(
-        high=ha["HA_high"],
-        low=ha["HA_low"],
-        close=ha["HA_close"],
-        length=21,
-        multiplier=3.5
-    )
+    for i in range(1, len(ha)):
+        ha.iloc[i, ha.columns.get_loc("HA_open")] = (
+            ha["HA_open"].iloc[i-1] + ha["HA_close"].iloc[i-1]
+        ) / 2
 
-    ha["SUPERTREND"] = st.iloc[:,0]
+    ha["HA_high"] = ha[["High","HA_open","HA_close"]].max(axis=1)
+    ha["HA_low"] = ha[["Low","HA_open","HA_close"]].min(axis=1)
 
     return ha
 
 
-# ================= HTF BIAS =================
-def get_bias(symbol):
-    df_htf = fetch_candles(symbol, HTF_TF)
+# ================= TRENDLINE =================
+def calculate_trendline(df):
 
-    if df_htf is None or len(df_htf) < 100:
-        return None
+    # ATR
+    df["ATR"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=14)
+    df["ATR_MA"] = df["ATR"].rolling(21).mean()
 
-    df_htf = calculate_heikin_ashi(df_htf)
-    df_htf = calculate_trendline(df_htf)
+    # ADX
+    adx = ta.adx(
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
+        length=14
+    )
 
-    last = df_htf.iloc[-2]
+    df["ADX"] = adx["ADX_14"]
 
-    if last.HA_close > last.SUPERTREND:
-        return "bull"
-    elif last.HA_close < last.SUPERTREND:
-        return "bear"
+    # Supertrend
+    st = ta.supertrend(
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
+        length=7,
+        multiplier=3
+    )
 
-    return None
+    df["SUPERTREND"] = st.iloc[:, 0]
 
+    # Upper / Lower bands
+    order = 3
+    df["UPPER"] = df["HA_high"].rolling(order, min_periods=1).max()
+    df["LOWER"] = df["HA_low"].rolling(order, min_periods=1).min()
 
-# ================= CANDLE CHECK =================
-def is_new_candle(symbol, df):
-    last_closed_time = df.index[-2]
+    df["trendline"] = np.nan
 
-    if symbol not in LAST_CANDLE_TIME:
-        LAST_CANDLE_TIME[symbol] = last_closed_time
-        return True
+    trend = df["HA_close"].iloc[0]
+    df.iloc[0, df.columns.get_loc("trendline")] = trend
 
-    if last_closed_time != LAST_CANDLE_TIME[symbol]:
-        LAST_CANDLE_TIME[symbol] = last_closed_time
-        return True
+    for i in range(1, len(df)):
 
-    return False
+        curr_close = df["HA_close"].iloc[i]
+        prev_close = df["HA_close"].iloc[i-1]
+        prev_open  = df["HA_open"].iloc[i-1]
+
+        lower_band = df["LOWER"].iloc[i]
+        upper_band = df["UPPER"].iloc[i]
+
+        # Bullish
+        if (
+            curr_close > prev_close and
+            curr_close > prev_open and
+            curr_close > trend
+        ):
+            trend = lower_band
+
+        # Bearish
+        elif (
+            curr_close < prev_close and
+            curr_close < prev_open and
+            curr_close < trend
+        ):
+            trend = upper_band
+
+        df.iloc[i, df.columns.get_loc("trendline")] = trend
+
+    return df
 
 
 # ================= STRATEGY =================
@@ -227,65 +241,56 @@ def process_symbol(symbol, df, price, state, allow_entry):
     pos = state["position"]
     now = datetime.now()
 
-    bias = get_bias(symbol)
-    if bias is None:
-        return
-
-    # ===== ENTRY =====
-    if allow_entry and pos is None:
-
-        strong_vol = last.ATR > last.ATR_MA * 1.2
+    # ENTRY
+    if (
+        allow_entry and
+        pos is None and
+        last.ADX > 22 and
+        last.ATR > last.ATR_MA
+    ):
 
         long_signal = (
             last.HA_close > last.SUPERTREND and
-            prev.HA_close < prev.SUPERTREND and
-            bias == "bull" and
-            strong_vol
+            last.HA_close > prev.HA_close and
+            last.HA_close > last.trendline
         )
 
         short_signal = (
             last.HA_close < last.SUPERTREND and
-            prev.HA_close > prev.SUPERTREND and
-            bias == "bear" and
-            strong_vol
+            last.HA_close < prev.HA_close and
+            last.HA_close < last.trendline
         )
 
-        if long_signal:
+        if long_signal or short_signal:
+
+            side = "long" if long_signal else "short"
+            qty = DEFAULT_CONTRACTS[symbol]
+
             state["position"] = {
-                "side": "long",
+                "side": side,
                 "entry": price,
                 "stop": last.SUPERTREND,
-                "qty": DEFAULT_CONTRACTS[symbol],
+                "qty": qty,
                 "entry_time": now
             }
-            log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
+
+            log(f"{symbol} {side.upper()} ENTRY @ {price} | Qty: {qty}", tg=True)
             return
 
-        if short_signal:
-            state["position"] = {
-                "side": "short",
-                "entry": price,
-                "stop": last.SUPERTREND,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now
-            }
-            log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
-            return
-
-    # ===== EXIT =====
+    # EXIT
     if pos:
 
         pos["stop"] = last.SUPERTREND
+
         exit_trade = False
 
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if last.HA_close < pos["stop"]:
+            if price < pos["stop"]:
                 exit_trade = True
-
         else:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if last.HA_close > pos["stop"]:
+            if price > pos["stop"]:
                 exit_trade = True
 
         if exit_trade:
@@ -296,18 +301,17 @@ def process_symbol(symbol, df, price, state, allow_entry):
             net = pnl - fee
 
             save_trade({
+                "entry_time": pos["entry_time"],
+                "exit_time": now,
                 "symbol": symbol,
                 "side": pos["side"],
                 "entry_price": pos["entry"],
                 "exit_price": price,
                 "qty": pos["qty"],
-                "net_pnl": round(net,6),
-                "entry_time": pos["entry_time"],
-                "exit_time": now
+                "net_pnl": round(net, 6)
             })
 
-            emoji = "🟢" if net > 0 else "🔴"
-            log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+            log(f"{symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
             state["position"] = None
 
@@ -317,22 +321,23 @@ def run():
 
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Professional Trend Strategy LIVE Started", tg=True)
+    log("🚀 Trend Strategy LIVE Started", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
                 df = fetch_candles(symbol, EXECUTION_TF)
-
-                if df is None or len(df) < 100:
+                if df is None or len(df) < 120:
                     continue
 
                 price = fetch_price(symbol)
                 if price is None:
                     continue
 
-                new_candle = is_new_candle(symbol, df)
+                new_candle = df.index[-2] != LAST_CANDLE_TIME.get(symbol)
+                if new_candle:
+                    LAST_CANDLE_TIME[symbol] = df.index[-2]
 
                 if state[symbol]["position"]:
                     process_symbol(symbol, df, price, state[symbol], allow_entry=False)
@@ -342,7 +347,7 @@ def run():
             time.sleep(10)
 
         except Exception as e:
-            log(f"🚨 Runtime error: {e}", tg=True)
+            log(f"Runtime error: {e}", tg=True)
             time.sleep(5)
 
 
