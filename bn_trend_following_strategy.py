@@ -70,7 +70,6 @@ tsl=0
 entry_time=None
 symbol=None
 last_signal_candle=None
-trade_taken_today=False
 last_reset_date=None
 token_load_date=None
 model_load_date=None
@@ -93,7 +92,6 @@ def save_trade(data):
 def daily_reset():
     global position_type, entry_price, tsl
     global entry_time, symbol, last_signal_candle
-    global trade_taken_today
 
     position_type=None
     entry_price=0
@@ -101,7 +99,6 @@ def daily_reset():
     entry_time=None
     symbol=None
     last_signal_candle=None
-    trade_taken_today=False
 
     send_telegram("🔄 Daily Reset Completed")
 
@@ -161,9 +158,9 @@ def calculate_trendline(df):
 
     for i in range(1,len(data)):
         if data["HA_High"].iloc[i]==data["smoothed_high"].iloc[i]:
-            trendline=data["HA_High"].iloc[i]
-        elif data["HA_Low"].iloc[i]==data["smoothed_low"].iloc[i]:
             trendline=data["HA_Low"].iloc[i]
+        elif data["HA_Low"].iloc[i]==data["smoothed_low"].iloc[i]:
+            trendline=data["HA_High"].iloc[i]
         data.loc[i,"trendline"]=trendline
 
     data.index=df.index
@@ -212,7 +209,6 @@ def run_strategy():
 
     global position_type, entry_price, tsl
     global entry_time, symbol, last_signal_candle
-    global trade_taken_today
 
     spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
 
@@ -235,13 +231,16 @@ def run_strategy():
     prev=df.iloc[-3]
     candle_time=df.index[-2]
 
-    if last_signal_candle==candle_time:
+    # Avoid duplicate entry on same candle
+    if last_signal_candle == candle_time:
         return
 
-    buy=last.HA_Close>last.trendline and last.HA_Close>prev.HA_Close
-    sell=last.HA_Close<last.trendline and last.HA_Close<prev.HA_Close
+    # ===== PROPER CROSSOVER LOGIC =====
+    buy = prev.HA_Close <= prev.trendline and last.HA_Close > last.trendline
+    sell = prev.HA_Close >= prev.trendline and last.HA_Close < last.trendline
 
-    if position_type is None and not trade_taken_today and ist_time()>=time(9,30):
+    # ================= ENTRY =================
+    if position_type is None and ist_time() >= time(9,30):
 
         if buy:
             symbol=build_option_symbol(spot,"CE")
@@ -261,11 +260,11 @@ def run_strategy():
         entry_price=price
         tsl=price-25
         entry_time=ist_now()
-        trade_taken_today=True
         last_signal_candle=candle_time
 
         send_telegram(f"⚡ BUY {position_type} {symbol} @ {price}")
 
+    # ================= EXIT =================
     if position_type:
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
@@ -288,7 +287,9 @@ def run_strategy():
 
             send_telegram(f"🔁 EXIT {symbol} PnL ₹{round(net,2)}")
 
+            # Reset state
             position_type=None
+            last_signal_candle=None
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 BankNifty Monthly Algo Started (EC2 Tokyo)")
@@ -298,24 +299,20 @@ while True:
         now=ist_time()
         today=ist_today()
 
-        # 3:30 AM RESET
         if now>=time(3,30) and last_reset_date!=today:
             daily_reset()
             last_reset_date=today
 
-        # 9:00 TOKEN LOAD
         if time(9,0)<=now<time(15,30):
             if token_load_date!=today:
                 load_token()
                 token_load_date=today
 
-        # 9:15 MODEL LOAD
         if time(9,15)<=now<time(15,30):
             if model_load_date!=today:
                 fyers=load_model()
                 model_load_date=today
 
-        # 9:30 STRATEGY START
         if time(9,30)<=now<=time(15,30) and model_load_date==today:
             run_strategy()
 
