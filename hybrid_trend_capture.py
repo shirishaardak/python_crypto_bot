@@ -123,7 +123,7 @@ def calculate_trendline(df, order=5):
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
     data["ATR"] = ta.atr(data["HA_high"], data["HA_low"], data["HA_close"], length=14)
-    data["ATR_MA"] = data["ATR"].rolling(order).mean()
+    data["ATR_MA"] = data["ATR"].rolling(14).mean()
 
     # ========= Trendline =========
     trendline = np.zeros(len(data))
@@ -159,8 +159,8 @@ def process_symbol(symbol, df, price, state):
     candle_time = data.index[-2]
     pos = state["position"]
 
-    cross_up =  prev.HA_close < prev.trendline and last.HA_close > last.trendline
-    cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
+    cross_up =  last.HA_close > prev.HA_close and last.HA_close > last.trendline
+    cross_down = last.HA_close < prev.HA_close and last.HA_close < last.trendline
 
     # ===== ENTRY TIME WINDOW =====
     now_ist = datetime.now()
@@ -174,7 +174,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - last.trendline,
+                "stop": last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
@@ -187,7 +187,7 @@ def process_symbol(symbol, df, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + last.trendline,
+                "stop": last.trendline,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
