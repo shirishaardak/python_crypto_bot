@@ -39,6 +39,9 @@ def ist_today():
 def ist_time():
     return ist_now().time()
 
+BASE_DIR = os.getcwd()
+SAVE_DIR = os.path.join(BASE_DIR, "data", "bn_trend_following_strategy")
+os.makedirs(SAVE_DIR, exist_ok=True)
 # ================= CONFIG =================
 CLIENT_ID="98E1TAKD4T-100"
 QTY=30
@@ -75,6 +78,18 @@ token_load_date=None
 model_load_date=None
 last_exit_time=None
 
+
+def save_processed_data(df, symbol):
+    path = os.path.join(SAVE_DIR, f"data_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": df["HA_Open"],
+        "HA_high": df["HA_High"],
+        "HA_low": df["HA_Low"],
+        "HA_close": df["HA_Close"],
+        "Trendline": df["trendline"],
+    })
+    out.to_csv(path, index=False)
 # ================= UTILS =================
 def commission(price,qty):
     return round(price*qty*COMMISSION_RATE,6)
@@ -211,8 +226,8 @@ def run_strategy():
     if last_signal_candle == candle_time:
         return
 
-    buy = prev.HA_Close <= prev_prev.trendline and last.HA_Close > last.trendline
-    sell = prev.HA_Close >= prev_prev.trendline and last.HA_Close < last.trendline
+    buy = last.HA_Close > last.trendline and last.HA_Close > prev.HA_Close
+    sell = last.HA_Close < last.trendline and last.HA_Close < prev.HA_Close
 
     if position_type is None and ist_time() >= time(9,30):
 
