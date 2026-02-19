@@ -73,6 +73,7 @@ last_signal_candle=None
 last_reset_date=None
 token_load_date=None
 model_load_date=None
+last_exit_time=None
 
 # ================= UTILS =================
 def commission(price,qty):
@@ -91,7 +92,7 @@ def save_trade(data):
 # ================= DAILY RESET =================
 def daily_reset():
     global position_type, entry_price, tsl
-    global entry_time, symbol, last_signal_candle
+    global entry_time, symbol, last_signal_candle, last_exit_time
 
     position_type=None
     entry_price=0
@@ -99,12 +100,12 @@ def daily_reset():
     entry_time=None
     symbol=None
     last_signal_candle=None
+    last_exit_time=None
 
     send_telegram("🔄 Daily Reset Completed")
 
 # ================= AUTH =================
 def load_token():
-    send_telegram("🔑 Loading API Token...")
     os.system("python auth/fyers_auth.py")
     return True
 
@@ -166,49 +167,24 @@ def calculate_trendline(df):
     data.index=df.index
     return data
 
-# ================= EXPIRY =================
-def last_thursday(year,month):
-    last_day=date(year,month,28)+timedelta(days=4)
-    last_day=last_day-timedelta(days=last_day.day)
-    offset=(last_day.weekday()-3)%7
-    return last_day-timedelta(days=offset)
-
-def monthly_expiry_code():
-    today=ist_today()
-    exp=last_thursday(today.year,today.month)
-    if today>exp:
-        if today.month==12:
-            exp=last_thursday(today.year+1,1)
-        else:
-            exp=last_thursday(today.year,today.month+1)
-    return exp.strftime("%y%b").upper()
-
-# ================= OPTION BUILDER =================
-def build_option_symbol(spot,opt_type):
-    strike=int(round(spot/100)*100)
-    expiry=monthly_expiry_code()
-    sym=f"NSE:BANKNIFTY{expiry}{strike}{opt_type}"
-    try:
-        test=fyers.quotes({"symbols":sym})
-        if test.get("d"):
-            return sym
-    except:
-        return None
-
 # ================= TRAILING =================
 def update_trailing(entry,current,sl):
     profit=current-entry
     if profit<=0:
         return sl
-    steps=int(profit//1)
-    new_sl=entry-50+(steps*25)
+    steps=int(profit//5)
+    new_sl=entry-30+(steps*10)
     return max(sl,new_sl)
 
 # ================= STRATEGY =================
 def run_strategy():
 
     global position_type, entry_price, tsl
-    global entry_time, symbol, last_signal_candle
+    global entry_time, symbol, last_signal_candle, last_exit_time
+
+    # 5 minute cooldown
+    if last_exit_time and (ist_now()-last_exit_time).seconds < 300:
+        return
 
     spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
 
@@ -229,42 +205,40 @@ def run_strategy():
 
     last=df.iloc[-2]
     prev=df.iloc[-3]
+    prev_prev=df.iloc[-4]
     candle_time=df.index[-2]
 
-    # Avoid duplicate entry on same candle
     if last_signal_candle == candle_time:
         return
 
-    # ===== PROPER CROSSOVER LOGIC =====
-    buy = last.HA_Close > prev.trendline and last.HA_Close > prev.HA_Close
-    sell = last.HA_Close < prev.trendline and last.HA_Close < prev.HA_Close
+    buy = prev.HA_Close <= prev_prev.trendline and last.HA_Close > last.trendline
+    sell = prev.HA_Close >= prev_prev.trendline and last.HA_Close < last.trendline
 
-    # ================= ENTRY =================
     if position_type is None and ist_time() >= time(9,30):
 
         if buy:
-            symbol=build_option_symbol(spot,"CE")
+            symbol = None
             position_type="CE"
         elif sell:
-            symbol=build_option_symbol(spot,"PE")
+            symbol = None
             position_type="PE"
         else:
             return
 
-        if not symbol:
-            position_type=None
-            return
+        opt = "CE" if buy else "PE"
+        strike=int(round(spot/100)*100)
+        expiry=date.today().strftime("%y%b").upper()
+        symbol=f"NSE:BANKNIFTY{expiry}{strike}{opt}"
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         entry_price=price
-        tsl=price-50
+        tsl=price-30
         entry_time=ist_now()
         last_signal_candle=candle_time
 
-        send_telegram(f"⚡ BUY {position_type} {symbol} @ {price}")
+        send_telegram(f"⚡ BUY {symbol} @ {price}")
 
-    # ================= EXIT =================
     if position_type:
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
@@ -287,12 +261,11 @@ def run_strategy():
 
             send_telegram(f"🔁 EXIT {symbol} PnL ₹{round(net,2)}")
 
-            # Reset state
             position_type=None
-            last_signal_candle=None
+            last_exit_time=ist_now()
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 BankNifty Monthly Algo Started (EC2 Tokyo)")
+send_telegram("🚀 BankNifty Monthly Algo Started")
 
 while True:
     try:
