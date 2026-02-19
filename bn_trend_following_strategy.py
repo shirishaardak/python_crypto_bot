@@ -39,9 +39,6 @@ def ist_today():
 def ist_time():
     return ist_now().time()
 
-BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "bn_trend_following_strategy")
-os.makedirs(SAVE_DIR, exist_ok=True)
 # ================= CONFIG =================
 CLIENT_ID="98E1TAKD4T-100"
 QTY=30
@@ -69,7 +66,6 @@ def send_telegram(msg):
 fyers=None
 position_type=None
 entry_price=0
-tsl=0
 entry_time=None
 symbol=None
 last_signal_candle=None
@@ -78,18 +74,10 @@ token_load_date=None
 model_load_date=None
 last_exit_time=None
 
+daily_ce_symbol=None
+daily_pe_symbol=None
+daily_strike=None
 
-def save_processed_data(df, symbol):
-    path = os.path.join(SAVE_DIR, f"data_processed.csv")
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": df["HA_Open"],
-        "HA_high": df["HA_High"],
-        "HA_low": df["HA_Low"],
-        "HA_close": df["HA_Close"],
-        "Trendline": df["trendline"],
-    })
-    out.to_csv(path, index=False)
 # ================= UTILS =================
 def commission(price,qty):
     return round(price*qty*COMMISSION_RATE,6)
@@ -106,16 +94,20 @@ def save_trade(data):
 
 # ================= DAILY RESET =================
 def daily_reset():
-    global position_type, entry_price, tsl
-    global entry_time, symbol, last_signal_candle, last_exit_time
+    global position_type, entry_price, entry_time
+    global symbol, last_signal_candle, last_exit_time
+    global daily_ce_symbol, daily_pe_symbol, daily_strike
 
     position_type=None
     entry_price=0
-    tsl=0
     entry_time=None
     symbol=None
     last_signal_candle=None
     last_exit_time=None
+
+    daily_ce_symbol=None
+    daily_pe_symbol=None
+    daily_strike=None
 
     send_telegram("🔄 Daily Reset Completed")
 
@@ -134,6 +126,24 @@ def load_model():
     )
     send_telegram("📡 Fyers Model Connected")
     return model
+
+# ================= LOCK STRIKE =================
+def lock_atm_strike():
+    global daily_ce_symbol, daily_pe_symbol, daily_strike
+
+    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    daily_strike=int(round(spot/100)*100)
+    expiry=date.today().strftime("%y%b").upper()
+
+    daily_ce_symbol=f"NSE:BANKNIFTY{expiry}{daily_strike}CE"
+    daily_pe_symbol=f"NSE:BANKNIFTY{expiry}{daily_strike}PE"
+
+    send_telegram(
+        f"🔒 ATM Locked @ 9:20\n"
+        f"Strike: {daily_strike}\n"
+        f"CE: {daily_ce_symbol}\n"
+        f"PE: {daily_pe_symbol}"
+    )
 
 # ================= DATA =================
 def get_stock_historical_data(data):
@@ -182,32 +192,22 @@ def calculate_trendline(df):
     data.index=df.index
     return data
 
-# ================= TRAILING =================
-def update_trailing(entry, current, sl):
-    profit = current - entry
-
-    if profit < 25:
-        return sl
-
-    steps = int(profit // 25)
-    new_sl = entry + (steps - 1) * 25
-
-    return max(sl, new_sl)
-
 # ================= STRATEGY =================
 def run_strategy():
 
-    global position_type, entry_price, tsl
+    global position_type, entry_price
     global entry_time, symbol, last_signal_candle, last_exit_time
 
-    # 5 minute cooldown
-    if last_exit_time and (ist_now()-last_exit_time).seconds < 300:
+    if last_exit_time and (ist_now()-last_exit_time).seconds<300:
         return
 
-    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    ce_symbol=daily_ce_symbol
+    pe_symbol=daily_pe_symbol
 
-    hist={
-        "symbol":SPOT_SYMBOL,
+    if not ce_symbol or not pe_symbol:
+        return
+
+    hist_template={
         "resolution":"5",
         "date_format":"1",
         "range_from":(ist_today()-timedelta(days=5)).strftime("%Y-%m-%d"),
@@ -215,54 +215,81 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    df=get_stock_historical_data(hist)
-    if len(df)<50:
+    # ===== CE DATA =====
+    hist_ce=hist_template.copy()
+    hist_ce["symbol"]=ce_symbol
+    df_ce=get_stock_historical_data(hist_ce)
+
+    # ===== PE DATA =====
+    hist_pe=hist_template.copy()
+    hist_pe["symbol"]=pe_symbol
+    df_pe=get_stock_historical_data(hist_pe)
+
+    if len(df_ce)<50 or len(df_pe)<50:
         return
 
-    df=calculate_trendline(df)
+    df_ce=calculate_trendline(df_ce)
+    df_pe=calculate_trendline(df_pe)
 
-    last=df.iloc[-2]
-    prev=df.iloc[-3]
-    prev_prev=df.iloc[-4]
-    candle_time=df.index[-2]
+    last_ce=df_ce.iloc[-2]
+    prev_ce=df_ce.iloc[-3]
+    last_pe=df_pe.iloc[-2]
+    prev_pe=df_pe.iloc[-3]
 
-    if last_signal_candle == candle_time:
+    candle_time_ce=df_ce.index[-2]
+    candle_time_pe=df_pe.index[-2]
+
+    if last_signal_candle in [candle_time_ce,candle_time_pe]:
         return
 
-    buy = last.HA_Close > last.trendline and last.HA_Close > prev.HA_Close
-    sell = last.HA_Close < last.trendline and last.HA_Close < prev.HA_Close
+    buy_call=last_ce.HA_Close>last_ce.trendline and last_ce.HA_Close>prev_ce.HA_Close
+    buy_put=last_pe.HA_Close>last_pe.trendline and last_pe.HA_Close>prev_pe.HA_Close
 
-    if position_type is None and ist_time() >= time(9,30):
+    # ================= ENTRY =================
+    if position_type is None and ist_time()>=time(9,30):
 
-        if buy:
-            symbol = None
+        if buy_call:
+            symbol=ce_symbol
             position_type="CE"
-        elif sell:
-            symbol = None
+            last_signal_candle=candle_time_ce
+
+        elif buy_put:
+            symbol=pe_symbol
             position_type="PE"
+            last_signal_candle=candle_time_pe
         else:
             return
 
-        opt = "CE" if buy else "PE"
-        strike=int(round(spot/100)*100)
-        expiry=date.today().strftime("%y%b").upper()
-        symbol=f"NSE:BANKNIFTY{expiry}{strike}{opt}"
-
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
-
         entry_price=price
-        tsl=price-50
         entry_time=ist_now()
-        last_signal_candle=candle_time
 
         send_telegram(f"⚡ BUY {symbol} @ {price}")
 
+    # ================= EXIT =================
     if position_type:
 
-        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
-        tsl=update_trailing(entry_price,price,tsl)
+        hist_exit=hist_template.copy()
+        hist_exit["symbol"]=symbol
+        df_exit=get_stock_historical_data(hist_exit)
 
-        if price<=tsl or ist_time()>=time(15,15):
+        if len(df_exit)<50:
+            return
+
+        df_exit=calculate_trendline(df_exit)
+        last=df_exit.iloc[-2]
+
+        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+
+        exit_signal=False
+
+        if last.HA_Close<last.trendline:
+            exit_signal=True
+
+        if ist_time()>=time(15,15):
+            exit_signal=True
+
+        if exit_signal:
 
             net=calculate_pnl(entry_price,price,QTY)-commission(price,QTY)
 
@@ -277,13 +304,13 @@ def run_strategy():
                 "net_pnl":net
             })
 
-            send_telegram(f"🔁 EXIT {symbol} PnL ₹{round(net,2)}")
+            send_telegram(f"🔁 EXIT {symbol} (Trendline Break) PnL ₹{round(net,2)}")
 
             position_type=None
             last_exit_time=ist_now()
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 BankNifty Monthly Algo Started")
+send_telegram("🚀 BankNifty Trendline Option Algo Started")
 
 while True:
     try:
@@ -299,10 +326,11 @@ while True:
                 load_token()
                 token_load_date=today
 
-        if time(9,15)<=now<time(15,30):
+        if time(9,20)<=now<time(9,25):
             if model_load_date!=today:
                 fyers=load_model()
                 model_load_date=today
+                lock_atm_strike()
 
         if time(9,30)<=now<=time(15,30) and model_load_date==today:
             run_strategy()
