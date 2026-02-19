@@ -201,7 +201,7 @@ def update_trailing(entry,current,sl):
     if profit<=0:
         return sl
     steps=int(profit//1)
-    new_sl=entry-25+(steps*1)
+    new_sl=entry-50+(steps*25)
     return max(sl,new_sl)
 
 # ================= STRATEGY =================
@@ -236,8 +236,8 @@ def run_strategy():
         return
 
     # ===== PROPER CROSSOVER LOGIC =====
-    buy = prev.HA_Close <= prev.trendline and last.HA_Close > last.trendline
-    sell = prev.HA_Close >= prev.trendline and last.HA_Close < last.trendline
+    buy = last.HA_Close > prev.trendline and last.HA_Close > prev.HA_Close
+    sell = last.HA_Close < prev.trendline and last.HA_Close < prev.HA_Close
 
     # ================= ENTRY =================
     if position_type is None and ist_time() >= time(9,30):
@@ -258,7 +258,7 @@ def run_strategy():
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         entry_price=price
-        tsl=price-25
+        tsl=price-50
         entry_time=ist_now()
         last_signal_candle=candle_time
 
