@@ -183,13 +183,16 @@ def calculate_trendline(df):
     return data
 
 # ================= TRAILING =================
-def update_trailing(entry,current,sl):
-    profit=current-entry
-    if profit<=0:
+def update_trailing(entry, current, sl):
+    profit = current - entry
+
+    if profit < 25:
         return sl
-    steps=int(profit//5)
-    new_sl=entry-30+(steps*10)
-    return max(sl,new_sl)
+
+    steps = int(profit // 25)
+    new_sl = entry + (steps - 1) * 25
+
+    return max(sl, new_sl)
 
 # ================= STRATEGY =================
 def run_strategy():
@@ -248,7 +251,7 @@ def run_strategy():
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         entry_price=price
-        tsl=price-30
+        tsl=price-50
         entry_time=ist_now()
         last_signal_candle=candle_time
 
