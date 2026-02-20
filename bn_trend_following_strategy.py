@@ -231,13 +231,13 @@ def run_strategy():
     df_ce=calculate_trendline(df_ce)
     df_pe=calculate_trendline(df_pe)
 
-    last_ce=df_ce.iloc[-2]
-    prev_ce=df_ce.iloc[-3]
-    last_pe=df_pe.iloc[-2]
-    prev_pe=df_pe.iloc[-3]
+    last_ce=df_ce.iloc[-1]
+    prev_ce=df_ce.iloc[-2]
+    last_pe=df_pe.iloc[-1]
+    prev_pe=df_pe.iloc[-2]
 
-    candle_time_ce=df_ce.index[-2]
-    candle_time_pe=df_pe.index[-2]
+    candle_time_ce=df_ce.index[-1]
+    candle_time_pe=df_pe.index[-1]
 
     if last_signal_candle in [candle_time_ce,candle_time_pe]:
         return
@@ -246,7 +246,7 @@ def run_strategy():
     buy_put=last_pe.HA_Close>last_pe.trendline and last_pe.HA_Close>prev_pe.HA_Close
 
     # ================= ENTRY =================
-    if position_type is None and ist_time()>=time(9,30):
+    if position_type is None and ist_time()>=time(9,30) and ist_time()<=time(15,15):
 
         if buy_call:
             symbol=ce_symbol

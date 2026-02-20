@@ -96,7 +96,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
     return df.astype(float).sort_index()
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=5):
+def calculate_trendline(df, order=9):
     data = df.copy().reset_index(drop=True)
 
     # ========= Heikin Ashi =========
@@ -123,7 +123,7 @@ def calculate_trendline(df, order=5):
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
     data["ATR"] = ta.atr(data["HA_high"], data["HA_low"], data["HA_close"], length=14)
-    data["ATR_MA"] = data["ATR"].rolling(14).mean()
+    data["ATR_MA"] = data["ATR"].rolling(21).mean()
 
     # ========= Trendline =========
     trendline = np.zeros(len(data))
@@ -159,8 +159,8 @@ def process_symbol(symbol, df, price, state):
     candle_time = data.index[-2]
     pos = state["position"]
 
-    cross_up =  last.HA_close > prev.HA_close and last.HA_close > last.trendline
-    cross_down = last.HA_close < prev.HA_close and last.HA_close < last.trendline
+    cross_up =  prev.HA_close < prev.trendline and last.HA_close > last.trendline
+    cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
 
     # ===== ENTRY TIME WINDOW =====
     now_ist = datetime.now()
@@ -180,7 +180,7 @@ def process_symbol(symbol, df, price, state):
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
-            log(f"{symbol} LONG ENTRY @ {price}")
+            log(f"{symbol} LONG ENTRY @ {price} | SL: {state['position']['stop']}")
             return
 
         if cross_down:
@@ -193,7 +193,7 @@ def process_symbol(symbol, df, price, state):
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
-            log(f"{symbol} SHORT ENTRY @ {price}")
+            log(f"{symbol} SHORT ENTRY @ {price} | SL: {state['position']['stop']}")
             return
 
     # ===== EXIT + TRAILING LOGIC =====
@@ -207,8 +207,9 @@ def process_symbol(symbol, df, price, state):
                 steps = int(moved // step)
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
+                log(f"{symbol} LONG TRAIL -> New SL: {pos['stop']}")
 
-            if last.HA_close < pos['stop']:
+            if price < pos['stop']:
                 exit_trade(symbol, price, pos, state)
 
         if pos["side"] == "short":
@@ -217,8 +218,9 @@ def process_symbol(symbol, df, price, state):
                 steps = int(moved // step)
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
+                log(f"{symbol} SHORT TRAIL -> New SL: {pos['stop']}")
 
-            if last.HA_close > pos['stop']:
+            if price > pos['stop']:
                 exit_trade(symbol, price, pos, state)
 
 def exit_trade(symbol, price, pos, state):
