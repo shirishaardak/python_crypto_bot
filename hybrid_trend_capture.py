@@ -5,8 +5,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, time as dt_time
 import pandas_ta as ta
-from scipy.signal import argrelextrema
 from dotenv import load_dotenv
+import traceback
 
 load_dotenv()
 
@@ -37,31 +37,35 @@ def commission(price, qty, symbol):
     return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
 def save_trade(trade):
-    trade_copy = trade.copy()
-    for t in ["entry_time", "exit_time"]:
-        trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        trade_copy = trade.copy()
 
-    cols = ["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]
-    pd.DataFrame([trade_copy])[cols].to_csv(
-        TRADE_CSV,
-        mode="a",
-        header=not os.path.exists(TRADE_CSV),
-        index=False
-    )
+        for t in ["entry_time", "exit_time"]:
+            if isinstance(trade_copy.get(t), datetime):
+                trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                trade_copy[t] = str(trade_copy.get(t))
 
-def save_processed_data(data, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+        cols = [
+            "entry_time", "exit_time", "symbol", "side",
+            "entry_price", "exit_price", "qty", "net_pnl"
+        ]
 
-    out = pd.DataFrame({
-        "time": data.index,
-        "HA_open": data["HA_open"],
-        "HA_high": data["HA_high"],
-        "HA_low": data["HA_low"],
-        "HA_close": data["HA_close"],
-        "trendline": data["trendline"]
-    })
+        df = pd.DataFrame([trade_copy])[cols]
 
-    out.to_csv(path, index=False)
+        df.to_csv(
+            TRADE_CSV,
+            mode="a",
+            header=not os.path.exists(TRADE_CSV),
+            index=False
+        )
+
+        log("Trade saved successfully.")
+
+    except Exception:
+        log("ERROR SAVING TRADE:")
+        log(traceback.format_exc())
+
 
 # ================= DATA =================
 def fetch_price(symbol):
@@ -95,11 +99,12 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
     return df.astype(float).sort_index()
 
+
 # ================= TRENDLINE =================
 def calculate_trendline(df, order=9):
     data = df.copy().reset_index(drop=True)
 
-    # ========= Heikin Ashi =========
+    # Heikin Ashi
     data["HA_close"] = (
         data["open"] + data["high"] + data["low"] + data["close"]
     ) / 4
@@ -118,14 +123,12 @@ def calculate_trendline(df, order=9):
         [data["HA_open"], data["HA_close"], data["low"]]
     )
 
-    # ========= Trend Levels =========
     data["UPPER"] = data["HA_high"].rolling(order).max()
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
     data["ATR"] = ta.atr(data["HA_high"], data["HA_low"], data["HA_close"], length=14)
     data["ATR_MA"] = data["ATR"].rolling(21).mean()
 
-    # ========= Trendline =========
     trendline = np.zeros(len(data))
     trend = data["HA_close"].iloc[0]
     trendline[0] = trend
@@ -149,27 +152,36 @@ def calculate_trendline(df, order=9):
 
     return data
 
+
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
     data = calculate_trendline(df)
-    # save_processed_data(data, symbol)
+
+    if len(data) < 3:
+        return
 
     last = data.iloc[-2]
     prev = data.iloc[-3]
     candle_time = data.index[-2]
     pos = state["position"]
 
-    cross_up =  prev.HA_close < prev.trendline and last.HA_close > last.trendline
+    cross_up = prev.HA_close < prev.trendline and last.HA_close > last.trendline
     cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
 
-    # ===== ENTRY TIME WINDOW =====
-    now_ist = datetime.now()
-    entry_window_start = dt_time(16, 0)   # 4 AM IST
-    entry_window_end = dt_time(6, 0)    # 6 PM IST
-    in_entry_window = entry_window_start <= now_ist.time() <= entry_window_end
+    # Entry window (4 PM to 6 AM IST – cross midnight handled)
+    now_time = datetime.now().time()
+    start = dt_time(16, 0)
+    end = dt_time(6, 0)
 
-    # ===== ENTRY LOGIC =====
-    if pos is None and state["last_candle"] != candle_time and last.ATR > last.ATR_MA:
+    in_entry_window = now_time >= start or now_time <= end
+
+    # ENTRY
+    if (
+        pos is None
+        and state["last_candle"] != candle_time
+        and last.ATR > last.ATR_MA
+    ):
+
         if cross_up:
             state["position"] = {
                 "side": "long",
@@ -180,7 +192,7 @@ def process_symbol(symbol, df, price, state):
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
-            log(f"{symbol} LONG ENTRY @ {price} | SL: {state['position']['stop']}")
+            log(f"{symbol} LONG ENTRY @ {price}")
             return
 
         if cross_down:
@@ -193,11 +205,10 @@ def process_symbol(symbol, df, price, state):
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
-            log(f"{symbol} SHORT ENTRY @ {price} | SL: {state['position']['stop']}")
+            log(f"{symbol} SHORT ENTRY @ {price}")
             return
 
-    # ===== EXIT + TRAILING LOGIC =====
-    # Exit can happen anytime, regardless of time window
+    # EXIT + TRAIL
     if pos:
         step = TRAIL_STEP[symbol]
 
@@ -207,9 +218,9 @@ def process_symbol(symbol, df, price, state):
                 steps = int(moved // step)
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
-                log(f"{symbol} LONG TRAIL -> New SL: {pos['stop']}")
+                log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
-            if price < pos['stop']:
+            if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
         if pos["side"] == "short":
@@ -218,10 +229,11 @@ def process_symbol(symbol, df, price, state):
                 steps = int(moved // step)
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
-                log(f"{symbol} SHORT TRAIL -> New SL: {pos['stop']}")
+                log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
-            if price > pos['stop']:
+            if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
+
 
 def exit_trade(symbol, price, pos, state):
     pnl = (
@@ -245,16 +257,19 @@ def exit_trade(symbol, price, pos, state):
     log(f"{symbol} {pos['side'].upper()} EXIT | Net PnL: {round(net, 6)}")
     state["position"] = None
 
+
 # ================= MAIN LOOP =================
 def run():
     if not os.path.exists(TRADE_CSV):
         pd.DataFrame(
-            columns=["entry_time","exit_time","symbol","side","entry_price","exit_price","qty","net_pnl"]
+            columns=["entry_time","exit_time","symbol","side",
+                     "entry_price","exit_price","qty","net_pnl"]
         ).to_csv(TRADE_CSV, index=False)
 
     state = {s: {"position": None, "last_candle": None} for s in SYMBOLS}
 
-    log("Heikin Ashi Bot Started (Processed Data + Step Trailing SL Enabled)")
+    log("Bot Started Successfully")
+    log(f"Saving trades to: {TRADE_CSV}")
 
     while True:
         try:
@@ -268,9 +283,11 @@ def run():
 
             time.sleep(5)
 
-        except Exception as e:
-            log(f"ERROR: {e}")
+        except Exception:
+            log("MAIN LOOP ERROR:")
+            log(traceback.format_exc())
             time.sleep(5)
+
 
 if __name__ == "__main__":
     run()
