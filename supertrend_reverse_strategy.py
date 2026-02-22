@@ -37,7 +37,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
-EXECUTION_TF = "5m"
+EXECUTION_TF = "30m"
 DAYS = 5
 
 BASE_DIR = os.getcwd()
@@ -244,9 +244,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
     # ENTRY
     if (
         allow_entry and
-        pos is None and
-        last.ADX > 22 and
-        last.ATR > last.ATR_MA
+        pos is None 
     ):
 
         long_signal = (
@@ -286,11 +284,11 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if last.HA_close < prev.trendline:
+            if price < last.trendline:
                 exit_trade = True
         else:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if  last.HA_close > prev.trendline:
+            if  price > last.trendline:
                 exit_trade = True
 
         if exit_trade:
