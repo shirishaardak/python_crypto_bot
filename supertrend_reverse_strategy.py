@@ -10,8 +10,8 @@ import numpy as np
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("BOT_TOKE")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_I")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
 
 _last_tg = {}
 
