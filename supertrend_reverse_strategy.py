@@ -10,8 +10,8 @@ import numpy as np
 load_dotenv()
 
 # ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKE")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_I")
 
 _last_tg = {}
 
@@ -26,8 +26,8 @@ def send_telegram(msg, key=None, cooldown=30):
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
-    except:
-        pass
+    except Exception as e:
+        print("Telegram error:", e)
 
 
 # ================= SETTINGS =================
@@ -36,8 +36,10 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
+TARGET_POINTS = {"BTCUSD": 200, "ETHUSD": 10}
+
 TAKER_FEE = 0.0005
-EXECUTION_TF = "15m"
+EXECUTION_TF = "5m"
 DAYS = 5
 
 BASE_DIR = os.getcwd()
@@ -47,6 +49,8 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
 LAST_CANDLE_TIME = {}
+
+print("Saving files to:", SAVE_DIR)
 
 
 # ================= UTIL =================
@@ -63,21 +67,13 @@ def commission(price, qty, symbol):
 
 
 def save_trade(trade):
-
     trade_copy = trade.copy()
-
     trade_copy["entry_time"] = trade_copy["entry_time"].strftime("%Y-%m-%d %H:%M:%S")
     trade_copy["exit_time"] = trade_copy["exit_time"].strftime("%Y-%m-%d %H:%M:%S")
 
     cols = [
-        "entry_time",
-        "exit_time",
-        "symbol",
-        "side",
-        "entry_price",
-        "exit_price",
-        "qty",
-        "net_pnl"
+        "entry_time", "exit_time", "symbol", "side",
+        "entry_price", "exit_price", "qty", "net_pnl"
     ]
 
     pd.DataFrame([trade_copy])[cols].to_csv(
@@ -96,12 +92,12 @@ def fetch_price(symbol):
             timeout=5
         )
         return float(r.json()["result"]["mark_price"])
-    except:
+    except Exception as e:
+        print("Price fetch error:", e)
         return None
 
 
 def fetch_candles(symbol, resolution):
-
     start = int((datetime.now() - timedelta(days=DAYS)).timestamp())
 
     params = {
@@ -134,13 +130,40 @@ def fetch_candles(symbol, resolution):
 
         return df.astype(float).dropna()
 
-    except:
+    except Exception as e:
+        print("Candle fetch error:", e)
         return None
+
+
+# ================= SAVE PROCESSED DATA =================
+def save_processed_data(ha, symbol):
+    try:
+        path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+
+        required_cols = [
+            "HA_open", "HA_high", "HA_low", "HA_close",
+            "SUPERTREND", "trendline", "UPPER", "LOWER", "ADX"
+        ]
+
+        missing = [c for c in required_cols if c not in ha.columns]
+        if missing:
+            print(f"[{symbol}] Missing columns:", missing)
+            print("Available:", list(ha.columns))
+            return
+
+        out = ha[required_cols].copy()
+        out["time"] = ha.index
+        out = out.tail(500)
+
+        out.to_csv(path, index=False)
+
+
+    except Exception as e:
+        print(f"Error saving processed data for {symbol}:", e)
 
 
 # ================= HEIKIN ASHI =================
 def calculate_heikin_ashi(df):
-
     ha = df.copy()
 
     ha["HA_close"] = (ha["Open"] + ha["High"] + ha["Low"] + ha["Close"]) / 4
@@ -164,21 +187,16 @@ def calculate_heikin_ashi(df):
 # ================= TRENDLINE =================
 def calculate_trendline(df):
 
-    # ATR
     df["ATR"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=14)
-    df["ATR_MA"] = df["ATR"].rolling(21).mean()
 
-    # ADX
     adx = ta.adx(
         high=df["HA_high"],
         low=df["HA_low"],
         close=df["HA_close"],
         length=14
     )
+    df["ADX"] = adx.filter(like="ADX").iloc[:, 0]
 
-    df["ADX"] = adx["ADX_14"]
-
-    # Supertrend
     st = ta.supertrend(
         high=df["HA_high"],
         low=df["HA_low"],
@@ -187,42 +205,26 @@ def calculate_trendline(df):
         multiplier=3
     )
 
-    df["SUPERTREND"] = st.iloc[:, 0]
+    # SAFE supertrend extraction
+    df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
 
-    # Upper / Lower bands
-    order = 3
+    order = 21
     df["UPPER"] = df["HA_high"].rolling(order, min_periods=1).max()
     df["LOWER"] = df["HA_low"].rolling(order, min_periods=1).min()
 
     df["trendline"] = np.nan
-
     trend = df["HA_close"].iloc[0]
     df.iloc[0, df.columns.get_loc("trendline")] = trend
 
-    for i in range(1, len(df)):
-
+    for i in range(2, len(df)):
         curr_close = df["HA_close"].iloc[i]
         prev_close = df["HA_close"].iloc[i-1]
         prev_open  = df["HA_open"].iloc[i-1]
 
-        lower_band = df["LOWER"].iloc[i]
-        upper_band = df["UPPER"].iloc[i]
-
-        # Bullish
-        if (
-            curr_close > prev_close and
-            curr_close > prev_open and
-            curr_close > trend
-        ):
-            trend = lower_band
-
-        # Bearish
-        elif (
-            curr_close < prev_close and
-            curr_close < prev_open and
-            curr_close < trend
-        ):
-            trend = upper_band
+        if curr_close > prev_close and curr_close > prev_open and curr_close > trend:
+            trend = df["HA_low"].iloc[i-2]
+        elif curr_close < prev_close and curr_close < prev_open and curr_close < trend:
+            trend = df["HA_high"].iloc[i-2]
 
         df.iloc[i, df.columns.get_loc("trendline")] = trend
 
@@ -232,31 +234,31 @@ def calculate_trendline(df):
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state, allow_entry):
 
-    df = calculate_heikin_ashi(df)
-    df = calculate_trendline(df)
+    ha = calculate_heikin_ashi(df)
+    ha = calculate_trendline(ha)
 
-    last = df.iloc[-2]
-    prev = df.iloc[-3]
+    if len(ha) < 3:
+        return
+
+    save_processed_data(ha, symbol)
+
+    last = ha.iloc[-2]
+    prev = ha.iloc[-3]
 
     pos = state["position"]
     now = datetime.now()
 
     # ENTRY
-    if (
-        allow_entry and
-        pos is None 
-    ):
+    if allow_entry and pos is None:
 
         long_signal = (
             last.HA_close > last.SUPERTREND and
-            last.HA_close > prev.HA_close and
-            last.HA_close > last.trendline
+            last.HA_close > prev.UPPER
         )
 
         short_signal = (
             last.HA_close < last.SUPERTREND and
-            last.HA_close < prev.HA_close and
-            last.HA_close < last.trendline
+            last.HA_close < prev.LOWER
         )
 
         if long_signal or short_signal:
@@ -267,28 +269,29 @@ def process_symbol(symbol, df, price, state, allow_entry):
             state["position"] = {
                 "side": side,
                 "entry": price,
-                "stop": last.SUPERTREND,
                 "qty": qty,
                 "entry_time": now
             }
 
-            log(f"{symbol} {side.upper()} ENTRY @ {price} | Qty: {qty}", tg=True)
+            log(f"{symbol} {side.upper()} ENTRY @ {price}", tg=True)
             return
 
     # EXIT
     if pos:
 
-        pos["stop"] = last.trendline
-
+        target_points = TARGET_POINTS[symbol]
         exit_trade = False
 
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if price < last.trendline:
+
+            if price < last.SUPERTREND or price >= pos["entry"] + target_points:
                 exit_trade = True
+
         else:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            if  price > last.trendline:
+
+            if price > last.SUPERTREND or price <= pos["entry"] - target_points:
                 exit_trade = True
 
         if exit_trade:
@@ -310,7 +313,6 @@ def process_symbol(symbol, df, price, state, allow_entry):
             })
 
             log(f"{symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
-
             state["position"] = None
 
 
@@ -319,7 +321,7 @@ def run():
 
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Trend Strategy LIVE Started", tg=True)
+    log("🚀 Strategy LIVE Started", tg=True)
 
     while True:
         try:
