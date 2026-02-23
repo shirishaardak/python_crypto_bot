@@ -215,7 +215,7 @@ def run_strategy():
         return
 
     hist_template={
-        "resolution":"5",
+        "resolution":"15",
         "date_format":"1",
         "range_from":(ist_today()-timedelta(days=5)).strftime("%Y-%m-%d"),
         "range_to":ist_today().strftime("%Y-%m-%d"),
