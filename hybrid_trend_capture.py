@@ -21,7 +21,7 @@ TIMEFRAME = "5m"
 DAYS = 15
 
 STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
-TRAIL_STEP = {"BTCUSD": 50, "ETHUSD": 5}
+TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
@@ -101,7 +101,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=9):
+def calculate_trendline(df, order=5):
     data = df.copy().reset_index(drop=True)
 
     # Heikin Ashi
@@ -179,7 +179,6 @@ def process_symbol(symbol, df, price, state):
     if (
         pos is None
         and state["last_candle"] != candle_time
-        and last.ATR > last.ATR_MA
     ):
 
         if cross_up:
