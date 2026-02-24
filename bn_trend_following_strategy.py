@@ -234,8 +234,8 @@ def run_strategy():
     last_index=df_index.iloc[-2]
     prev_index=df_index.iloc[-3]
 
-    index_bullish=last_index.HA_Close>last_index.trendline and last_index.HA_Close>prev_index.HA_Close
-    index_bearish=last_index.HA_Close<last_index.trendline and last_index.HA_Close<prev_index.HA_Close
+    index_bullish=last_index.HA_Close>last_index.trendline and prev_index.trendline<prev_index.HA_Close
+    index_bearish=last_index.HA_Close<last_index.trendline and prev_index.trendline>prev_index.HA_Close
 
     # ===== REVERSAL EXIT =====
     if position_type=="CE" and index_bearish:
@@ -263,7 +263,7 @@ def run_strategy():
         entry_time=ist_now()
 
         stop_loss=entry_price-50
-        trail_level=entry_price+10
+        trail_level=entry_price+25
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
@@ -273,8 +273,8 @@ def run_strategy():
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         if price>=trail_level:
-            stop_loss+=10
-            trail_level+=10
+            stop_loss+=25
+            trail_level+=25
             send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if price<=stop_loss:
