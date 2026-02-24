@@ -222,9 +222,9 @@ def calculate_trendline(df):
         prev_open  = df["HA_open"].iloc[i-1]
 
         if curr_close > prev_close and curr_close > prev_open and curr_close > trend:
-            trend = df["HA_low"].iloc[i-2]
+            trend = df["HA_low"].iloc[i-1]
         elif curr_close < prev_close and curr_close < prev_open and curr_close < trend:
-            trend = df["HA_high"].iloc[i-2]
+            trend = df["HA_high"].iloc[i-1]
 
         df.iloc[i, df.columns.get_loc("trendline")] = trend
 
@@ -285,13 +285,13 @@ def process_symbol(symbol, df, price, state, allow_entry):
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if price < last.SUPERTREND or price >= pos["entry"] + target_points:
+            if last.HA_close < last.trendline or price >= pos["entry"] + target_points:
                 exit_trade = True
 
         else:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if price > last.SUPERTREND or price <= pos["entry"] - target_points:
+            if last.HA_close > last.trendline or price <= pos["entry"] - target_points:
                 exit_trade = True
 
         if exit_trade:
