@@ -240,7 +240,6 @@ def process_symbol(symbol, df, price, state, allow_entry):
     if len(ha) < 3:
         return
 
-    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
