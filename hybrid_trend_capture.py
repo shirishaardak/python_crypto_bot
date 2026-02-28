@@ -10,6 +10,36 @@ import traceback
 
 load_dotenv()
 
+# ================= TELEGRAM =================
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+_last_tg = {}
+
+def send_telegram(msg, key=None, cooldown=30):
+    try:
+        if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+            return
+
+        now = time.time()
+        if key:
+            if key in _last_tg and now - _last_tg[key] < cooldown:
+                return
+            _last_tg[key] = now
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(
+            url,
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": msg,
+                "parse_mode": "Markdown"
+            },
+            timeout=5
+        )
+    except Exception:
+        print("Telegram Error:", traceback.format_exc())
+
+
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -29,6 +59,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
+
 # ================= UTILITIES =================
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
@@ -43,8 +74,6 @@ def save_trade(trade):
         for t in ["entry_time", "exit_time"]:
             if isinstance(trade_copy.get(t), datetime):
                 trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                trade_copy[t] = str(trade_copy.get(t))
 
         cols = [
             "entry_time", "exit_time", "symbol", "side",
@@ -57,7 +86,8 @@ def save_trade(trade):
             TRADE_CSV,
             mode="a",
             header=not os.path.exists(TRADE_CSV),
-            index=False
+            index=False,
+            encoding="utf-8"
         )
 
         log("Trade saved successfully.")
@@ -104,7 +134,6 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 def calculate_trendline(df, order=5):
     data = df.copy().reset_index(drop=True)
 
-    # Heikin Ashi
     data["HA_close"] = (
         data["open"] + data["high"] + data["low"] + data["close"]
     ) / 4
@@ -126,37 +155,28 @@ def calculate_trendline(df, order=5):
     data["UPPER"] = data["HA_high"].rolling(order).max()
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
-    data["ATR"] = ta.atr(data["HA_high"], data["HA_low"], data["HA_close"], length=14)
-    data["ATR_MA"] = data["ATR"].rolling(21).mean()
-
     trendline = np.zeros(len(data))
     trend = data["HA_close"].iloc[0]
     trendline[0] = trend
 
-    ha_close = data["HA_close"].values
-    upper = data["UPPER"].values
-    lower = data["LOWER"].values
-
     for i in range(1, len(data)):
-        if not np.isnan(upper[i - 1]) and not np.isnan(lower[i - 1]):
+        if not np.isnan(data["UPPER"].iloc[i-1]) and not np.isnan(data["LOWER"].iloc[i-1]):
 
-            if ha_close[i] > ha_close[i - 1] and ha_close[i] > trend:
-                trend = lower[i]
+            if data["HA_close"].iloc[i] > trend:
+                trend = data["LOWER"].iloc[i]
 
-            elif ha_close[i] < ha_close[i - 1] and ha_close[i] < trend:
-                trend = upper[i]
+            elif data["HA_close"].iloc[i] < trend:
+                trend = data["UPPER"].iloc[i]
 
         trendline[i] = trend
 
     data["trendline"] = trendline
-
     return data
 
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
     data = calculate_trendline(df)
-
     if len(data) < 3:
         return
 
@@ -168,43 +188,37 @@ def process_symbol(symbol, df, price, state):
     cross_up = prev.HA_close < prev.trendline and last.HA_close > last.trendline
     cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
 
-    # Entry window (4 PM to 6 AM IST – cross midnight handled)
-    now_time = datetime.now().time()
-    start = dt_time(16, 0)
-    end = dt_time(6, 0)
-
-    in_entry_window = now_time >= start or now_time <= end
-
     # ENTRY
-    if (
-        pos is None
-        and state["last_candle"] != candle_time
-    ):
+    if pos is None and state["last_candle"] != candle_time:
 
         if cross_up:
+            sl = price - STOP_LOSS[symbol]
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": last.trendline,
+                "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
             log(f"{symbol} LONG ENTRY @ {price}")
+            send_telegram(f"🟢 *{symbol} LONG ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
         if cross_down:
+            sl = price + STOP_LOSS[symbol]
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last.trendline,
+                "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now(),
                 "last_trail_price": price
             }
             state["last_candle"] = candle_time
             log(f"{symbol} SHORT ENTRY @ {price}")
+            send_telegram(f"🔴 *{symbol} SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
     # EXIT + TRAIL
@@ -218,6 +232,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
+                send_telegram(f"📈 {symbol} LONG TRAIL\nNew SL: {pos['stop']}", key=f"{symbol}_trail")
 
             if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
@@ -229,6 +244,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
+                send_telegram(f"📉 {symbol} SHORT TRAIL\nNew SL: {pos['stop']}", key=f"{symbol}_trail")
 
             if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
@@ -254,6 +270,10 @@ def exit_trade(symbol, price, pos, state):
     })
 
     log(f"{symbol} {pos['side'].upper()} EXIT | Net PnL: {round(net, 6)}")
+    send_telegram(
+        f"✅ *{symbol} {pos['side'].upper()} EXIT*\nExit: {price}\nNet PnL: {round(net, 6)}"
+    )
+
     state["position"] = None
 
 
@@ -268,7 +288,7 @@ def run():
     state = {s: {"position": None, "last_candle": None} for s in SYMBOLS}
 
     log("Bot Started Successfully")
-    log(f"Saving trades to: {TRADE_CSV}")
+    send_telegram("🚀 Trading Bot Started")
 
     while True:
         try:
@@ -285,6 +305,7 @@ def run():
         except Exception:
             log("MAIN LOOP ERROR:")
             log(traceback.format_exc())
+            send_telegram("⚠️ Bot Error Occurred")
             time.sleep(5)
 
 
