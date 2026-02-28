@@ -27,6 +27,8 @@ import requests
 sys.path.append(os.getcwd())
 load_dotenv()
 
+requests.adapters.DEFAULT_RETRIES = 5
+
 # ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -74,6 +76,7 @@ model_load_date=None
 last_exit_time=None
 stop_loss=None
 trail_level=None
+NSE_HOLIDAYS=set()
 
 # ================= UTILS =================
 def commission(price,qty):
@@ -121,16 +124,85 @@ def load_model():
     send_telegram("📡 Fyers Model Connected")
     return model
 
+# ================= NSE HOLIDAY ENGINE =================
+def fetch_nse_holidays():
+    global NSE_HOLIDAYS
+    try:
+        url="https://www.nseindia.com/api/holiday-master?type=trading"
+        headers={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
+        session=requests.Session()
+        session.get("https://www.nseindia.com",headers=headers,timeout=5)
+        response=session.get(url,headers=headers,timeout=5)
+        data=response.json()
+
+        NSE_HOLIDAYS.clear()
+        for item in data["CM"]:
+            h_date=datetime.strptime(item["tradingDate"],"%d-%b-%Y").date()
+            NSE_HOLIDAYS.add(h_date)
+
+        send_telegram("✅ NSE Holidays Loaded")
+
+    except Exception as e:
+        send_telegram(f"⚠ Holiday Fetch Failed {e}")
+
+def is_market_open():
+    today=ist_today()
+    if today.weekday()>=5:
+        return False
+    if today in NSE_HOLIDAYS:
+        return False
+    return True
+
+# ================= EXPIRY ENGINE =================
+def last_thursday(year,month):
+    if month==12:
+        next_month=date(year+1,1,1)
+    else:
+        next_month=date(year,month+1,1)
+    last_day=next_month-timedelta(days=1)
+    while last_day.weekday()!=3:
+        last_day-=timedelta(days=1)
+    return last_day
+
+def get_weekly_expiry():
+    today=ist_today()
+    days_ahead=3-today.weekday()
+    if days_ahead<0:
+        days_ahead+=7
+    expiry=today+timedelta(days=days_ahead)
+    if today.weekday()==3:
+        expiry+=timedelta(days=7)
+    return expiry
+
+def get_valid_expiry():
+    today=ist_today()
+    weekly=get_weekly_expiry()
+    monthly=last_thursday(today.year,today.month)
+
+    if today>=monthly:
+        if today.month==12:
+            monthly=last_thursday(today.year+1,1)
+        else:
+            monthly=last_thursday(today.year,today.month+1)
+
+    expiry=monthly if weekly==monthly else weekly
+
+    while expiry.weekday()>=5 or expiry in NSE_HOLIDAYS:
+        expiry-=timedelta(days=1)
+
+    return expiry
+
 # ================= DYNAMIC ATM =================
 def get_atm_option(option_type):
-    spot = fyers.quotes({"symbols": SPOT_SYMBOL})["d"][0]["v"]["lp"]
-    strike = int(round(spot/100)*100)
-    expiry = date.today().strftime("%y%b").upper()
+    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    strike=int(round(spot/100)*100)
+    expiry=get_valid_expiry()
+    expiry_str=expiry.strftime("%y%b").upper()
 
-    if option_type == "CE":
-        return f"NSE:BANKNIFTY{expiry}{strike}CE"
+    if option_type=="CE":
+        return f"NSE:BANKNIFTY{expiry_str}{strike}CE"
     else:
-        return f"NSE:BANKNIFTY{expiry}{strike}PE"
+        return f"NSE:BANKNIFTY{expiry_str}{strike}PE"
 
 # ================= DATA =================
 def get_stock_historical_data(data):
@@ -143,7 +215,6 @@ def get_stock_historical_data(data):
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
-
     ha=ta.ha(df["Open"],df["High"],df["Low"],df["Close"]).reset_index(drop=True)
     data=df.copy().reset_index(drop=True)
 
@@ -184,7 +255,9 @@ def exit_trade(reason):
     global position_type,last_exit_time,stop_loss,trail_level
 
     price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
-    net=calculate_pnl(entry_price,price,QTY)-commission(price,QTY)
+    net=calculate_pnl(entry_price,price,QTY) \
+        - commission(entry_price,QTY) \
+        - commission(price,QTY)
 
     save_trade({
         "entry_time":entry_time.isoformat(),
@@ -206,10 +279,12 @@ def exit_trade(reason):
 
 # ================= STRATEGY =================
 def run_strategy():
-
     global position_type, entry_price, entry_time
     global symbol, last_exit_time
     global stop_loss, trail_level
+
+    if fyers is None:
+        return
 
     if last_exit_time and (ist_now()-last_exit_time).seconds<300:
         return
@@ -222,10 +297,8 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    # ===== INDEX DATA =====
-    hist_index=hist_template.copy()
-    hist_index["symbol"]=SPOT_SYMBOL
-    df_index=get_stock_historical_data(hist_index)
+    hist_template["symbol"]=SPOT_SYMBOL
+    df_index=get_stock_historical_data(hist_template)
 
     if len(df_index)<50:
         return
@@ -234,10 +307,9 @@ def run_strategy():
     last_index=df_index.iloc[-2]
     prev_index=df_index.iloc[-3]
 
-    index_bullish=last_index.HA_Close>last_index.trendline and prev_index.trendline<prev_index.HA_Close
-    index_bearish=last_index.HA_Close<last_index.trendline and prev_index.trendline>prev_index.HA_Close
+    index_bullish=last_index.HA_Close>last_index.trendline and last_index.HA_Close>prev_index.HA_Close
+    index_bearish=last_index.HA_Close<last_index.trendline and last_index.HA_Close<prev_index.HA_Close
 
-    # ===== REVERSAL EXIT =====
     if position_type=="CE" and index_bearish:
         exit_trade("Index Reversal")
         return
@@ -246,7 +318,6 @@ def run_strategy():
         exit_trade("Index Reversal")
         return
 
-    # ===== ENTRY =====
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if index_bullish:
@@ -263,18 +334,16 @@ def run_strategy():
         entry_time=ist_now()
 
         stop_loss=entry_price-50
-        trail_level=entry_price+25
+        trail_level=entry_price+10
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
-    # ===== MANAGEMENT =====
     if position_type:
-
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if price>=trail_level:
-            stop_loss+=25
-            trail_level+=25
+        while price>=trail_level:
+            stop_loss+=10
+            trail_level+=10
             send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if price<=stop_loss:
@@ -285,9 +354,11 @@ def run_strategy():
             exit_trade("Time Exit")
             return
 
-# ================= MAIN LOOP =================
+# ================= START =================
 send_telegram("🚀 BankNifty Dynamic ATM Trend Algo Started")
+fetch_nse_holidays()
 
+# ================= MAIN LOOP =================
 while True:
     try:
         now=ist_time()
@@ -308,9 +379,10 @@ while True:
                 model_load_date=today
 
         if time(9,30)<=now<=time(15,30) and model_load_date==today:
-            run_strategy()
+            if is_market_open():
+                run_strategy()
 
-        t.sleep(2)
+        t.sleep(3)
 
     except Exception as e:
         send_telegram(f"❌ Algo Error: {e}")
