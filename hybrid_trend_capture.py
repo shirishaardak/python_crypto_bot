@@ -192,7 +192,7 @@ def process_symbol(symbol, df, price, state):
     if pos is None and state["last_candle"] != candle_time:
 
         if cross_up:
-            sl = price - STOP_LOSS[symbol]
+            sl = last.trendline
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -207,7 +207,7 @@ def process_symbol(symbol, df, price, state):
             return
 
         if cross_down:
-            sl = price + STOP_LOSS[symbol]
+            sl = last.trendline
             state["position"] = {
                 "side": "short",
                 "entry": price,

@@ -209,7 +209,7 @@ def calculate_trendline(df):
     # SAFE supertrend extraction
     df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
 
-    order = 4
+    order = 5
     df["UPPER"] = df["HA_high"].rolling(order, min_periods=1).max()
     df["LOWER"] = df["HA_low"].rolling(order, min_periods=1).min()
 
@@ -286,13 +286,13 @@ def process_symbol(symbol, df, price, state, allow_entry):
         if pos["side"] == "long":
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if last.HA_close < last.trendline or price >= pos["entry"] + target_points:
+            if last.HA_close < last.trendline:
                 exit_trade = True
 
         else:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if last.HA_close > last.trendline or price <= pos["entry"] - target_points:
+            if last.HA_close > last.trendline:
                 exit_trade = True
 
         if exit_trade:
