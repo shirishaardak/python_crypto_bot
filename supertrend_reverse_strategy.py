@@ -9,80 +9,32 @@ import numpy as np
 
 load_dotenv()
 
-# ================= TELEGRAM =================
-TELEGRAM_TOKEN = os.getenv("BOT_TO")
-TELEGRAM_CHAT_ID = os.getenv("CHAT")
-
-_last_tg = {}
-
-def send_telegram(msg, key=None, cooldown=30):
-    try:
-        now = time.time()
-        if key and key in _last_tg and now - _last_tg[key] < cooldown:
-            return
-        if key:
-            _last_tg[key] = now
-
-        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
-    except Exception as e:
-        print("Telegram error:", e)
-
-
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-TARGET_POINTS = {"BTCUSD": 200, "ETHUSD": 10}
+TRAIL_POINTS = {"BTCUSD": 100, "ETHUSD": 10}
 
 TAKER_FEE = 0.0005
 EXECUTION_TF = "5m"
 DAYS = 5
 
+LAST_CANDLE_TIME = {}
+
+# ================= DIRECTORIES =================
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
-
-LAST_CANDLE_TIME = {}
-
-print("Saving files to:", SAVE_DIR)
-
-
-
 # ================= UTIL =================
-def log(msg, tg=False):
-    text = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
-    print(text)
-    if tg:
-        send_telegram(text)
-
+def log(msg):
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}")
 
 def commission(price, qty, symbol):
     notional = price * CONTRACT_SIZE[symbol] * qty
     return notional * TAKER_FEE
-
-
-def save_trade(trade):
-    trade_copy = trade.copy()
-    trade_copy["entry_time"] = trade_copy["entry_time"].strftime("%Y-%m-%d %H:%M:%S")
-    trade_copy["exit_time"] = trade_copy["exit_time"].strftime("%Y-%m-%d %H:%M:%S")
-
-    cols = [
-        "entry_time", "exit_time", "symbol", "side",
-        "entry_price", "exit_price", "qty", "net_pnl"
-    ]
-
-    pd.DataFrame([trade_copy])[cols].to_csv(
-        TRADE_CSV,
-        mode="a",
-        header=not os.path.exists(TRADE_CSV),
-        index=False
-    )
 
 
 # ================= DATA =================
@@ -93,8 +45,7 @@ def fetch_price(symbol):
             timeout=5
         )
         return float(r.json()["result"]["mark_price"])
-    except Exception as e:
-        print("Price fetch error:", e)
+    except:
         return None
 
 
@@ -131,39 +82,11 @@ def fetch_candles(symbol, resolution):
 
         return df.astype(float).dropna()
 
-    except Exception as e:
-        print("Candle fetch error:", e)
+    except:
         return None
 
 
-# ================= SAVE PROCESSED DATA =================
-def save_processed_data(ha, symbol):
-    try:
-        path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-
-        required_cols = [
-            "HA_open", "HA_high", "HA_low", "HA_close",
-            "SUPERTREND", "trendline", "UPPER", "LOWER", "ADX"
-        ]
-
-        missing = [c for c in required_cols if c not in ha.columns]
-        if missing:
-            print(f"[{symbol}] Missing columns:", missing)
-            print("Available:", list(ha.columns))
-            return
-
-        out = ha[required_cols].copy()
-        out["time"] = ha.index
-        out = out.tail(500)
-
-        out.to_csv(path, index=False)
-
-
-    except Exception as e:
-        print(f"Error saving processed data for {symbol}:", e)
-
-
-# ================= HEIKIN ASHI =================
+# ================= INDICATORS =================
 def calculate_heikin_ashi(df):
     ha = df.copy()
 
@@ -179,121 +102,125 @@ def calculate_heikin_ashi(df):
             ha["HA_open"].iloc[i-1] + ha["HA_close"].iloc[i-1]
         ) / 2
 
-    ha["HA_high"] = ha[["High","HA_open","HA_close"]].max(axis=1)
-    ha["HA_low"] = ha[["Low","HA_open","HA_close"]].min(axis=1)
-
     return ha
 
 
-# ================= TRENDLINE =================
-def calculate_trendline(df):
-
-    df["ATR"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=14)
-
-    adx = ta.adx(
-        high=df["HA_high"],
-        low=df["HA_low"],
-        close=df["HA_close"],
-        length=14
-    )
-    df["ADX"] = adx.filter(like="ADX").iloc[:, 0]
-
+def add_supertrend(df):
     st = ta.supertrend(
-        high=df["HA_high"],
-        low=df["HA_low"],
-        close=df["HA_close"],
-        length=7,
-        multiplier=2
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        length=10,
+        multiplier=3
     )
-
-    # SAFE supertrend extraction
     df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
-
-    order = 5
-    df["UPPER"] = df["HA_high"].rolling(order, min_periods=1).max()
-    df["LOWER"] = df["HA_low"].rolling(order, min_periods=1).min()
-
-    df["trendline"] = np.nan
-    trend = df["HA_close"].iloc[0]
-    df.iloc[0, df.columns.get_loc("trendline")] = trend
-
-    for i in range(2, len(df)):
-        curr_close = df["HA_close"].iloc[i]
-        prev_close = df["HA_close"].iloc[i-1]
-        prev_open  = df["HA_open"].iloc[i-1]
-
-        if curr_close > prev_close and curr_close > prev_open and curr_close > trend:
-            trend = df["LOWER"].iloc[i]
-        elif curr_close < prev_close and curr_close < prev_open and curr_close < trend:
-            trend = df["UPPER"].iloc[i]
-
-        df.iloc[i, df.columns.get_loc("trendline")] = trend
-
     return df
+
+
+def save_processed_data(df, symbol):
+
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+
+    out = df.copy()
+
+    cols = [
+        "HA_open",
+        "HA_close",
+        "SUPERTREND"
+    ]
+
+    existing = [c for c in cols if c in out.columns]
+
+    if existing:
+        out = out[existing].copy()
+        out["time"] = df.index
+        out = out.tail(500)
+        out.to_csv(path, index=False)
 
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state, allow_entry):
 
+    df = add_supertrend(df)
     ha = calculate_heikin_ashi(df)
-    ha = calculate_trendline(ha)
+
+    # save_processed_data(ha, symbol)
 
     if len(ha) < 3:
         return
-
-    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
 
     pos = state["position"]
-    now = datetime.now()
+    trail_points = TRAIL_POINTS[symbol]
 
-    # ENTRY
+    # ================= ENTRY =================
     if allow_entry and pos is None:
 
         long_signal = (
-            last.HA_close > last.SUPERTREND and
-            last.HA_close > prev.UPPER
+            last.HA_close > prev.HA_open and
+            last.HA_close > prev.HA_close and
+            last.Close > last.SUPERTREND
         )
 
         short_signal = (
-            last.HA_close < last.SUPERTREND and
-            last.HA_close < prev.LOWER
+            last.HA_close < prev.HA_open and
+            last.HA_close < prev.HA_close and
+            last.Close < last.SUPERTREND
         )
 
         if long_signal or short_signal:
 
             side = "long" if long_signal else "short"
-            qty = DEFAULT_CONTRACTS[symbol]
+            initial_sl = last.SUPERTREND
 
             state["position"] = {
                 "side": side,
                 "entry": price,
-                "qty": qty,
-                "entry_time": now
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "initial_sl": initial_sl,
+                "sl": initial_sl,
+                "trail_steps": 0
             }
 
-            log(f"{symbol} {side.upper()} ENTRY @ {price}", tg=True)
+            log(f"{symbol} {side.upper()} ENTRY @ {price} | SL: {initial_sl}")
             return
 
-    # EXIT
+    # ================= MANAGEMENT =================
     if pos:
 
-        target_points = TARGET_POINTS[symbol]
         exit_trade = False
 
         if pos["side"] == "long":
+
+            move = price - pos["entry"]
+            steps = int(move // trail_points)
+
+            if steps > pos["trail_steps"]:
+                pos["sl"] = pos["initial_sl"] + (steps * trail_points)
+                pos["trail_steps"] = steps
+                log(f"{symbol} TRAIL SL MOVED TO {pos['sl']}")
+
+            if price <= pos["sl"]:
+                exit_trade = True
+
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if last.HA_close < last.trendline:
-                exit_trade = True
-
         else:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            if last.HA_close > last.trendline:
+            move = pos["entry"] - price
+            steps = int(move // trail_points)
+
+            if steps > pos["trail_steps"]:
+                pos["sl"] = pos["initial_sl"] - (steps * trail_points)
+                pos["trail_steps"] = steps
+                log(f"{symbol} TRAIL SL MOVED TO {pos['sl']}")
+
+            if price >= pos["sl"]:
                 exit_trade = True
+
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
 
         if exit_trade:
 
@@ -302,18 +229,8 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
             net = pnl - fee
 
-            save_trade({
-                "entry_time": pos["entry_time"],
-                "exit_time": now,
-                "symbol": symbol,
-                "side": pos["side"],
-                "entry_price": pos["entry"],
-                "exit_price": price,
-                "qty": pos["qty"],
-                "net_pnl": round(net, 6)
-            })
+            log(f"{symbol} EXIT @ {price} | NET PNL: {round(net,6)}")
 
-            log(f"{symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
             state["position"] = None
 
 
@@ -322,14 +239,14 @@ def run():
 
     state = {s: {"position": None} for s in SYMBOLS}
 
-    log("🚀 Strategy LIVE Started", tg=True)
+    log("🚀 Strategy LIVE Started")
 
     while True:
         try:
             for symbol in SYMBOLS:
 
                 df = fetch_candles(symbol, EXECUTION_TF)
-                if df is None or len(df) < 120:
+                if df is None or len(df) < 50:
                     continue
 
                 price = fetch_price(symbol)
@@ -348,7 +265,7 @@ def run():
             time.sleep(10)
 
         except Exception as e:
-            log(f"Runtime error: {e}", tg=True)
+            log(f"Runtime error: {e}")
             time.sleep(5)
 
 
