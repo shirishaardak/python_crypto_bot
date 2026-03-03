@@ -12,6 +12,7 @@ class SafeZoneInfo(zoneinfo.ZoneInfo):
 
 zoneinfo.ZoneInfo = SafeZoneInfo
 
+
 # ================= IMPORTS =================
 import os, sys
 import time as t
@@ -23,10 +24,25 @@ from datetime import datetime, time, timedelta, timezone
 from dotenv import load_dotenv
 import requests
 
-sys.path.append(os.getcwd())
 load_dotenv()
-
 requests.adapters.DEFAULT_RETRIES = 5
+
+
+# ================= FOLDER STRUCTURE =================
+BASE_DIR = os.getcwd()
+
+SAVE_DIR = os.path.join(BASE_DIR, "data", "bn_trend_following_strategy")
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+TRADES_FILE = os.path.join(SAVE_DIR, "live_trades.csv")
+
+TOKEN_DIR = os.path.join(BASE_DIR, "auth", "api_key")
+os.makedirs(TOKEN_DIR, exist_ok=True)
+
+TOKEN_FILE = os.path.join(TOKEN_DIR, "access_token.txt")
+
+print("✅ Folder Structure Ready")
+
 
 # ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -40,16 +56,13 @@ def ist_today():
 def ist_time():
     return ist_now().time()
 
+
 # ================= CONFIG =================
 CLIENT_ID="98E1TAKD4T-100"
 QTY=30
 COMMISSION_RATE=0.0004
 SPOT_SYMBOL="NSE:NIFTYBANK-INDEX"
 
-folder="data/Trend_Following"
-os.makedirs(folder,exist_ok=True)
-TRADES_FILE=f"{folder}/live_trades.csv"
-TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
@@ -57,26 +70,26 @@ TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
-        url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
-        requests.post(url,json=payload,timeout=5)
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
+            requests.post(url,json=payload,timeout=5)
     except:
         pass
+
 
 # ================= GLOBAL STATE =================
 fyers=None
 position_type=None
 entry_price=0
 entry_time=None
-symbol=None
+stop_loss=None
 last_reset_date=None
 token_load_date=None
 model_load_date=None
 holiday_load_date=None
-last_exit_time=None
-stop_loss=None
-trail_level=None
 NSE_HOLIDAYS=set()
+
 
 # ================= UTILS =================
 def commission(price,qty):
@@ -92,20 +105,16 @@ def save_trade(data):
     else:
         df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
 
+
 # ================= DAILY RESET =================
 def daily_reset():
-    global position_type, entry_price, entry_time
-    global symbol, last_exit_time, stop_loss, trail_level
-
+    global position_type, entry_price, entry_time, stop_loss
     position_type=None
     entry_price=0
     entry_time=None
-    symbol=None
-    last_exit_time=None
     stop_loss=None
-    trail_level=None
-
     send_telegram("🔄 Daily Reset Completed")
+
 
 # ================= AUTH =================
 def load_token():
@@ -122,6 +131,7 @@ def load_model():
     )
     send_telegram("📡 Fyers Model Connected")
     return model
+
 
 # ================= NSE HOLIDAY ENGINE =================
 def fetch_nse_holidays():
@@ -144,6 +154,7 @@ def fetch_nse_holidays():
     except Exception as e:
         send_telegram(f"⚠ Holiday Fetch Failed {e}")
 
+
 def is_market_open():
     today=ist_today()
     if today.weekday()>=5:
@@ -152,10 +163,10 @@ def is_market_open():
         return False
     return True
 
+
 # ================= STRATEGY =================
 def run_strategy():
-    global position_type, entry_price, entry_time
-    global stop_loss, trail_level, last_exit_time
+    global position_type, entry_price, entry_time, stop_loss
 
     data = {
         "symbol": SPOT_SYMBOL,
@@ -173,10 +184,6 @@ def run_strategy():
     df = pd.DataFrame(candles["candles"],
                       columns=["time","open","high","low","close","volume"])
 
-    df["close"]=df["close"].astype(float)
-    df["high"]=df["high"].astype(float)
-    df["low"]=df["low"].astype(float)
-
     df["supertrend"]=ta.supertrend(df["high"],df["low"],df["close"],10,3).iloc[:,0]
 
     price=df["close"].iloc[-1]
@@ -184,40 +191,31 @@ def run_strategy():
 
     # ENTRY
     if position_type is None:
-        if price>st:
+        if price > st:
             position_type="LONG"
             entry_price=price
             entry_time=ist_now()
             stop_loss=st
-            trail_level=st
             send_telegram(f"🟢 LONG Entry {price}")
 
-        elif price<st:
+        elif price < st:
             position_type="SHORT"
             entry_price=price
             entry_time=ist_now()
             stop_loss=st
-            trail_level=st
             send_telegram(f"🔴 SHORT Entry {price}")
 
-    # MANAGEMENT
+    # EXIT
     else:
-        if position_type=="LONG":
-            if price<=stop_loss:
-                exit_trade(price)
+        if position_type=="LONG" and price<=stop_loss:
+            exit_trade(price)
 
-            if price-entry_price>50:
-                stop_loss=entry_price
+        if position_type=="SHORT" and price>=stop_loss:
+            exit_trade(price)
 
-        if position_type=="SHORT":
-            if price>=stop_loss:
-                exit_trade(price)
-
-            if entry_price-price>50:
-                stop_loss=entry_price
 
 def exit_trade(price):
-    global position_type, entry_price, entry_time
+    global position_type
 
     pnl=calculate_pnl(entry_price,price,QTY)
     net=pnl-commission(price,QTY)-commission(entry_price,QTY)
@@ -236,11 +234,13 @@ def exit_trade(price):
 
     position_type=None
 
+
 # ================= START =================
-send_telegram("🚀 BankNifty Dynamic ATM Trend Algo Started")
+send_telegram("🚀 bn_trend_following_strategy Started")
 
 fetch_nse_holidays()
 holiday_load_date = ist_today()
+
 
 # ================= MAIN LOOP =================
 while True:
@@ -248,11 +248,11 @@ while True:
         now=ist_time()
         today=ist_today()
 
-        if time(3,30) <= now < time(3,31) and last_reset_date != today:
+        if time(3,30)<=now<time(3,31) and last_reset_date!=today:
             daily_reset()
             last_reset_date=today
 
-        if time(8,55) <= now < time(9,0) and holiday_load_date != today:
+        if time(8,55)<=now<time(9,0) and holiday_load_date!=today:
             fetch_nse_holidays()
             holiday_load_date=today
 
