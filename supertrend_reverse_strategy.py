@@ -18,7 +18,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TRAIL_POINTS = {"BTCUSD": 100, "ETHUSD": 10}
 
 TAKER_FEE = 0.0005
-EXECUTION_TF = "5m"
+EXECUTION_TF = "1m"
 DAYS = 5
 
 LAST_CANDLE_TIME = {}
@@ -27,6 +27,21 @@ LAST_CANDLE_TIME = {}
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
+
+# ================= TRADE LOG =================
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
+
+if not os.path.exists(TRADE_CSV):
+    pd.DataFrame(columns=[
+        "entry_time",
+        "exit_time",
+        "symbol",
+        "side",
+        "entry_price",
+        "exit_price",
+        "qty",
+        "net_pnl"
+    ]).to_csv(TRADE_CSV, index=False)
 
 # ================= UTIL =================
 def log(msg):
@@ -110,32 +125,11 @@ def add_supertrend(df):
         high=df["High"],
         low=df["Low"],
         close=df["Close"],
-        length=10,
-        multiplier=3
+        length=7,
+        multiplier=7
     )
     df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
     return df
-
-
-def save_processed_data(df, symbol):
-
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-
-    out = df.copy()
-
-    cols = [
-        "HA_open",
-        "HA_close",
-        "SUPERTREND"
-    ]
-
-    existing = [c for c in cols if c in out.columns]
-
-    if existing:
-        out = out[existing].copy()
-        out["time"] = df.index
-        out = out.tail(500)
-        out.to_csv(path, index=False)
 
 
 # ================= STRATEGY =================
@@ -143,8 +137,6 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
     df = add_supertrend(df)
     ha = calculate_heikin_ashi(df)
-
-    # save_processed_data(ha, symbol)
 
     if len(ha) < 3:
         return
@@ -159,14 +151,12 @@ def process_symbol(symbol, df, price, state, allow_entry):
     if allow_entry and pos is None:
 
         long_signal = (
-            last.HA_close > prev.HA_open and
-            last.HA_close > prev.HA_close and
+            prev.SUPERTREND < prev.SUPERTREND and
             last.Close > last.SUPERTREND
         )
 
         short_signal = (
-            last.HA_close < prev.HA_open and
-            last.HA_close < prev.HA_close and
+            prev.SUPERTREND > prev.SUPERTREND and
             last.Close < last.SUPERTREND
         )
 
@@ -181,7 +171,8 @@ def process_symbol(symbol, df, price, state, allow_entry):
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "initial_sl": initial_sl,
                 "sl": initial_sl,
-                "trail_steps": 0
+                "trail_steps": 0,
+                "entry_time": datetime.now()
             }
 
             log(f"{symbol} {side.upper()} ENTRY @ {price} | SL: {initial_sl}")
@@ -230,6 +221,24 @@ def process_symbol(symbol, df, price, state, allow_entry):
             net = pnl - fee
 
             log(f"{symbol} EXIT @ {price} | NET PNL: {round(net,6)}")
+
+            trade_data = {
+                "entry_time": pos["entry_time"],
+                "exit_time": datetime.now(),
+                "symbol": symbol,
+                "side": pos["side"],
+                "entry_price": pos["entry"],
+                "exit_price": price,
+                "qty": pos["qty"],
+                "net_pnl": round(net, 6)
+            }
+
+            pd.DataFrame([trade_data]).to_csv(
+                TRADE_CSV,
+                mode="a",
+                header=False,
+                index=False
+            )
 
             state["position"] = None
 

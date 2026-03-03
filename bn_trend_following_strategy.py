@@ -19,9 +19,8 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from fyers_apiv3 import fyersModel
-from datetime import datetime, time, timedelta, timezone, date
+from datetime import datetime, time, timedelta, timezone
 from dotenv import load_dotenv
-from scipy.signal import argrelextrema
 import requests
 
 sys.path.append(os.getcwd())
@@ -96,8 +95,7 @@ def save_trade(data):
 # ================= DAILY RESET =================
 def daily_reset():
     global position_type, entry_price, entry_time
-    global symbol, last_exit_time
-    global stop_loss, trail_level
+    global symbol, last_exit_time, stop_loss, trail_level
 
     position_type=None
     entry_price=0
@@ -154,10 +152,93 @@ def is_market_open():
         return False
     return True
 
+# ================= STRATEGY =================
+def run_strategy():
+    global position_type, entry_price, entry_time
+    global stop_loss, trail_level, last_exit_time
+
+    data = {
+        "symbol": SPOT_SYMBOL,
+        "resolution": "5",
+        "date_format": "1",
+        "range_from": (datetime.now()-timedelta(days=2)).strftime("%Y-%m-%d"),
+        "range_to": datetime.now().strftime("%Y-%m-%d"),
+        "cont_flag": "1"
+    }
+
+    candles = fyers.history(data)
+    if "candles" not in candles:
+        return
+
+    df = pd.DataFrame(candles["candles"],
+                      columns=["time","open","high","low","close","volume"])
+
+    df["close"]=df["close"].astype(float)
+    df["high"]=df["high"].astype(float)
+    df["low"]=df["low"].astype(float)
+
+    df["supertrend"]=ta.supertrend(df["high"],df["low"],df["close"],10,3).iloc[:,0]
+
+    price=df["close"].iloc[-1]
+    st=df["supertrend"].iloc[-1]
+
+    # ENTRY
+    if position_type is None:
+        if price>st:
+            position_type="LONG"
+            entry_price=price
+            entry_time=ist_now()
+            stop_loss=st
+            trail_level=st
+            send_telegram(f"🟢 LONG Entry {price}")
+
+        elif price<st:
+            position_type="SHORT"
+            entry_price=price
+            entry_time=ist_now()
+            stop_loss=st
+            trail_level=st
+            send_telegram(f"🔴 SHORT Entry {price}")
+
+    # MANAGEMENT
+    else:
+        if position_type=="LONG":
+            if price<=stop_loss:
+                exit_trade(price)
+
+            if price-entry_price>50:
+                stop_loss=entry_price
+
+        if position_type=="SHORT":
+            if price>=stop_loss:
+                exit_trade(price)
+
+            if entry_price-price>50:
+                stop_loss=entry_price
+
+def exit_trade(price):
+    global position_type, entry_price, entry_time
+
+    pnl=calculate_pnl(entry_price,price,QTY)
+    net=pnl-commission(price,QTY)-commission(entry_price,QTY)
+
+    send_telegram(f"🏁 Exit {price} | Net PnL {net}")
+
+    save_trade({
+        "entry_time":entry_time,
+        "exit_time":ist_now(),
+        "side":position_type,
+        "entry_price":entry_price,
+        "exit_price":price,
+        "qty":QTY,
+        "net_pnl":net
+    })
+
+    position_type=None
+
 # ================= START =================
 send_telegram("🚀 BankNifty Dynamic ATM Trend Algo Started")
 
-# ✅ FIRST TIME HOLIDAY LOAD
 fetch_nse_holidays()
 holiday_load_date = ist_today()
 
@@ -167,29 +248,24 @@ while True:
         now=ist_time()
         today=ist_today()
 
-        # ✅ DAILY RESET 3:30–3:31 AM
         if time(3,30) <= now < time(3,31) and last_reset_date != today:
             daily_reset()
             last_reset_date=today
 
-        # ✅ DAILY HOLIDAY REFRESH 8:55–9:00 AM
         if time(8,55) <= now < time(9,0) and holiday_load_date != today:
             fetch_nse_holidays()
             holiday_load_date=today
 
-        # ✅ TOKEN LOAD AFTER 9:00
         if time(9,0)<=now<time(15,30):
             if token_load_date!=today:
                 load_token()
                 token_load_date=today
 
-        # ✅ MODEL LOAD BEFORE MARKET
         if time(9,0)<=now<time(9,30):
             if model_load_date!=today:
                 fyers=load_model()
                 model_load_date=today
 
-        # ✅ STRATEGY RUN
         if time(9,30)<=now<=time(15,30) and model_load_date==today:
             if is_market_open():
                 run_strategy()
