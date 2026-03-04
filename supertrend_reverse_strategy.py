@@ -151,12 +151,12 @@ def process_symbol(symbol, df, price, state, allow_entry):
     if allow_entry and pos is None:
 
         long_signal = (
-            prev.SUPERTREND < prev.SUPERTREND and
+            prev.Close < prev.SUPERTREND and
             last.Close > last.SUPERTREND
         )
 
         short_signal = (
-            prev.SUPERTREND > prev.SUPERTREND and
+            prev.Close > prev.SUPERTREND and
             last.Close < last.SUPERTREND
         )
 
@@ -185,7 +185,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         if pos["side"] == "long":
 
-            move = price - pos["entry"]
+            move = last.Close - pos["entry"]
             steps = int(move // trail_points)
 
             if steps > pos["trail_steps"]:
@@ -200,7 +200,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         else:
 
-            move = pos["entry"] - price
+            move = pos["entry"] - last.Close
             steps = int(move // trail_points)
 
             if steps > pos["trail_steps"]:
