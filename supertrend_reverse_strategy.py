@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pandas_ta as ta
 import numpy as np
+import traceback
 
 load_dotenv()
 
@@ -18,7 +19,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TRAIL_POINTS = {"BTCUSD": 100, "ETHUSD": 10}
 
 TAKER_FEE = 0.0005
-EXECUTION_TF = "1m"
+EXECUTION_TF = "5m"
 DAYS = 5
 
 LAST_CANDLE_TIME = {}
@@ -28,19 +29,12 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# ================= TRADE LOG =================
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
 if not os.path.exists(TRADE_CSV):
     pd.DataFrame(columns=[
-        "entry_time",
-        "exit_time",
-        "symbol",
-        "side",
-        "entry_price",
-        "exit_price",
-        "qty",
-        "net_pnl"
+        "entry_time","exit_time","symbol","side",
+        "entry_price","exit_price","qty","net_pnl"
     ]).to_csv(TRADE_CSV, index=False)
 
 # ================= UTIL =================
@@ -50,7 +44,6 @@ def log(msg):
 def commission(price, qty, symbol):
     notional = price * CONTRACT_SIZE[symbol] * qty
     return notional * TAKER_FEE
-
 
 # ================= DATA =================
 def fetch_price(symbol):
@@ -62,7 +55,6 @@ def fetch_price(symbol):
         return float(r.json()["result"]["mark_price"])
     except:
         return None
-
 
 def fetch_candles(symbol, resolution):
     start = int((datetime.now() - timedelta(days=DAYS)).timestamp())
@@ -86,13 +78,14 @@ def fetch_candles(symbol, resolution):
             columns=["time","open","high","low","close","volume"]
         )
 
-        df.rename(columns=str.title, inplace=True)
+        # Normalize columns to lowercase (IMPORTANT FIX)
+        df.columns = df.columns.str.lower()
 
-        df["Time"] = pd.to_datetime(
-            df["Time"], unit="s", utc=True
+        df["time"] = pd.to_datetime(
+            df["time"], unit="s", utc=True
         ).dt.tz_convert("Asia/Kolkata")
 
-        df.set_index("Time", inplace=True)
+        df.set_index("time", inplace=True)
         df.sort_index(inplace=True)
 
         return df.astype(float).dropna()
@@ -100,45 +93,49 @@ def fetch_candles(symbol, resolution):
     except:
         return None
 
-
 # ================= INDICATORS =================
-def calculate_heikin_ashi(df):
-    ha = df.copy()
+def calculate_trendline(df, order=21):
+    data = df.copy().reset_index(drop=True)
 
-    ha["HA_close"] = (ha["Open"] + ha["High"] + ha["Low"] + ha["Close"]) / 4
-    ha["HA_open"] = 0.0
+    data["ha_close"] = (
+        data["open"] + data["high"] + data["low"] + data["close"]
+    ) / 4
 
-    ha.iloc[0, ha.columns.get_loc("HA_open")] = (
-        ha["Open"].iloc[0] + ha["Close"].iloc[0]
-    ) / 2
+    ha_open = np.zeros(len(data))
+    ha_open[0] = (data["open"].iloc[0] + data["close"].iloc[0]) / 2
 
-    for i in range(1, len(ha)):
-        ha.iloc[i, ha.columns.get_loc("HA_open")] = (
-            ha["HA_open"].iloc[i-1] + ha["HA_close"].iloc[i-1]
-        ) / 2
+    for i in range(1, len(data)):
+        ha_open[i] = (ha_open[i - 1] + data["ha_close"].iloc[i - 1]) / 2
 
-    return ha
-
-
-def add_supertrend(df):
-    st = ta.supertrend(
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        length=7,
-        multiplier=5
+    data["ha_open"] = ha_open
+    data["ha_high"] = np.maximum.reduce(
+        [data["ha_open"], data["ha_close"], data["high"]]
     )
-    df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
-    return df
+    data["ha_low"] = np.minimum.reduce(
+        [data["ha_open"], data["ha_close"], data["low"]]
+    )
 
+    data["upper"] = data["ha_high"].rolling(order).max()
+    data["lower"] = data["ha_low"].rolling(order).min()
+
+    st = ta.supertrend(
+        high=data["ha_high"],
+        low=data["ha_low"],
+        close=data["ha_close"],
+        length=21,
+        multiplier=2.5
+    )
+
+    data["supertrend"] = st.iloc[:, 0]
+
+    return data
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state, allow_entry):
 
-    df = add_supertrend(df)
-    ha = calculate_heikin_ashi(df)
+    ha = calculate_trendline(df)
 
-    if len(ha) < 3:
+    if len(ha) < 30:
         return
 
     last = ha.iloc[-2]
@@ -151,19 +148,19 @@ def process_symbol(symbol, df, price, state, allow_entry):
     if allow_entry and pos is None:
 
         long_signal = (
-            prev.Close < prev.SUPERTREND and
-            last.Close > last.SUPERTREND
+            last.close > prev.upper and
+            last.close > last.supertrend
         )
 
         short_signal = (
-            prev.Close > prev.SUPERTREND and
-            last.Close < last.SUPERTREND
+            last.close < prev.lower and
+            last.close < last.supertrend
         )
 
         if long_signal or short_signal:
 
             side = "long" if long_signal else "short"
-            initial_sl = last.SUPERTREND
+            initial_sl = last.supertrend
 
             state["position"] = {
                 "side": side,
@@ -185,7 +182,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         if pos["side"] == "long":
 
-            move = last.Close - pos["entry"]
+            move = price - pos["entry"]
             steps = int(move // trail_points)
 
             if steps > pos["trail_steps"]:
@@ -200,7 +197,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
         else:
 
-            move = pos["entry"] - last.Close
+            move = pos["entry"] - price
             steps = int(move // trail_points)
 
             if steps > pos["trail_steps"]:
@@ -242,7 +239,6 @@ def process_symbol(symbol, df, price, state, allow_entry):
 
             state["position"] = None
 
-
 # ================= MAIN =================
 def run():
 
@@ -267,16 +263,16 @@ def run():
                     LAST_CANDLE_TIME[symbol] = df.index[-2]
 
                 if state[symbol]["position"]:
-                    process_symbol(symbol, df, price, state[symbol], allow_entry=False)
+                    process_symbol(symbol, df, price, state[symbol], False)
                 elif new_candle:
-                    process_symbol(symbol, df, price, state[symbol], allow_entry=True)
+                    process_symbol(symbol, df, price, state[symbol], True)
 
             time.sleep(10)
 
         except Exception as e:
-            log(f"Runtime error: {e}")
+            log("Runtime error:")
+            traceback.print_exc()
             time.sleep(5)
-
 
 if __name__ == "__main__":
     run()
