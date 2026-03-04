@@ -50,7 +50,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
+STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 30}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
@@ -190,9 +190,11 @@ def process_symbol(symbol, df, price, state):
 
     # ENTRY
     if pos is None and state["last_candle"] != candle_time:
-
+        trend_sl = last.trendline
         if cross_up:
-            sl = last.trendline
+            normal_sl = price - STOP_LOSS[symbol]
+            # choose lower value between normal SL and trendline
+            sl = min(normal_sl, trend_sl)
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -207,7 +209,9 @@ def process_symbol(symbol, df, price, state):
             return
 
         if cross_down:
-            sl = last.trendline
+            normal_sl = price + STOP_LOSS[symbol]
+            # choose higher value between normal SL and trendline
+            sl = max(normal_sl, trend_sl)
             state["position"] = {
                 "side": "short",
                 "entry": price,
