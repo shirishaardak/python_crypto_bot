@@ -126,7 +126,7 @@ def add_supertrend(df):
         low=df["Low"],
         close=df["Close"],
         length=7,
-        multiplier=7
+        multiplier=5
     )
     df["SUPERTREND"] = st.filter(like="SUPERT").iloc[:, 0]
     return df
