@@ -155,15 +155,18 @@ def calculate_trendline(df, order=21):
     data["UPPER"] = data["HA_high"].rolling(order).max()
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
+    data["UPPER_SL"] = data["HA_high"].rolling(5).max()
+    data["LOWER_SL"] = data["HA_low"].rolling(3).min()
+
     data["trendline"] = np.nan
     trend = data.loc[0, "HA_close"]
     data.loc[0, "trendline"] = trend
 
     for i in range(1, len(data)):
         if data.loc[i, "HA_high"] == data.loc[i, "UPPER"]:
-            trend = data.loc[i, "HA_high"]
+            trend = data.loc[i, "LOWER_SL"]
         elif data.loc[i, "HA_low"] == data.loc[i, "LOWER"]:
-            trend = data.loc[i, "HA_low"]
+            trend = data.loc[i, "UPPER_SL"]
         data.loc[i, "trendline"] = trend
 
     return data

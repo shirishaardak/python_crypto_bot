@@ -28,6 +28,7 @@ import requests
 sys.path.append(os.getcwd())
 load_dotenv()
 
+
 # ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -119,6 +120,7 @@ def fetch_nse_holidays():
     except Exception as e:
         send_telegram(f"⚠ Holiday Fetch Failed {e}")
 
+
 def is_market_open():
     today=ist_today()
     if today.weekday()>=5:
@@ -135,6 +137,7 @@ def get_last_thursday(year, month):
     while last_day.weekday()!=3:
         last_day-=timedelta(days=1)
     return last_day
+
 
 def get_current_monthly_expiry():
     today=ist_today()
@@ -218,6 +221,7 @@ def calculate_trendline(df):
 
 # ================= EXIT FUNCTION =================
 def exit_trade(reason):
+
     global position_type,last_exit_time,stop_loss,trail_level
 
     price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
@@ -269,27 +273,33 @@ def run_strategy():
 
     df_index=calculate_trendline(df_index)
     last_index=df_index.iloc[-2]
-    prev_index=df_index.iloc[-3]
 
-    index_bullish=last_index.HA_Close>last_index.trendline and last_index.HA_Close>prev_index.HA_Close and last_index.HA_Close>prev_index.HA_Open
-    index_bearish=last_index.HA_Close<last_index.trendline and last_index.HA_Close<prev_index.HA_Close and last_index.HA_Close<prev_index.HA_Open
+    # ===== TRENDLINE CONDITIONS =====
+    index_bullish = last_index.HA_Close > last_index.trendline
+    index_bearish = last_index.HA_Close < last_index.trendline
 
-    if position_type=="CE" and index_bearish:
-        exit_trade("Index Reversal")
+
+    # ===== TRENDLINE EXIT =====
+    if position_type=="CE" and last_index.HA_Close < last_index.trendline:
+        exit_trade("Trendline Breakdown")
         return
 
-    if position_type=="PE" and index_bullish:
-        exit_trade("Index Reversal")
+    if position_type=="PE" and last_index.HA_Close > last_index.trendline:
+        exit_trade("Trendline Breakout")
         return
 
+
+    # ===== ENTRY =====
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if index_bullish:
             symbol=get_atm_option("CE")
             position_type="CE"
+
         elif index_bearish:
             symbol=get_atm_option("PE")
             position_type="PE"
+
         else:
             return
 
@@ -297,21 +307,24 @@ def run_strategy():
             return
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+
         entry_price=price
         entry_time=ist_now()
 
-        stop_loss=entry_price-30
-        trail_level=entry_price+5
+        stop_loss=entry_price-50
+        trail_level=entry_price+50
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
+
+    # ===== TRAILING SL =====
     if position_type:
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         if price>=trail_level:
-            stop_loss+=5
-            trail_level+=5
+            stop_loss+=50
+            trail_level+=50
             send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if price<=stop_loss:
@@ -328,20 +341,24 @@ def load_token():
     os.system("python auth/fyers_auth.py")
     return True
 
+
 def load_model():
     token=open(TOKEN_FILE).read().strip()
+
     model=fyersModel.FyersModel(
         client_id=CLIENT_ID,
         token=token,
         is_async=False,
         log_path=""
     )
+
     send_telegram("📡 Fyers Model Connected")
     return model
 
 
 # ================= DAILY RESET =================
 def daily_reset():
+
     global position_type, entry_price, entry_time
     global symbol, last_exit_time
     global stop_loss, trail_level
@@ -361,7 +378,9 @@ def daily_reset():
 send_telegram("🚀 BankNifty Monthly ATM Trend Algo Started")
 
 while True:
+
     try:
+
         now=ist_time()
         today=ist_today()
 
@@ -384,6 +403,7 @@ while True:
                 model_load_date=today
 
         if time(9,30)<=now<=time(15,30) and model_load_date==today:
+
             if is_market_open():
                 run_strategy()
 
