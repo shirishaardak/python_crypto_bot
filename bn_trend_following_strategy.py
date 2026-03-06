@@ -365,9 +365,9 @@ while True:
         now=ist_time()
         today=ist_today()
 
-        if now>=time(3,30) and last_reset_date!=today:
+        if last_reset_date != today:
             daily_reset()
-            last_reset_date=today
+            last_reset_date = today
 
         if time(8,55)<=now<time(9,0) and holiday_load_date!=today:
             fetch_nse_holidays()
