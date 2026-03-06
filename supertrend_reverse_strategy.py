@@ -16,10 +16,10 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-TRAIL_POINTS = {"BTCUSD": 100, "ETHUSD": 10}
+TRAIL_POINTS = {"BTCUSD": 1, "ETHUSD": 1}
 
 TAKER_FEE = 0.0005
-EXECUTION_TF = "5m"
+EXECUTION_TF = "1m"
 DAYS = 5
 
 LAST_CANDLE_TIME = {}
@@ -123,7 +123,7 @@ def calculate_trendline(df, order=21):
         low=data["ha_low"],
         close=data["ha_close"],
         length=21,
-        multiplier=2.5
+        multiplier=3
     )
 
     data["supertrend"] = st.iloc[:, 0]
@@ -139,7 +139,7 @@ def process_symbol(symbol, df, price, state, allow_entry):
         return
 
     last = ha.iloc[-2]
-    prev = ha.iloc[-3]
+    prev = ha.iloc[-4]
 
     pos = state["position"]
     trail_points = TRAIL_POINTS[symbol]
