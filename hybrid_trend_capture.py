@@ -50,7 +50,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 30}
+STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 30}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
@@ -131,7 +131,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=5):
+def calculate_trendline(df, order=42):
     data = df.copy().reset_index(drop=True)
 
     data["HA_close"] = (
@@ -155,22 +155,17 @@ def calculate_trendline(df, order=5):
     data["UPPER"] = data["HA_high"].rolling(order).max()
     data["LOWER"] = data["HA_low"].rolling(order).min()
 
-    trendline = np.zeros(len(data))
-    trend = data["HA_close"].iloc[0]
-    trendline[0] = trend
+    data["Trendline"] = np.nan
+    trend = data.loc[0, "HA_close"]
+    data.loc[0, "Trendline"] = trend
 
     for i in range(1, len(data)):
-        if not np.isnan(data["UPPER"].iloc[i-1]) and not np.isnan(data["LOWER"].iloc[i-1]):
+        if data.loc[i, "HA_high"] == data.loc[i, "UPPER"]:
+            trend = data.loc[i, "HA_low"]
+        elif data.loc[i, "HA_low"] == data.loc[i, "LOWER"]:
+            trend = data.loc[i, "HA_high"]
+        data.loc[i, "Trendline"] = trend
 
-            if data["HA_close"].iloc[i] > trend:
-                trend = data["LOWER"].iloc[i]
-
-            elif data["HA_close"].iloc[i] < trend:
-                trend = data["UPPER"].iloc[i]
-
-        trendline[i] = trend
-
-    data["trendline"] = trendline
     return data
 
 
@@ -185,8 +180,8 @@ def process_symbol(symbol, df, price, state):
     candle_time = data.index[-2]
     pos = state["position"]
 
-    cross_up = prev.HA_close < prev.trendline and last.HA_close > last.trendline
-    cross_down = prev.HA_close > prev.trendline and last.HA_close < last.trendline
+    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
+    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
 
     # ENTRY
     if pos is None and state["last_candle"] != candle_time:
