@@ -131,7 +131,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=42):
+def calculate_trendline(df, order=21):
     data = df.copy().reset_index(drop=True)
 
     data["HA_close"] = (
