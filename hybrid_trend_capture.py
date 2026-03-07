@@ -50,7 +50,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 30}
+STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 15}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
@@ -131,7 +131,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=42):
+def calculate_trendline(df, order=21):
     data = df.copy().reset_index(drop=True)
 
     data["HA_close"] = (
@@ -187,9 +187,7 @@ def process_symbol(symbol, df, price, state):
     if pos is None and state["last_candle"] != candle_time:
         trend_sl = last.trendline
         if cross_up:
-            normal_sl = price - STOP_LOSS[symbol]
-            # choose lower value between normal SL and trendline
-            sl = min(normal_sl, trend_sl)
+            sl = price - STOP_LOSS[symbol]
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -204,9 +202,8 @@ def process_symbol(symbol, df, price, state):
             return
 
         if cross_down:
-            normal_sl = price + STOP_LOSS[symbol]
+            sl = price + STOP_LOSS[symbol]
             # choose higher value between normal SL and trendline
-            sl = max(normal_sl, trend_sl)
             state["position"] = {
                 "side": "short",
                 "entry": price,
@@ -225,7 +222,7 @@ def process_symbol(symbol, df, price, state):
         step = TRAIL_STEP[symbol]
 
         if pos["side"] == "long":
-            moved = last.HA_close - pos["last_trail_price"]
+            moved = price - pos["last_trail_price"]
             if moved >= step:
                 steps = int(moved // step)
                 pos["stop"] += steps * step
@@ -237,7 +234,7 @@ def process_symbol(symbol, df, price, state):
                 exit_trade(symbol, price, pos, state)
 
         if pos["side"] == "short":
-            moved = pos["last_trail_price"] - last.HA_close
+            moved = pos["last_trail_price"] - price
             if moved >= step:
                 steps = int(moved // step)
                 pos["stop"] -= steps * step
