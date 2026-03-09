@@ -171,6 +171,7 @@ def calculate_trendline(df, order=21):
 
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
+
     data = calculate_trendline(df)
     if len(data) < 3:
         return
@@ -178,32 +179,20 @@ def process_symbol(symbol, df, price, state):
     last = data.iloc[-2]
     prev = data.iloc[-3]
     candle_time = data.index[-2]
+
     pos = state["position"]
 
     cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
     cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
 
-    # ENTRY
+    # ================= REVERSE ENTRY =================
     if pos is None and state["last_candle"] != candle_time:
-        trend_sl = last.trendline
-        if cross_up:
-            sl = price - STOP_LOSS[symbol]
-            state["position"] = {
-                "side": "long",
-                "entry": price,
-                "stop": sl,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now(),
-                "last_trail_price": price
-            }
-            state["last_candle"] = candle_time
-            log(f"{symbol} LONG ENTRY @ {price}")
-            send_telegram(f"🟢 *{symbol} LONG ENTRY*\nPrice: {price}\nSL: {sl}")
-            return
 
-        if cross_down:
+        # ORIGINAL BUY → NOW SHORT
+        if cross_up:
+
             sl = price + STOP_LOSS[symbol]
-            # choose higher value between normal SL and trendline
+
             state["position"] = {
                 "side": "short",
                 "entry": price,
@@ -212,41 +201,72 @@ def process_symbol(symbol, df, price, state):
                 "entry_time": datetime.now(),
                 "last_trail_price": price
             }
+
             state["last_candle"] = candle_time
-            log(f"{symbol} SHORT ENTRY @ {price}")
-            send_telegram(f"🔴 *{symbol} SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
+
+            log(f"{symbol} REVERSE SHORT ENTRY @ {price}")
+            send_telegram(f"🔴 *{symbol} REVERSE SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
-    # EXIT + TRAIL
+
+        # ORIGINAL SELL → NOW LONG
+        if cross_down:
+
+            sl = price - STOP_LOSS[symbol]
+
+            state["position"] = {
+                "side": "long",
+                "entry": price,
+                "stop": sl,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now(),
+                "last_trail_price": price
+            }
+
+            state["last_candle"] = candle_time
+
+            log(f"{symbol} REVERSE LONG ENTRY @ {price}")
+            send_telegram(f"🟢 *{symbol} REVERSE LONG ENTRY*\nPrice: {price}\nSL: {sl}")
+            return
+
+
+    # ================= TRAILING + EXIT =================
     if pos:
+
         step = TRAIL_STEP[symbol]
 
         if pos["side"] == "long":
+
             moved = price - pos["last_trail_price"]
+
             if moved >= step:
                 steps = int(moved // step)
                 pos["stop"] += steps * step
                 pos["last_trail_price"] += steps * step
+
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
-                send_telegram(f"📈 {symbol} LONG TRAIL\nNew SL: {pos['stop']}", key=f"{symbol}_trail")
 
             if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
+
         if pos["side"] == "short":
+
             moved = pos["last_trail_price"] - price
+
             if moved >= step:
                 steps = int(moved // step)
                 pos["stop"] -= steps * step
                 pos["last_trail_price"] -= steps * step
+
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
-                send_telegram(f"📉 {symbol} SHORT TRAIL\nNew SL: {pos['stop']}", key=f"{symbol}_trail")
 
             if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
 def exit_trade(symbol, price, pos, state):
+
     pnl = (
         (price - pos["entry"]) if pos["side"] == "long"
         else (pos["entry"] - price)
@@ -266,6 +286,7 @@ def exit_trade(symbol, price, pos, state):
     })
 
     log(f"{symbol} {pos['side'].upper()} EXIT | Net PnL: {round(net, 6)}")
+
     send_telegram(
         f"✅ *{symbol} {pos['side'].upper()} EXIT*\nExit: {price}\nNet PnL: {round(net, 6)}"
     )
@@ -275,6 +296,7 @@ def exit_trade(symbol, price, pos, state):
 
 # ================= MAIN LOOP =================
 def run():
+
     if not os.path.exists(TRADE_CSV):
         pd.DataFrame(
             columns=["entry_time","exit_time","symbol","side",
@@ -288,20 +310,27 @@ def run():
 
     while True:
         try:
+
             for symbol in SYMBOLS:
+
                 df = fetch_candles(symbol)
+
                 if len(df) < 100:
                     continue
 
                 price = fetch_price(symbol)
+
                 process_symbol(symbol, df, price, state[symbol])
 
             time.sleep(5)
 
         except Exception:
+
             log("MAIN LOOP ERROR:")
             log(traceback.format_exc())
+
             send_telegram("⚠️ Bot Error Occurred")
+
             time.sleep(5)
 
 
