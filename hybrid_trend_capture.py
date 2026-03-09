@@ -131,7 +131,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=21):
+def calculate_trendline(df, order=42):
     data = df.copy().reset_index(drop=True)
 
     data["HA_close"] = (
@@ -194,7 +194,7 @@ def process_symbol(symbol, df, price, state):
             sl = price + STOP_LOSS[symbol]
 
             state["position"] = {
-                "side": "short",
+                "side": "long",
                 "entry": price,
                 "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -215,7 +215,7 @@ def process_symbol(symbol, df, price, state):
             sl = price - STOP_LOSS[symbol]
 
             state["position"] = {
-                "side": "long",
+                "side": "short",
                 "entry": price,
                 "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -237,31 +237,31 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "long":
 
-            moved = price - pos["last_trail_price"]
+            # moved = price - pos["last_trail_price"]
 
-            if moved >= step:
-                steps = int(moved // step)
-                pos["stop"] += steps * step
-                pos["last_trail_price"] += steps * step
+            # if moved >= step:
+            #     steps = int(moved // step)
+            #     pos["stop"] += steps * step
+            #     pos["last_trail_price"] += steps * step
 
-                log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
+            #     log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
-            if price < pos["stop"]:
+            if price < pos["stop"] or last.HA_close < last.trendline:
                 exit_trade(symbol, price, pos, state)
 
 
         if pos["side"] == "short":
 
-            moved = pos["last_trail_price"] - price
+            # moved = pos["last_trail_price"] - price
 
-            if moved >= step:
-                steps = int(moved // step)
-                pos["stop"] -= steps * step
-                pos["last_trail_price"] -= steps * step
+            # if moved >= step:
+            #     steps = int(moved // step)
+            #     pos["stop"] -= steps * step
+            #     pos["last_trail_price"] -= steps * step
 
-                log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
+            #     log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
-            if price > pos["stop"]:
+            if price > pos["stop"] or last.HA_close > last.trendline:
                 exit_trade(symbol, price, pos, state)
 
 
