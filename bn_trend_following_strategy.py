@@ -48,6 +48,9 @@ QTY=30
 COMMISSION_RATE=0.0004
 SPOT_SYMBOL="NSE:NIFTYBANK-INDEX"
 
+ADX_PERIOD=14
+ADX_THRESHOLD=20
+
 folder="data/Trend_Following"
 os.makedirs(folder,exist_ok=True)
 TRADES_FILE=f"{folder}/live_trades.csv"
@@ -55,8 +58,8 @@ TOKEN_FILE="auth/api_key/access_token.txt"
 
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+TELEGRAM_BOT_TOKEN=os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID=os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
@@ -130,16 +133,17 @@ def is_market_open():
     return True
 
 
-# ================= MONTHLY EXPIRY ENGINE =================
-def get_last_thursday(year, month):
-    last_day = date(year, month, 1) + timedelta(days=32)
-    last_day = last_day.replace(day=1) - timedelta(days=1)
+# ================= EXPIRY =================
+def get_last_thursday(year,month):
+    last_day=date(year,month,1)+timedelta(days=32)
+    last_day=last_day.replace(day=1)-timedelta(days=1)
     while last_day.weekday()!=3:
         last_day-=timedelta(days=1)
     return last_day
 
 
 def get_current_monthly_expiry():
+
     today=ist_today()
     now=ist_time()
     expiry=get_last_thursday(today.year,today.month)
@@ -155,17 +159,17 @@ def get_current_monthly_expiry():
     return expiry
 
 
-# ================= DYNAMIC ATM =================
+# ================= ATM OPTION =================
 def get_atm_option(option_type):
 
     if not is_market_open():
         return None
 
-    spot = fyers.quotes({"symbols": SPOT_SYMBOL})["d"][0]["v"]["lp"]
-    strike = int(round(spot/100)*100)
+    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    strike=int(round(spot/100)*100)
 
-    expiry = get_current_monthly_expiry()
-    expiry_str = expiry.strftime("%y%b").upper()
+    expiry=get_current_monthly_expiry()
+    expiry_str=expiry.strftime("%y%b").upper()
 
     return f"NSE:BANKNIFTY{expiry_str}{strike}{option_type}"
 
@@ -215,11 +219,14 @@ def calculate_trendline(df):
             trendline=data["HA_High"].iloc[i]
         data.loc[i,"trendline"]=trendline
 
+    adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
+    data["ADX"]=adx["ADX_14"]
+
     data.index=df.index
     return data
 
 
-# ================= EXIT FUNCTION =================
+# ================= EXIT =================
 def exit_trade(reason):
 
     global position_type,last_exit_time,stop_loss,trail_level
@@ -250,10 +257,15 @@ def exit_trade(reason):
 def run_strategy():
 
     global position_type, entry_price, entry_time
-    global symbol, last_exit_time
-    global stop_loss, trail_level
+    global symbol, stop_loss, trail_level
 
     if last_exit_time and (ist_now()-last_exit_time).seconds<300:
+        return
+
+    ce_symbol=get_atm_option("CE")
+    pe_symbol=get_atm_option("PE")
+
+    if ce_symbol is None or pe_symbol is None:
         return
 
     hist_template={
@@ -264,46 +276,43 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    hist_index=hist_template.copy()
-    hist_index["symbol"]=SPOT_SYMBOL
-    df_index=get_stock_historical_data(hist_index)
+    # CE DATA
+    hist_ce=hist_template.copy()
+    hist_ce["symbol"]=ce_symbol
+    df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
+    ce_last=df_ce.iloc[-2]
+    ce_prv=df_ce.iloc[-3]
 
-    if len(df_index)<50:
+    ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close
+    ce_adx=ce_last.ADX
+
+    # PE DATA
+    hist_pe=hist_template.copy()
+    hist_pe["symbol"]=pe_symbol
+    df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
+    pe_last=df_pe.iloc[-2]
+    pe_prv=df_pe.iloc[-3]
+
+    pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close
+    pe_adx=pe_last.ADX
+
+    # SIDEWAYS FILTER
+    if ce_adx < 22 and pe_adx < 22:
         return
 
-    df_index=calculate_trendline(df_index)
-    last_index=df_index.iloc[-2]
 
-    # ===== TRENDLINE CONDITIONS =====
-    index_bullish = last_index.HA_Close > last_index.trendline
-    index_bearish = last_index.HA_Close < last_index.trendline
-
-
-    # ===== TRENDLINE EXIT =====
-    if position_type=="CE" and last_index.HA_Close < last_index.trendline:
-        exit_trade("Trendline Breakdown")
-        return
-
-    if position_type=="PE" and last_index.HA_Close > last_index.trendline:
-        exit_trade("Trendline Breakout")
-        return
-
-
-    # ===== ENTRY =====
+    # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        if index_bullish:
-            symbol=get_atm_option("CE")
+        if ce_bullish and ce_adx>ADX_THRESHOLD and ce_adx>pe_adx:
+            symbol=ce_symbol
             position_type="CE"
 
-        elif index_bearish:
-            symbol=get_atm_option("PE")
+        elif pe_bullish and pe_adx>ADX_THRESHOLD and pe_adx>ce_adx:
+            symbol=pe_symbol
             position_type="PE"
 
         else:
-            return
-
-        if symbol is None:
             return
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
@@ -312,24 +321,28 @@ def run_strategy():
         entry_time=ist_now()
 
         stop_loss=entry_price-50
-        trail_level=entry_price+50
+        trail_level=entry_price+25
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
 
-    # ===== TRAILING SL =====
+    # EXIT + TRAILING
     if position_type:
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if price>=trail_level:
-            stop_loss+=50
-            trail_level+=50
-            send_telegram(f"📈 TSL Updated → SL {stop_loss}")
-
-        if price<=stop_loss:
-            exit_trade("SL Hit")
+        if position_type=="CE" and (price<=stop_loss or ce_last.HA_Close<ce_last.trendline):
+            exit_trade("SL / Trendline")
             return
+
+        if position_type=="PE" and (price<=stop_loss or pe_last.HA_Close<pe_last.trendline):
+            exit_trade("SL / Trendline")
+            return
+
+        if price>=trail_level:
+            stop_loss+=25
+            trail_level+=25
+            send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if ist_time()>=time(15,15):
             exit_trade("Time Exit")
@@ -375,7 +388,7 @@ def daily_reset():
 
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 BankNifty Monthly ATM Trend Algo Started")
+send_telegram("🚀 BankNifty Option Trend Algo Started")
 
 while True:
 
@@ -384,7 +397,7 @@ while True:
         now=ist_time()
         today=ist_today()
 
-        if last_reset_date != today:
+        if now >= time(16,0) and last_reset_date != today:
             daily_reset()
             last_reset_date = today
 
