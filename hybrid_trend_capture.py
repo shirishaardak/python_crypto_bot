@@ -50,7 +50,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 30}
+STOP_LOSS = {"BTCUSD": 250, "ETHUSD": 15}
 TRAIL_STEP = {"BTCUSD": 250, "ETHUSD": 15}
 
 BASE_DIR = os.getcwd()
@@ -237,13 +237,8 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "long":
 
-            moved = last.HA_close - pos["last_trail_price"]
-
-            if moved >= step:
-                steps = int(moved // step)
-                pos["stop"] += steps * step
-                pos["last_trail_price"] += steps * step
-
+            if last.HA_high == last.UPPER:
+                pos["stop"] = last.trendline
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
             if price < pos["stop"]:
@@ -252,13 +247,8 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "short":
 
-            moved = pos["last_trail_price"] - last.HA_close
-
-            if moved >= step:
-                steps = int(moved // step)
-                pos["stop"] -= steps * step
-                pos["last_trail_price"] -= steps * step
-
+            if last.HA_low == last.LOWER:
+                pos["stop"] = last.trendline
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
             if price > pos["stop"]:
