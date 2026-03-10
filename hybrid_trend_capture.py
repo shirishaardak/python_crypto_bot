@@ -241,7 +241,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] = last.trendline
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
-            if price < pos["stop"]:
+            if last.HA_close < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
@@ -251,7 +251,7 @@ def process_symbol(symbol, df, price, state):
                 pos["stop"] = last.trendline
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
-            if price > pos["stop"]:
+            if last.HA_close > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
