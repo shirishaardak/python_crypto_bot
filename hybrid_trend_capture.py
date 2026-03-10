@@ -204,8 +204,8 @@ def process_symbol(symbol, df, price, state):
 
             state["last_candle"] = candle_time
 
-            log(f"{symbol} REVERSE SHORT ENTRY @ {price}")
-            send_telegram(f"🔴 *{symbol} REVERSE SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
+            log(f"{symbol} LONG ENTRY @ {price}")
+            send_telegram(f"🟢 *{symbol} LONG ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
 
@@ -225,8 +225,8 @@ def process_symbol(symbol, df, price, state):
 
             state["last_candle"] = candle_time
 
-            log(f"{symbol} REVERSE LONG ENTRY @ {price}")
-            send_telegram(f"🟢 *{symbol} REVERSE LONG ENTRY*\nPrice: {price}\nSL: {sl}")
+            log(f"{symbol} SHORT ENTRY @ {price}")
+            send_telegram(f"🔴 *{symbol} SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
 
@@ -237,7 +237,7 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "long":
 
-            moved = price - pos["last_trail_price"]
+            moved = last.HA_close - pos["last_trail_price"]
 
             if moved >= step:
                 steps = int(moved // step)
@@ -252,7 +252,7 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "short":
 
-            moved = pos["last_trail_price"] - price
+            moved = pos["last_trail_price"] - last.HA_close
 
             if moved >= step:
                 steps = int(moved // step)
