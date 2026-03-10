@@ -255,7 +255,6 @@ def exit_trade(reason):
 
 # ================= STRATEGY =================
 def run_strategy():
-    send_telegram("📡 strategy Model Connected")
 
     global position_type, entry_price, entry_time
     global symbol, stop_loss, trail_level

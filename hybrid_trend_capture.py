@@ -51,7 +51,7 @@ TIMEFRAME = "5m"
 DAYS = 15
 
 STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 15}
-TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
+TRAIL_STEP = {"BTCUSD": 300, "ETHUSD": 15}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
@@ -237,31 +237,31 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "long":
 
-            # moved = price - pos["last_trail_price"]
+            moved = price - pos["last_trail_price"]
 
-            # if moved >= step:
-            #     steps = int(moved // step)
-            #     pos["stop"] += steps * step
-            #     pos["last_trail_price"] += steps * step
+            if moved >= step:
+                steps = int(moved // step)
+                pos["stop"] += steps * step
+                pos["last_trail_price"] += steps * step
 
-            #     log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
+                log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
-            if price < pos["stop"] or last.HA_close < last.trendline:
+            if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
         if pos["side"] == "short":
 
-            # moved = pos["last_trail_price"] - price
+            moved = pos["last_trail_price"] - price
 
-            # if moved >= step:
-            #     steps = int(moved // step)
-            #     pos["stop"] -= steps * step
-            #     pos["last_trail_price"] -= steps * step
+            if moved >= step:
+                steps = int(moved // step)
+                pos["stop"] -= steps * step
+                pos["last_trail_price"] -= steps * step
 
-            #     log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
+                log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
-            if price > pos["stop"] or last.HA_close > last.trendline:
+            if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
