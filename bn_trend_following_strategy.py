@@ -304,11 +304,11 @@ def run_strategy():
     # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        if ce_bullish and ce_adx>ADX_THRESHOLD and ce_adx>pe_adx:
+        if ce_bullish:
             symbol=ce_symbol
             position_type="CE"
 
-        elif pe_bullish and pe_adx>ADX_THRESHOLD and pe_adx>ce_adx:
+        elif pe_bullish:
             symbol=pe_symbol
             position_type="PE"
 
