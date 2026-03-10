@@ -269,7 +269,7 @@ def run_strategy():
         return
 
     hist_template={
-        "resolution":"15",
+        "resolution":"5",
         "date_format":"1",
         "range_from":(ist_today()-timedelta(days=5)).strftime("%Y-%m-%d"),
         "range_to":ist_today().strftime("%Y-%m-%d"),
@@ -283,7 +283,7 @@ def run_strategy():
     ce_last=df_ce.iloc[-2]
     ce_prv=df_ce.iloc[-3]
 
-    ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close
+    ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close and ce_last.HA_Close>ce_prv.HA_Open
     ce_adx=ce_last.ADX
 
     # PE DATA
@@ -293,17 +293,17 @@ def run_strategy():
     pe_last=df_pe.iloc[-2]
     pe_prv=df_pe.iloc[-3]
 
-    pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close
+    pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close and pe_last.HA_Close>pe_prv.HA_Open
     pe_adx=pe_last.ADX
 
       # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        if ce_bullish:
+        if ce_bullish and ce_adx > 25:
             symbol=ce_symbol
             position_type="CE"
 
-        elif pe_bullish:
+        elif pe_bullish and pe_adx > 25:
             symbol=pe_symbol
             position_type="PE"
 
@@ -326,11 +326,11 @@ def run_strategy():
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if position_type=="CE" and (price<=stop_loss or ce_last.HA_Close<ce_last.trendline):
+        if position_type=="CE" and  price<ce_last.trendline:
             exit_trade("SL / Trendline")
             return
 
-        if position_type=="PE" and (price<=stop_loss or pe_last.HA_Close<pe_last.trendline):
+        if position_type=="PE" and  price<pe_last.trendline:
             exit_trade("SL / Trendline")
             return
 
