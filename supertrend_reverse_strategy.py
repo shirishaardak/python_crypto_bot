@@ -50,8 +50,8 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "1m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 100, "ETHUSD": 10}
-TRAIL_STEP = {"BTCUSD": 10, "ETHUSD": 5}
+STOP_LOSS = {"BTCUSD": 50, "ETHUSD": 10}
+TRAIL_STEP = {"BTCUSD": 1, "ETHUSD": 1}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_reverse_strategy")
@@ -182,8 +182,8 @@ def process_symbol(symbol, df, price, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.trendline and prev.HA_close < prev.trendline
-    cross_down = last.HA_close < last.trendline and prev.HA_close > prev.trendline
+    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_Open
+    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_Open
 
     # ================= REVERSE ENTRY =================
     if pos is None and state["last_candle"] != candle_time:
