@@ -50,8 +50,8 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 15}
-TRAIL_STEP = {"BTCUSD": 300, "ETHUSD": 15}
+STOP_LOSS = {"BTCUSD": 500, "ETHUSD": 30}
+TRAIL_STEP = {"BTCUSD": 250, "ETHUSD": 15}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
