@@ -182,35 +182,14 @@ def process_symbol(symbol, df, price, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.trendline and last.HA_close < prev.HA_close
-    cross_down = last.HA_close < last.trendline and last.HA_close > prev.HA_close
+    cross_up = last.HA_close > last.trendline and prev.HA_close < prev.trendline
+    cross_down = last.HA_close < last.trendline and prev.HA_close > prev.trendline
 
     # ================= REVERSE ENTRY =================
     if pos is None and state["last_candle"] != candle_time:
 
         # ORIGINAL BUY → NOW SHORT
         if cross_up:
-
-            sl = price + STOP_LOSS[symbol]
-
-            state["position"] = {
-                "side": "short",
-                "entry": price,
-                "stop": sl,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now(),
-                "last_trail_price": price
-            }
-
-            state["last_candle"] = candle_time
-
-            log(f"{symbol} SHORT ENTRY @ {price}")
-            send_telegram(f"🟢 *{symbol} SHORT ENTRY*\nPrice: {price}\nSL: {sl}")
-            return
-
-
-        # ORIGINAL SELL → NOW LONG
-        if cross_down:
 
             sl = price - STOP_LOSS[symbol]
 
@@ -225,8 +204,29 @@ def process_symbol(symbol, df, price, state):
 
             state["last_candle"] = candle_time
 
-            log(f"{symbol} LONG ENTRY @ {price}")
-            send_telegram(f"🔴 *{symbol} LONG ENTRY*\nPrice: {price}\nSL: {sl}")
+            log(f"{symbol} long ENTRY @ {price}")
+            send_telegram(f"🟢 *{symbol} long ENTRY*\nPrice: {price}\nSL: {sl}")
+            return
+
+
+        # ORIGINAL SELL → NOW LONG
+        if cross_down:
+
+            sl = price + STOP_LOSS[symbol]
+
+            state["position"] = {
+                "side": "short",
+                "entry": price,
+                "stop": sl,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now(),
+                "last_trail_price": price
+            }
+
+            state["last_candle"] = candle_time
+
+            log(f"{symbol} short ENTRY @ {price}")
+            send_telegram(f"🔴 *{symbol} short ENTRY*\nPrice: {price}\nSL: {sl}")
             return
 
 
