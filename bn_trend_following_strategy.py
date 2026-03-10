@@ -255,6 +255,7 @@ def exit_trade(reason):
 
 # ================= STRATEGY =================
 def run_strategy():
+    send_telegram("📡 strategy Model Connected")
 
     global position_type, entry_price, entry_time
     global symbol, stop_loss, trail_level
@@ -410,7 +411,7 @@ while True:
                 load_token()
                 token_load_date=today
 
-        if time(9,0)<=now<time(9,30):
+        if time(9,0)<=now<time(15,30):
             if model_load_date!=today:
                 fyers=load_model()
                 model_load_date=today
