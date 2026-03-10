@@ -50,8 +50,8 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "5m"
 DAYS = 15
 
-STOP_LOSS = {"BTCUSD": 250, "ETHUSD": 15}
-TRAIL_STEP = {"BTCUSD": 250, "ETHUSD": 15}
+STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 10}
+TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "hybrid_trend_capture_time")
@@ -238,20 +238,20 @@ def process_symbol(symbol, df, price, state):
         if pos["side"] == "long":
 
             if last.HA_high == last.UPPER:
-                pos["stop"] = last.trendline
+                pos["stop"] = last.trendline - TRAIL_STEP[symbol]
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
-            if last.HA_close < pos["stop"]:
+            if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
         if pos["side"] == "short":
 
             if last.HA_low == last.LOWER:
-                pos["stop"] = last.trendline
+                pos["stop"] = last.trendline + TRAIL_STEP[symbol]
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
-            if last.HA_close > pos["stop"]:
+            if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state)
 
 
