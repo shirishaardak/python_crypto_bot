@@ -84,6 +84,10 @@ last_exit_time=None
 stop_loss=None
 trail_level=None
 
+# ATM CONTROL
+atm_strike=None
+atm_set_date=None
+
 NSE_HOLIDAYS=set()
 holiday_load_date=None
 
@@ -162,16 +166,29 @@ def get_current_monthly_expiry():
 # ================= ATM OPTION =================
 def get_atm_option(option_type):
 
+    global atm_strike, atm_set_date
+
     if not is_market_open():
         return None
 
-    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
-    strike=int(round(spot/100)*100)
+    today=ist_today()
+
+    # Set ATM once per day after 9:30
+    if atm_strike is None and ist_time()>=time(9,30):
+
+        spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+        atm_strike=int(round(spot/100)*100)
+        atm_set_date=today
+
+        send_telegram(f"🎯 ATM Selected {atm_strike}")
+
+    if atm_strike is None:
+        return None
 
     expiry=get_current_monthly_expiry()
     expiry_str=expiry.strftime("%y%b").upper()
 
-    return f"NSE:BANKNIFTY{expiry_str}{strike}{option_type}"
+    return f"NSE:BANKNIFTY{expiry_str}{atm_strike}{option_type}"
 
 
 # ================= DATA =================
@@ -284,7 +301,6 @@ def run_strategy():
     ce_prv=df_ce.iloc[-3]
 
     ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close
-    ce_adx=ce_last.ADX
 
     # PE DATA
     hist_pe=hist_template.copy()
@@ -294,9 +310,9 @@ def run_strategy():
     pe_prv=df_pe.iloc[-3]
 
     pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close
-    pe_adx=pe_last.ADX
 
-      # ENTRY
+
+    # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if ce_bullish:
@@ -326,12 +342,8 @@ def run_strategy():
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if position_type=="CE" and (price<=stop_loss or ce_last.HA_Close<ce_last.trendline):
-            exit_trade("SL / Trendline")
-            return
-
-        if position_type=="PE" and (price<=stop_loss or pe_last.HA_Close<pe_last.trendline):
-            exit_trade("SL / Trendline")
+        if price<=stop_loss:
+            exit_trade("StopLoss")
             return
 
         if price>=trail_level:
@@ -370,6 +382,7 @@ def daily_reset():
     global position_type, entry_price, entry_time
     global symbol, last_exit_time
     global stop_loss, trail_level
+    global atm_strike, atm_set_date
 
     position_type=None
     entry_price=0
@@ -378,6 +391,9 @@ def daily_reset():
     last_exit_time=None
     stop_loss=None
     trail_level=None
+
+    atm_strike=None
+    atm_set_date=None
 
     send_telegram("🔄 Daily Reset Completed")
 
@@ -405,7 +421,7 @@ while True:
                 load_token()
                 token_load_date=today
 
-        if time(9,0)<=now<time(15,30):
+        if time(9,0)<=now<time(9,30):
             if model_load_date!=today:
                 fyers=load_model()
                 model_load_date=today
