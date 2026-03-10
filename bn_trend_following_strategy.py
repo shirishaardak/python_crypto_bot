@@ -296,12 +296,7 @@ def run_strategy():
     pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close
     pe_adx=pe_last.ADX
 
-    # SIDEWAYS FILTER
-    if ce_adx < 22 and pe_adx < 22:
-        return
-
-
-    # ENTRY
+      # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if ce_bullish:
