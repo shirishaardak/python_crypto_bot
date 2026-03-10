@@ -182,8 +182,8 @@ def process_symbol(symbol, df, price, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_Open
-    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_Open
+    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
+    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
 
     # ================= REVERSE ENTRY =================
     if pos is None and state["last_candle"] != candle_time:
