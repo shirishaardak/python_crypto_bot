@@ -191,10 +191,10 @@ def process_symbol(symbol, df, price, state):
         # ORIGINAL BUY → NOW SHORT
         if cross_up:
 
-            sl = price - STOP_LOSS[symbol]
+            sl = price + STOP_LOSS[symbol]
 
             state["position"] = {
-                "side": "long",
+                "side": "short",
                 "entry": price,
                 "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -212,10 +212,10 @@ def process_symbol(symbol, df, price, state):
         # ORIGINAL SELL → NOW LONG
         if cross_down:
 
-            sl = price + STOP_LOSS[symbol]
+            sl = price - STOP_LOSS[symbol]
 
             state["position"] = {
-                "side": "short",
+                "side": "long",
                 "entry": price,
                 "stop": sl,
                 "qty": DEFAULT_CONTRACTS[symbol],

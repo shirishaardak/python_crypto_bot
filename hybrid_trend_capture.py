@@ -49,8 +49,10 @@ TAKER_FEE = 0.0005
 
 TIMEFRAME = "5m"
 DAYS = 15
+ADX_THRESHOLD = 27
+ADX_LENGTH = 18
 
-STOP_LOSS = {"BTCUSD": 300, "ETHUSD": 10}
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 10}
 TRAIL_STEP = {"BTCUSD": 100, "ETHUSD": 10}
 
 BASE_DIR = os.getcwd()
@@ -131,7 +133,8 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
 
 
 # ================= TRENDLINE =================
-def calculate_trendline(df, order=42):
+def calculate_trendline(df, order=21):
+
     data = df.copy().reset_index(drop=True)
 
     data["HA_close"] = (
@@ -145,9 +148,11 @@ def calculate_trendline(df, order=42):
         ha_open[i] = (ha_open[i - 1] + data["HA_close"].iloc[i - 1]) / 2
 
     data["HA_open"] = ha_open
+
     data["HA_high"] = np.maximum.reduce(
         [data["HA_open"], data["HA_close"], data["high"]]
     )
+
     data["HA_low"] = np.minimum.reduce(
         [data["HA_open"], data["HA_close"], data["low"]]
     )
@@ -160,11 +165,24 @@ def calculate_trendline(df, order=42):
     data.loc[0, "trendline"] = trend
 
     for i in range(1, len(data)):
+
         if data.loc[i, "HA_high"] == data.loc[i, "UPPER"]:
             trend = data.loc[i, "HA_low"]
+
         elif data.loc[i, "HA_low"] == data.loc[i, "LOWER"]:
             trend = data.loc[i, "HA_high"]
+
         data.loc[i, "trendline"] = trend
+
+    # ================= ADX =================
+    adx = ta.adx(
+        high=data["high"],
+        low=data["low"],
+        close=data["close"],
+        length=ADX_LENGTH
+    )
+
+    data["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
 
     return data
 
@@ -182,8 +200,8 @@ def process_symbol(symbol, df, price, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
-    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
+    cross_up = last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.ADX > ADX_THRESHOLD
+    cross_down = last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.ADX > ADX_THRESHOLD
 
     # ================= REVERSE ENTRY =================
     if pos is None and state["last_candle"] != candle_time:
@@ -238,7 +256,7 @@ def process_symbol(symbol, df, price, state):
         if pos["side"] == "long":
 
             if last.HA_high == last.UPPER:
-                pos["stop"] = last.trendline - TRAIL_STEP[symbol]
+                pos["stop"] = last.trendline
                 log(f"{symbol} LONG TRAIL -> SL {pos['stop']}")
 
             if price < pos["stop"]:
@@ -248,7 +266,7 @@ def process_symbol(symbol, df, price, state):
         if pos["side"] == "short":
 
             if last.HA_low == last.LOWER:
-                pos["stop"] = last.trendline + TRAIL_STEP[symbol]
+                pos["stop"] = last.trendline
                 log(f"{symbol} SHORT TRAIL -> SL {pos['stop']}")
 
             if price > pos["stop"]:
