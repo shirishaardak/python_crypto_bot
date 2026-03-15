@@ -210,7 +210,6 @@ def process_symbol(symbol,df,price,state):
         if (
             trend5m==1
             and st_now==1
-            and st_prev==-1
             and price>vwap
             and rsi<55
             and adx>20
@@ -221,7 +220,6 @@ def process_symbol(symbol,df,price,state):
         if (
             trend5m==-1
             and st_now==-1
-            and st_prev==1
             and price<vwap
             and rsi>45
             and adx>20
