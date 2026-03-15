@@ -207,7 +207,7 @@ def process_symbol(symbol,df,state):
 
     ha = build_indicators(df)
 
-    save_processed_data(df,ha,symbol)
+    # save_processed_data(df,ha,symbol)
 
     if len(ha) < 50:
         return
