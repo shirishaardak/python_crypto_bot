@@ -146,9 +146,9 @@ def fetch_trend(symbol):
 # ================= INDICATORS =================
 def calculate_indicators(df):
 
-    data=df.copy()
+    data = df.copy()
 
-    st=ta.supertrend(
+    st = ta.supertrend(
         data["high"],
         data["low"],
         data["close"],
@@ -156,15 +156,19 @@ def calculate_indicators(df):
         multiplier=3
     )
 
-    data["ST_DIR"]=st["SUPERTd_10_3.0"]
+    # Auto-detect supertrend columns
+    st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
+    st_line_col = [c for c in st.columns if "SUPERT_" in c and "SUPERTd" not in c][0]
 
-    adx=ta.adx(data["high"],data["low"],data["close"])
+    data["ST_DIR"] = st[st_dir_col]
+    data["ST_LINE"] = st[st_line_col]
 
-    data["ADX"]=adx["ADX_14"]
+    adx = ta.adx(data["high"], data["low"], data["close"])
+    data["ADX"] = adx["ADX_14"]
 
-    data["RSI"]=ta.rsi(data["close"],length=14)
+    data["RSI"] = ta.rsi(data["close"], length=14)
 
-    data["VWAP"]=ta.vwap(
+    data["VWAP"] = ta.vwap(
         data["high"],
         data["low"],
         data["close"],
