@@ -168,18 +168,20 @@ def get_history(symbol):
 # ================= INDICATORS =================
 def calculate_indicators(df):
 
-    ha=ta.ha(df["Open"],df["High"],df["Low"],df["Close"])
+    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"])
 
-    df["HA_Close"]=ha["HA_close"]
-    df["HA_Open"]=ha["HA_open"]
+    df["HA_Close"] = ha["HA_close"]
+    df["HA_Open"] = ha["HA_open"]
 
-    st=ta.supertrend(df["High"],df["Low"],df["Close"],length=10,multiplier=3)
+    st = ta.supertrend(df["High"], df["Low"], df["Close"], length=10, multiplier=3)
 
-    df["ST_dir"]=st["SUPERTd_10_3.0"]
+    st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
 
-    adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
+    df["ST_dir"] = st[st_dir_col]
 
-    df["ADX"]=adx["ADX_14"]
+    adx = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+
+    df["ADX"] = adx["ADX_14"]
 
     return df
 
