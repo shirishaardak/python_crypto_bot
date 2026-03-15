@@ -2,9 +2,8 @@ import os
 import time
 import requests
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import pandas_ta as ta
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import traceback
 
@@ -16,25 +15,28 @@ TELEGRAM_CHAT_ID = os.getenv("CHAT_")
 
 _last_tg = {}
 
-def send_telegram(msg,key=None,cooldown=30):
+def send_telegram(msg, key=None, cooldown=30):
 
     try:
-
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
             return
 
-        now=time.time()
+        now = time.time()
 
         if key:
-            if key in _last_tg and now-_last_tg[key]<cooldown:
+            if key in _last_tg and now - _last_tg[key] < cooldown:
                 return
-            _last_tg[key]=now
+            _last_tg[key] = now
 
-        url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
         requests.post(
             url,
-            json={"chat_id":TELEGRAM_CHAT_ID,"text":msg,"parse_mode":"Markdown"},
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": msg,
+                "parse_mode": "Markdown"
+            },
             timeout=5
         )
 
@@ -43,29 +45,26 @@ def send_telegram(msg,key=None,cooldown=30):
 
 
 # ================= SETTINGS =================
-SYMBOLS=["BTCUSD","ETHUSD"]
+SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-DEFAULT_CONTRACTS={"BTCUSD":100,"ETHUSD":100}
+DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 
-CONTRACT_SIZE={"BTCUSD":0.001,"ETHUSD":0.01}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-TAKER_FEE=0.0005
+TAKER_FEE = 0.0005
 
-TIMEFRAME="1m"
+TIMEFRAME = "1m"
+DAYS = 5
 
-DAYS=5
+STOP_LOSS = {"BTCUSD": 50, "ETHUSD": 10}
+TRAIL_STEP = {"BTCUSD": 1, "ETHUSD": 1}
 
-STOP_LOSS={"BTCUSD":200,"ETHUSD":10}
+BASE_DIR = os.getcwd()
 
-TRAIL_STEP={"BTCUSD":100,"ETHUSD":5}
+SAVE_DIR = os.path.join(BASE_DIR, "data", "supertrend_pro_bot")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-BASE_DIR=os.getcwd()
-
-SAVE_DIR=os.path.join(BASE_DIR,"data","pro_supertrend_bot")
-
-os.makedirs(SAVE_DIR,exist_ok=True)
-
-TRADE_CSV=os.path.join(SAVE_DIR,"live_trades.csv")
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
 
 # ================= UTIL =================
@@ -73,13 +72,13 @@ def log(msg):
     print(f"[{datetime.now()}] {msg}")
 
 
-def commission(price,qty,symbol):
-    return price*CONTRACT_SIZE[symbol]*qty*TAKER_FEE
+def commission(price, qty, symbol):
+    return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
 
 def save_trade(trade):
 
-    df=pd.DataFrame([trade])
+    df = pd.DataFrame([trade])
 
     df.to_csv(
         TRADE_CSV,
@@ -92,7 +91,7 @@ def save_trade(trade):
 # ================= DATA =================
 def fetch_price(symbol):
 
-    r=requests.get(
+    r = requests.get(
         f"https://api.india.delta.exchange/v2/tickers/{symbol}",
         timeout=5
     )
@@ -100,39 +99,51 @@ def fetch_price(symbol):
     return float(r.json()["result"]["mark_price"])
 
 
-def fetch_candles(symbol,resolution="1m",days=5):
+def fetch_candles(symbol, resolution="1m", days=5):
 
-    start=int((datetime.now()-timedelta(days=days)).timestamp())
+    start = int((datetime.now() - timedelta(days=days)).timestamp())
 
-    r=requests.get(
+    r = requests.get(
         "https://api.india.delta.exchange/v2/history/candles",
         params={
-            "resolution":resolution,
-            "symbol":symbol,
-            "start":start,
-            "end":int(time.time())
+            "resolution": resolution,
+            "symbol": symbol,
+            "start": start,
+            "end": int(time.time())
         },
         timeout=10
     )
 
-    df=pd.DataFrame(
+    df = pd.DataFrame(
         r.json()["result"],
-        columns=["time","open","high","low","close","volume"]
+        columns=["time", "open", "high", "low", "close", "volume"]
     )
 
-    df["time"]=pd.to_datetime(df["time"],unit="s")
+    df["time"] = pd.to_datetime(df["time"], unit="s")
 
-    df.set_index("time",inplace=True)
+    df.set_index("time", inplace=True)
 
-    return df.astype(float)
+    df = df.astype(float)
+
+    df = df.sort_index()
+
+    return df
 
 
-# ================= TREND FILTER =================
+# ================= TREND CACHE =================
+trend_cache = {}
+
 def fetch_trend(symbol):
 
-    df=fetch_candles(symbol,"5m",2)
+    now = time.time()
 
-    st=ta.supertrend(
+    if symbol in trend_cache:
+        if now - trend_cache[symbol]["time"] < 300:
+            return trend_cache[symbol]["value"]
+
+    df = fetch_candles(symbol, "5m", 2)
+
+    st = ta.supertrend(
         df["high"],
         df["low"],
         df["close"],
@@ -140,13 +151,24 @@ def fetch_trend(symbol):
         multiplier=3
     )
 
-    return st["SUPERTd_10_3.0"].iloc[-1]
+    st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
+
+    trend = st[st_dir_col].iloc[-1]
+
+    trend_cache[symbol] = {
+        "value": trend,
+        "time": now
+    }
+
+    return trend
 
 
 # ================= INDICATORS =================
 def calculate_indicators(df):
 
     data = df.copy()
+
+    data = data.sort_index()
 
     st = ta.supertrend(
         data["high"],
@@ -156,14 +178,12 @@ def calculate_indicators(df):
         multiplier=3
     )
 
-    # Auto-detect supertrend columns
     st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
-    st_line_col = [c for c in st.columns if "SUPERT_" in c and "SUPERTd" not in c][0]
 
     data["ST_DIR"] = st[st_dir_col]
-    data["ST_LINE"] = st[st_line_col]
 
     adx = ta.adx(data["high"], data["low"], data["close"])
+
     data["ADX"] = adx["ADX_14"]
 
     data["RSI"] = ta.rsi(data["close"], length=14)
@@ -179,67 +199,67 @@ def calculate_indicators(df):
 
 
 # ================= STRATEGY =================
-def process_symbol(symbol,df,price,state):
+def process_symbol(symbol, df, price, state):
 
-    data=calculate_indicators(df)
+    data = calculate_indicators(df)
 
-    if len(data)<50:
+    if len(data) < 50:
         return
 
-    last=data.iloc[-2]
-    prev=data.iloc[-3]
+    last = data.iloc[-2]
+    prev = data.iloc[-3]
 
-    candle_time=data.index[-2]
+    candle_time = data.index[-2]
 
-    pos=state["position"]
+    pos = state["position"]
 
-    st_now=last.ST_DIR
-    st_prev=prev.ST_DIR
+    st_now = last.ST_DIR
+    st_prev = prev.ST_DIR
 
-    adx=last.ADX
-    rsi=last.RSI
-    vwap=last.VWAP
+    adx = last.ADX
+    rsi = last.RSI
+    vwap = last.VWAP
 
-    trend5m=fetch_trend(symbol)
+    trend5m = fetch_trend(symbol)
 
-    if pos is None and state["last_candle"]!=candle_time:
+    if pos is None and state["last_candle"] != candle_time:
 
-        side=None
+        side = None
 
-        # LONG
         if (
-            trend5m==1
-            and st_now==1
-            and price>vwap
-            and rsi<55
-            and adx>20
+            trend5m == 1
+            and st_now == 1
+            and st_prev == -1
+            and price > vwap
+            and rsi < 55
+            and adx > 20
         ):
-            side="long"
+            side = "long"
 
-        # SHORT
         if (
-            trend5m==-1
-            and st_now==-1
-            and price<vwap
-            and rsi>45
-            and adx>20
+            trend5m == -1
+            and st_now == -1
+            and st_prev == 1
+            and price < vwap
+            and rsi > 45
+            and adx > 20
         ):
-            side="short"
+            side = "short"
 
         if side:
 
-            sl=price-STOP_LOSS[symbol] if side=="long" else price+STOP_LOSS[symbol]
+            sl = price - STOP_LOSS[symbol] if side == "long" else price + STOP_LOSS[symbol]
 
-            state["position"]={
-                "side":side,
-                "entry":price,
-                "stop":sl,
-                "qty":DEFAULT_CONTRACTS[symbol],
-                "entry_time":datetime.now(),
-                "last_trail_price":price
+            state["position"] = {
+                "side": side,
+                "entry": price,
+                "stop": sl,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now(),
+                "last_trail_price": price
             }
 
-            state["last_candle"]=candle_time
+            state["last_candle"] = candle_time
 
             log(f"{symbol} {side} ENTRY @ {price}")
 
@@ -250,58 +270,56 @@ def process_symbol(symbol,df,price,state):
     # ================= TRAILING =================
     if pos:
 
-        step=TRAIL_STEP[symbol]
+        step = TRAIL_STEP[symbol]
 
-        if pos["side"]=="long":
+        if pos["side"] == "long":
 
-            moved=price-pos["last_trail_price"]
+            moved = price - pos["last_trail_price"]
 
-            if moved>=step:
+            if moved >= step:
 
-                steps=int(moved//step)
+                steps = int(moved // step)
 
-                pos["stop"]+=steps*step
-                pos["last_trail_price"]+=steps*step
+                pos["stop"] += steps * step
+                pos["last_trail_price"] += steps * step
 
-            if price<pos["stop"]:
+            if price < pos["stop"]:
+                exit_trade(symbol, price, pos, state)
 
-                exit_trade(symbol,price,pos,state)
+        if pos["side"] == "short":
 
-        if pos["side"]=="short":
+            moved = pos["last_trail_price"] - price
 
-            moved=pos["last_trail_price"]-price
+            if moved >= step:
 
-            if moved>=step:
+                steps = int(moved // step)
 
-                steps=int(moved//step)
+                pos["stop"] -= steps * step
+                pos["last_trail_price"] -= steps * step
 
-                pos["stop"]-=steps*step
-                pos["last_trail_price"]-=steps*step
-
-            if price>pos["stop"]:
-
-                exit_trade(symbol,price,pos,state)
+            if price > pos["stop"]:
+                exit_trade(symbol, price, pos, state)
 
 
 # ================= EXIT =================
-def exit_trade(symbol,price,pos,state):
+def exit_trade(symbol, price, pos, state):
 
-    pnl=((price-pos["entry"]) if pos["side"]=="long"
-         else (pos["entry"]-price))
+    pnl = ((price - pos["entry"]) if pos["side"] == "long"
+           else (pos["entry"] - price))
 
-    pnl*=CONTRACT_SIZE[symbol]*pos["qty"]
+    pnl *= CONTRACT_SIZE[symbol] * pos["qty"]
 
-    net=pnl-commission(price,pos["qty"],symbol)
+    net = pnl - commission(price, pos["qty"], symbol)
 
     save_trade({
-        "entry_time":pos["entry_time"],
-        "exit_time":datetime.now(),
-        "symbol":symbol,
-        "side":pos["side"],
-        "entry_price":pos["entry"],
-        "exit_price":price,
-        "qty":pos["qty"],
-        "net_pnl":round(net,6)
+        "entry_time": pos["entry_time"],
+        "exit_time": datetime.now(),
+        "symbol": symbol,
+        "side": pos["side"],
+        "entry_price": pos["entry"],
+        "exit_price": price,
+        "qty": pos["qty"],
+        "net_pnl": round(net, 6)
     })
 
     log(f"{symbol} EXIT PNL {net}")
@@ -310,7 +328,7 @@ def exit_trade(symbol,price,pos,state):
         f"✅ *{symbol} EXIT*\nExit:{price}\nPnL:{round(net,6)}"
     )
 
-    state["position"]=None
+    state["position"] = None
 
 
 # ================= MAIN LOOP =================
@@ -320,17 +338,17 @@ def run():
 
         pd.DataFrame(
             columns=[
-                "entry_time","exit_time","symbol",
-                "side","entry_price","exit_price",
-                "qty","net_pnl"
+                "entry_time", "exit_time", "symbol",
+                "side", "entry_price", "exit_price",
+                "qty", "net_pnl"
             ]
-        ).to_csv(TRADE_CSV,index=False)
+        ).to_csv(TRADE_CSV, index=False)
 
-    state={s:{"position":None,"last_candle":None} for s in SYMBOLS}
+    state = {s: {"position": None, "last_candle": None} for s in SYMBOLS}
 
     log("BOT STARTED")
 
-    send_telegram("🚀 Pro Supertrend Bot Started")
+    send_telegram("🚀 Supertrend Pro Bot Started")
 
     while True:
 
@@ -338,14 +356,14 @@ def run():
 
             for symbol in SYMBOLS:
 
-                df=fetch_candles(symbol)
+                df = fetch_candles(symbol)
 
-                if len(df)<50:
+                if len(df) < 50:
                     continue
 
-                price=fetch_price(symbol)
+                price = fetch_price(symbol)
 
-                process_symbol(symbol,df,price,state[symbol])
+                process_symbol(symbol, df, price, state[symbol])
 
             time.sleep(5)
 
@@ -358,6 +376,5 @@ def run():
             time.sleep(5)
 
 
-if __name__=="__main__":
-
+if __name__ == "__main__":
     run()
