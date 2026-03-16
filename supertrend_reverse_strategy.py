@@ -89,33 +89,50 @@ def commission(price,qty,symbol):
 
 def fetch_candles(symbol):
 
-    start = int((datetime.now()-timedelta(days=5)).timestamp())
+    try:
 
-    r = requests.get(
-        "https://api.india.delta.exchange/v2/history/candles",
-        params={
-            "resolution":TIMEFRAME,
-            "symbol":symbol,
-            "start":str(start),
-            "end":str(int(time.time()))
-        },
-        timeout=10
-    )
+        start = int((datetime.now() - timedelta(days=5)).timestamp())
 
-    data = r.json()["result"]
+        r = requests.get(
+            "https://api.india.delta.exchange/v2/history/candles",
+            params={
+                "resolution": TIMEFRAME,
+                "symbol": symbol,
+                "start": str(start),
+                "end": str(int(time.time()))
+            },
+            timeout=10
+        )
 
-    df = pd.DataFrame(
-        data,
-        columns=["time","open","high","low","close","volume"]
-    )
+        if r.status_code != 200:
+            log(f"{symbol} API HTTP ERROR {r.status_code}")
+            return None
 
-    df["time"] = pd.to_datetime(df["time"],unit="s")
+        data = r.json()
 
-    df.set_index("time",inplace=True)
-    df.sort_index(inplace=True)
-   
+        # SAFE CHECK
+        if "result" not in data or not data["result"]:
+            log(f"{symbol} EMPTY API RESPONSE")
+            return None
 
-    return df.astype(float)
+        df = pd.DataFrame(
+            data["result"],
+            columns=["time","open","high","low","close","volume"]
+        )
+
+        df["time"] = pd.to_datetime(df["time"], unit="s")
+
+        df.set_index("time", inplace=True)
+        df.sort_index(inplace=True)
+
+        return df.astype(float)
+
+    except Exception as e:
+
+        log(f"{symbol} FETCH ERROR")
+        log(str(e))
+
+        return None
 
 # ================= VALUE AREA =================
 
