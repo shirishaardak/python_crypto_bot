@@ -12,10 +12,10 @@ load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN=os.getenv("BOT_TOK")
-TELEGRAM_CHAT_ID=os.getenv("CHAT_")
+TELEGRAM_TOKEN = os.getenv("BOT_TOK")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_")
 
-_last_tg={}
+_last_tg = {}
 
 def send_telegram(msg,key=None,cooldown=30):
 
@@ -48,7 +48,7 @@ def send_telegram(msg,key=None,cooldown=30):
 
 # ================= SETTINGS =================
 
-SYMBOLS=["BTCUSD","ETHUSD"]
+SYMBOLS = ["BTCUSD","ETHUSD"]
 
 CONTRACTS={
 "BTCUSD":100,
@@ -60,9 +60,11 @@ CONTRACT_SIZE={
 "ETHUSD":0.01
 }
 
-TAKER_FEE=0.0005
+TAKER_FEE = 0.0005
 
 TIMEFRAME="3"
+
+DAYS = 5
 
 BASE_DIR=os.getcwd()
 
@@ -91,48 +93,47 @@ def fetch_candles(symbol):
 
     try:
 
-        start = int((datetime.now() - timedelta(days=5)).timestamp())
+        start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
         r = requests.get(
             "https://api.india.delta.exchange/v2/history/candles",
             params={
-                "resolution": TIMEFRAME,
-                "symbol": symbol,
-                "start": str(start),
-                "end": str(int(time.time()))
+                "resolution":TIMEFRAME,
+                "symbol":symbol,
+                "start":str(start),
+                "end":str(int(time.time()))
             },
             timeout=10
         )
 
-        if r.status_code != 200:
-            log(f"{symbol} API HTTP ERROR {r.status_code}")
+        js = r.json()
+
+        if "result" not in js:
+            log(f"{symbol} API ERROR")
+            log(js)
             return None
 
-        data = r.json()
-
-        # SAFE CHECK
-        if "result" not in data or not data["result"]:
-            log(f"{symbol} EMPTY API RESPONSE")
-            return None
+        data = js["result"]
 
         df = pd.DataFrame(
-            data["result"],
+            data,
             columns=["time","open","high","low","close","volume"]
         )
 
-        df["time"] = pd.to_datetime(df["time"], unit="s")
+        df["time"] = pd.to_datetime(df["time"],unit="s")
 
-        df.set_index("time", inplace=True)
+        df.set_index("time",inplace=True)
+
         df.sort_index(inplace=True)
 
         return df.astype(float)
 
     except Exception as e:
 
-        log(f"{symbol} FETCH ERROR")
-        log(str(e))
+        log(f"{symbol} FETCH ERROR {str(e)}")
 
         return None
+
 
 # ================= VALUE AREA =================
 
@@ -212,11 +213,11 @@ def process(symbol,df,state):
     if atr/price > 0.025:
         return
 
+
     # ================= ENTRY =================
 
     if pos is None:
 
-        # LONG SETUP
         if price < VAL and st_dir==1 and price>ema:
 
             state["position"]={
@@ -232,7 +233,6 @@ def process(symbol,df,state):
 
             send_telegram(f"{symbol} LONG {price}")
 
-        # SHORT SETUP
         elif price > VAH and st_dir==-1 and price<ema:
 
             state["position"]={
@@ -315,7 +315,7 @@ def run():
 
     state={s:{"position":None} for s in SYMBOLS}
 
-    last_candle=None
+    last_candle={s:None for s in SYMBOLS}
 
     while True:
 
@@ -330,10 +330,10 @@ def run():
 
                 candle=df.index[-1]
 
-                if last_candle==candle:
+                if last_candle[symbol]==candle:
                     continue
 
-                last_candle=candle
+                last_candle[symbol]=candle
 
                 process(symbol,df,state[symbol])
 
