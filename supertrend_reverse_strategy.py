@@ -3,7 +3,7 @@ import time
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas_ta as ta
 from dotenv import load_dotenv
 import traceback
@@ -89,45 +89,33 @@ def commission(price,qty,symbol):
 
 def fetch_candles(symbol):
 
-    try:
+    start = int((datetime.now()-timedelta(days=5)).timestamp())
 
-        r=requests.get(
-            "https://api.india.delta.exchange/v2/history/candles",
-            params={
-                "symbol":symbol,
-                "resolution":TIMEFRAME,
-                "limit":300
-            },
-            timeout=10
-        )
+    r = requests.get(
+        "https://api.india.delta.exchange/v2/history/candles",
+        params={
+            "resolution":TIMEFRAME,
+            "symbol":symbol,
+            "start":str(start),
+            "end":str(int(time.time()))
+        },
+        timeout=10
+    )
 
-        js=r.json()
+    data = r.json()["result"]
 
-        if "result" not in js:
-            log(f"{symbol} API issue")
-            return None
+    df = pd.DataFrame(
+        data,
+        columns=["time","open","high","low","close","volume"]
+    )
 
-        data=js["result"]
+    df["time"] = pd.to_datetime(df["time"],unit="s")
 
-        df=pd.DataFrame(
-            data,
-            columns=["time","open","high","low","close","volume"]
-        )
+    df.set_index("time",inplace=True)
+    df.sort_index(inplace=True)
+   
 
-        df["time"]=pd.to_datetime(df["time"],unit="s")
-
-        df.set_index("time",inplace=True)
-
-        df.sort_index(inplace=True)
-
-        return df.astype(float)
-
-    except Exception as e:
-
-        log(f"{symbol} fetch error {e}")
-
-        return None
-
+    return df.astype(float)
 
 # ================= VALUE AREA =================
 
