@@ -188,10 +188,10 @@ def build_indicators(df):
         upper = ha["UPPER"].iloc[i-1]
         lower = ha["LOWER"].iloc[i-1]
 
-        if ha_close >= upper and ha_close > trend:
+        if ha_high >= upper and ha_close > trend:
             trend = lower
 
-        elif ha_close <= lower and ha_close < trend:
+        elif ha_low <= lower and ha_close < trend:
             trend = upper
 
         trendline[i] = trend
