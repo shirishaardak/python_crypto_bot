@@ -12,268 +12,255 @@ load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("BOT_TOK")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_")
+
 _last_tg = {}
 
-def send_telegram(msg, key=None, cooldown=30):
+def send_telegram(msg,key=None,cooldown=30):
+
     try:
+
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
             return
 
-        now = time.time()
+        now=time.time()
 
         if key:
-            if key in _last_tg and now - _last_tg[key] < cooldown:
+            if key in _last_tg and now-_last_tg[key] < cooldown:
                 return
-            _last_tg[key] = now
+            _last_tg[key]=now
 
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
         requests.post(
             url,
             json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": msg,
-                "parse_mode": "Markdown"
+                "chat_id":TELEGRAM_CHAT_ID,
+                "text":msg
             },
             timeout=5
         )
 
-    except Exception:
-        print("Telegram Error:", traceback.format_exc())
+    except:
+        pass
 
 
 # ================= SETTINGS =================
 
 SYMBOLS = ["BTCUSD","ETHUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
-CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
+CONTRACTS={
+"BTCUSD":100,
+"ETHUSD":100
+}
+
+CONTRACT_SIZE={
+"BTCUSD":0.001,
+"ETHUSD":0.01
+}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "3m"
+TIMEFRAME="3"
+
 DAYS = 5
 
-ATR_LENGTH = 14
-ATR_MA_LENGTH = 30
+BASE_DIR=os.getcwd()
 
-BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR,"data","hybrid_fast_bot")
+SAVE_DIR=os.path.join(BASE_DIR,"data","poc_pro_bot")
+
 os.makedirs(SAVE_DIR,exist_ok=True)
 
-TRADE_CSV = os.path.join(SAVE_DIR,"live_trades.csv")
+TRADE_FILE=os.path.join(SAVE_DIR,"trades.csv")
 
 
 # ================= UTIL =================
 
 def log(msg):
+
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
 def commission(price,qty,symbol):
-    return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
+
+    return price*qty*CONTRACT_SIZE[symbol]*TAKER_FEE
 
 
-# ================= SAVE LOCAL TEST DATA =================
-
-def save_processed_data(df,ha,symbol):
-
-    path = os.path.join(SAVE_DIR,f"{symbol}_processed.csv")
-
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": ha["HA_open"],
-        "HA_high": ha["HA_high"],
-        "HA_low": ha["HA_low"],
-        "HA_close": ha["HA_close"],
-        "trendline": ha["Trendline"],
-        "UPPER": ha["UPPER"],
-        "LOWER": ha["LOWER"]
-    })
-
-    out.to_csv(path,index=False)
-
-
-# ================= SAVE TRADE =================
-
-def save_trade(trade):
-
-    df = pd.DataFrame([trade])
-
-    df.to_csv(
-        TRADE_CSV,
-        mode="a",
-        header=not os.path.exists(TRADE_CSV),
-        index=False
-    )
-
-
-# ================= DATA =================
+# ================= FETCH DATA =================
 
 def fetch_candles(symbol):
 
-    start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
+    try:
 
-    r = requests.get(
-        "https://api.india.delta.exchange/v2/history/candles",
-        params={
-            "resolution":TIMEFRAME,
-            "symbol":symbol,
-            "start":str(start),
-            "end":str(int(time.time()))
-        },
-        timeout=10
-    )
+        start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
-    data = r.json()["result"]
+        r = requests.get(
+            "https://api.india.delta.exchange/v2/history/candles",
+            params={
+                "resolution":TIMEFRAME,
+                "symbol":symbol,
+                "start":str(start),
+                "end":str(int(time.time()))
+            },
+            timeout=10
+        )
 
-    df = pd.DataFrame(
-        data,
-        columns=["time","open","high","low","close","volume"]
-    )
+        js = r.json()
 
-    df["time"] = pd.to_datetime(df["time"],unit="s")
+        if "result" not in js:
+            log(f"{symbol} API ERROR")
+            log(js)
+            return None
 
-    df.set_index("time",inplace=True)
-    df.sort_index(inplace=True)
-   
+        data = js["result"]
 
-    return df.astype(float)
+        df = pd.DataFrame(
+            data,
+            columns=["time","open","high","low","close","volume"]
+        )
+
+        df["time"] = pd.to_datetime(df["time"],unit="s")
+
+        df.set_index("time",inplace=True)
+
+        df.sort_index(inplace=True)
+
+        return df.astype(float)
+
+    except Exception as e:
+
+        log(f"{symbol} FETCH ERROR {str(e)}")
+
+        return None
 
 
-# ================= HEIKIN ASHI =================
+# ================= VALUE AREA =================
 
-def calculate_heikin_ashi(df):
+def value_area(df):
 
-    ha = pd.DataFrame(index=df.index)
+    today=df[df.index.date==df.index[-1].date()]
 
-    ha["HA_close"] = (df.open+df.high+df.low+df.close)/4
+    bins=np.round(today["close"],1)
 
-    ha_open = [(df.open.iloc[0]+df.close.iloc[0])/2]
+    vp=today.groupby(bins)["volume"].sum()
 
-    for i in range(1,len(df)):
-        ha_open.append((ha_open[i-1]+ha["HA_close"].iloc[i-1])/2)
+    poc=vp.idxmax()
 
-    ha["HA_open"] = ha_open
+    total=vp.sum()
 
-    ha["HA_high"] = ha[["HA_open","HA_close"]].join(df.high).max(axis=1)
-    ha["HA_low"] = ha[["HA_open","HA_close"]].join(df.low).min(axis=1)
+    sorted_vol=vp.sort_values(ascending=False)
 
-    return ha
+    cum=0
+    prices=[]
+
+    for p,v in sorted_vol.items():
+
+        cum+=v
+        prices.append(p)
+
+        if cum>=total*0.7:
+            break
+
+    VAH=max(prices)
+    VAL=min(prices)
+
+    return VAH,VAL,poc
 
 
 # ================= INDICATORS =================
 
-def build_indicators(df):
+def indicators(df):
 
-    ha = calculate_heikin_ashi(df)
+    df["EMA200"]=ta.ema(df.close,200)
 
-    # Donchian bands on HA
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    df["ATR"]=ta.atr(df.high,df.low,df.close,14)
 
-    trendline = np.zeros(len(ha))
+    df["VWAP"]=(df.close*df.volume).cumsum()/df.volume.cumsum()
 
-    trend = ha["HA_close"].iloc[0]
-    trendline[0] = trend
+    st=ta.supertrend(df.high,df.low,df.close,10,3)
 
-    for i in range(1, len(ha)):
+    df["ST"]=st["SUPERT_10_3.0"]
 
-        ha_high = ha["HA_high"].iloc[i]
-        ha_low = ha["HA_low"].iloc[i]
-        ha_close = ha["HA_close"].iloc[i]
+    df["ST_DIR"]=st["SUPERTd_10_3.0"]
 
-        upper = ha["UPPER"].iloc[i-1]
-        lower = ha["LOWER"].iloc[i-1]
-
-        if ha_high >= upper and ha_close > trend:
-            trend = lower
-
-        elif ha_low <= lower and ha_close < trend:
-            trend = upper
-
-        trendline[i] = trend
-
-    ha["Trendline"] = trendline    
-
-    return ha
+    return df
 
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol,df,state):
+def process(symbol,df,state):
 
-    ha = build_indicators(df)
+    df=indicators(df)
 
-    # save_processed_data(df,ha,symbol)
-
-    if len(ha) < 50:
+    if len(df)<210:
         return
 
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
+    price=df.close.iloc[-2]
 
-    price = df.close.iloc[-2]
+    ema=df.EMA200.iloc[-2]
 
-    pos = state["position"]
+    atr=df.ATR.iloc[-2]
 
-    cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
-    cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
-  
+    vwap=df.VWAP.iloc[-2]
 
-    candle_time = ha.index[-2]
+    st_dir=df.ST_DIR.iloc[-2]
 
-    if pos is None and state["last_candle"] != candle_time:
+    VAH,VAL,POC=value_area(df)
 
-        if cross_up:
+    pos=state["position"]
 
-            state["position"] = {
-                "side":"long",
-                "entry":price,
-                "stop":last.Trendline,
-                "qty":DEFAULT_CONTRACTS[symbol],
-                "entry_time":datetime.now()
+    if atr/price > 0.025:
+        return
+
+
+    # ================= ENTRY =================
+
+    if pos is None:
+
+        if price < VAL and st_dir==1 and price>ema:
+
+            state["position"]={
+            "side":"long",
+            "entry":price,
+            "target":POC,
+            "stop":VAL,
+            "qty":CONTRACTS[symbol],
+            "entry_time":datetime.now()
             }
-
-            state["last_candle"]=candle_time
 
             log(f"{symbol} LONG {price}")
 
-            send_telegram(f"🟢 {symbol} LONG {price}")
+            send_telegram(f"{symbol} LONG {price}")
 
-        elif cross_down:
+        elif price > VAH and st_dir==-1 and price<ema:
 
-            state["position"] = {
-                "side":"short",
-                "entry":price,
-                "stop":last.Trendline,
-                "qty":DEFAULT_CONTRACTS[symbol],
-                "entry_time":datetime.now()
+            state["position"]={
+            "side":"short",
+            "entry":price,
+            "target":POC,
+            "stop":VAH,
+            "qty":CONTRACTS[symbol],
+            "entry_time":datetime.now()
             }
-
-            state["last_candle"]=candle_time
 
             log(f"{symbol} SHORT {price}")
 
-            send_telegram(f"🔴 {symbol} SHORT {price}")
+            send_telegram(f"{symbol} SHORT {price}")
 
+
+    # ================= EXIT =================
 
     if pos:
 
         if pos["side"]=="long":
 
-            pos["stop"] =  last.Trendline
-
-            if price < pos["stop"]:
+            if price>=pos["target"] or price<pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
         else:
 
-            pos["stop"] =  last.Trendline
-
-            if price > pos["stop"]:
+            if price<=pos["target"] or price>pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
 
@@ -281,47 +268,54 @@ def process_symbol(symbol,df,state):
 
 def exit_trade(symbol,price,pos,state):
 
-    pnl = (
-        (price-pos["entry"]) if pos["side"]=="long"
+    pnl=(
+
+        (price-pos["entry"])
+        if pos["side"]=="long"
         else (pos["entry"]-price)
-    ) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-    net = pnl - commission(price,pos["qty"],symbol)
+    )*CONTRACT_SIZE[symbol]*pos["qty"]
 
-    trade = {
-        "entry_time":pos["entry_time"],
-        "exit_time":datetime.now(),
-        "symbol":symbol,
-        "side":pos["side"],
-        "entry_price":pos["entry"],
-        "exit_price":price,
-        "qty":pos["qty"],
-        "net_pnl":round(net,6)
+    net=pnl-commission(price,pos["qty"],symbol)
+
+    trade={
+
+    "entry_time":pos["entry_time"],
+    "exit_time":datetime.now(),
+    "symbol":symbol,
+    "side":pos["side"],
+    "entry":pos["entry"],
+    "exit":price,
+    "qty":pos["qty"],
+    "pnl":round(net,6)
+
     }
 
-    save_trade(trade)
+    pd.DataFrame([trade]).to_csv(
+        TRADE_FILE,
+        mode="a",
+        header=not os.path.exists(TRADE_FILE),
+        index=False
+    )
 
     log(f"{symbol} EXIT {net}")
 
-    send_telegram(
-        f"✅ {symbol} {pos['side']} EXIT\nPnL {round(net,6)}"
-    )
+    send_telegram(f"{symbol} EXIT PnL {round(net,6)}")
 
     state["position"]=None
 
 
-# ================= MAIN LOOP =================
+# ================= MAIN =================
 
 def run():
 
-    state = {
-        s:{"position":None,"last_candle":None}
-        for s in SYMBOLS
-    }
+    log("PRO BOT STARTED")
 
-    log("BOT STARTED")
+    send_telegram("POC PRO BOT STARTED")
 
-    send_telegram("🚀 Bot Started")
+    state={s:{"position":None} for s in SYMBOLS}
+
+    last_candle={s:None for s in SYMBOLS}
 
     while True:
 
@@ -329,14 +323,21 @@ def run():
 
             for symbol in SYMBOLS:
 
-                df = fetch_candles(symbol)
+                df=fetch_candles(symbol)
 
-                if len(df)<50:
+                if df is None:
                     continue
 
-                process_symbol(symbol,df,state[symbol])
+                candle=df.index[-1]
 
-            time.sleep(10)
+                if last_candle[symbol]==candle:
+                    continue
+
+                last_candle[symbol]=candle
+
+                process(symbol,df,state[symbol])
+
+            time.sleep(30)
 
         except Exception:
 
@@ -344,10 +345,11 @@ def run():
 
             log(traceback.format_exc())
 
-            send_telegram("⚠️ BOT ERROR")
+            send_telegram("BOT ERROR")
 
-            time.sleep(10)
+            time.sleep(30)
 
 
 if __name__=="__main__":
+
     run()
