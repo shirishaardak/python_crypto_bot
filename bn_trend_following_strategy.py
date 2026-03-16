@@ -282,7 +282,7 @@ send_telegram("BankNifty Algo Starting")
 # WAIT UNTIL MARKET START (9:00-9:30)
 while True:
     now = ist_time()
-    if time(9,0) <= now < time(9,30):
+    if time(9,0) <= now < time(10,30):
         init_fyers()  # load token & model once
         break
     t.sleep(5)
