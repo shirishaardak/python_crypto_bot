@@ -6,14 +6,13 @@ import numpy as np
 from datetime import datetime, timedelta
 import pandas_ta as ta
 from dotenv import load_dotenv
-import traceback
 
 load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_T")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT")
 
 _last_tg = {}
 
@@ -21,14 +20,12 @@ def send_telegram(msg,key=None,cooldown=30):
 
     try:
 
-        if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-            return
-
         now=time.time()
 
+        if key and key in _last_tg and now-_last_tg[key]<cooldown:
+            return
+
         if key:
-            if key in _last_tg and now-_last_tg[key] < cooldown:
-                return
             _last_tg[key]=now
 
         url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -45,352 +42,400 @@ def send_telegram(msg,key=None,cooldown=30):
 
 # ================= SETTINGS =================
 
-SYMBOLS = ["BTCUSD","ETHUSD"]
+SYMBOLS=["BTCUSD","ETHUSD"]
 
-CONTRACTS={"BTCUSD":100,"ETHUSD":100}
+DEFAULT_CONTRACTS={
+"BTCUSD":100,
+"ETHUSD":100
+}
 
-CONTRACT_SIZE={"BTCUSD":0.001,"ETHUSD":0.01}
+CONTRACT_SIZE={
+"BTCUSD":0.001,
+"ETHUSD":0.01
+}
 
+TRAIL_STEP={
+"BTCUSD":2,
+"ETHUSD":1
+}
+
+TIMEFRAME="5m"
+DAYS=3
 TAKER_FEE=0.0005
 
-TIMEFRAME="3m"
 
-DAYS=5
+# ================= PATH =================
 
 BASE_DIR=os.getcwd()
-SAVE_DIR=os.path.join(BASE_DIR,"data","pro_liq_bot")
+SAVE_DIR=os.path.join(BASE_DIR,"data","poc_vwap_bot")
+
 os.makedirs(SAVE_DIR,exist_ok=True)
 
-TRADE_FILE=os.path.join(SAVE_DIR,"trades.csv")
+TRADE_CSV=os.path.join(SAVE_DIR,"live_trades.csv")
 
 
-# ================= UTIL =================
+# ================= LOG =================
 
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+def log(msg,tg=False,key=None):
 
+    text=f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
+
+    print(text)
+
+    if tg:
+        send_telegram(text,key)
+
+
+# ================= COMMISSION =================
 
 def commission(price,qty,symbol):
-    return price*qty*CONTRACT_SIZE[symbol]*TAKER_FEE
+
+    notional=price*CONTRACT_SIZE[symbol]*qty
+    return notional*TAKER_FEE
 
 
-# ================= FETCH CANDLES =================
+# ================= SAVE TRADE =================
 
-def fetch_candles(symbol):
+def save_trade(trade):
 
-    try:
+    trade_copy=trade.copy()
 
-        start=int((datetime.now()-timedelta(days=DAYS)).timestamp())
+    for t in ["entry_time","exit_time"]:
+        trade_copy[t]=trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
 
-        r=requests.get(
-            "https://api.india.delta.exchange/v2/history/candles",
-            params={
-                "resolution":TIMEFRAME,
-                "symbol":symbol,
-                "start":str(start),
-                "end":str(int(time.time()))
-            },
-            timeout=10
-        )
-
-        js=r.json()
-
-        if "result" not in js:
-            log(f"{symbol} API ERROR")
-            return None
-
-        df=pd.DataFrame(
-            js["result"],
-            columns=["time","open","high","low","close","volume"]
-        )
-
-        df["time"]=pd.to_datetime(df["time"],unit="s")
-
-        df.set_index("time",inplace=True)
-
-        df.sort_index(inplace=True)
-
-        return df.astype(float)
-
-    except Exception as e:
-
-        log(f"{symbol} FETCH ERROR {e}")
-
-        return None
+    pd.DataFrame([trade_copy]).to_csv(
+        TRADE_CSV,
+        mode="a",
+        header=not os.path.exists(TRADE_CSV),
+        index=False
+    )
 
 
-# ================= LIVE PRICE =================
+# ================= FETCH PRICE =================
 
 def fetch_price(symbol):
 
     try:
 
         r=requests.get(
-            f"https://api.india.delta.exchange/v2/tickers/{symbol}",
-            timeout=5
-        )
+        f"https://api.india.delta.exchange/v2/tickers/{symbol}",
+        timeout=5)
 
         return float(r.json()["result"]["mark_price"])
 
-    except:
+    except Exception as e:
+
+        log(f"{symbol} price error {e}",tg=True)
+
         return None
 
 
-# ================= ORDER BOOK =================
+# ================= FETCH CANDLES =================
 
-def order_book(symbol):
+def fetch_candles(symbol):
+
+    start=int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
     try:
 
         r=requests.get(
-            f"https://api.india.delta.exchange/v2/l2orderbook/{symbol}",
-            timeout=5
+        "https://api.india.delta.exchange/v2/history/candles",
+        params={
+        "resolution":TIMEFRAME,
+        "symbol":symbol,
+        "start":str(start),
+        "end":str(int(time.time()))
+        },
+        timeout=10
         )
+
+        df=pd.DataFrame(
+        r.json()["result"],
+        columns=["time","open","high","low","close","volume"]
+        )
+
+        df.rename(columns=str.title,inplace=True)
+
+        df["Time"]=pd.to_datetime(df["Time"],unit="s",utc=True).dt.tz_convert("Asia/Kolkata")
+
+        df.set_index("Time",inplace=True)
+
+        df.sort_index(inplace=True)
+
+        df=df.astype(float)
+
+        return df
+
+    except Exception as e:
+
+        log(f"{symbol} candle error {e}")
+
+        return None
+
+
+# ================= ORDERBOOK =================
+
+def fetch_orderbook(symbol,depth=20):
+
+    try:
+
+        r=requests.get(
+        f"https://api.india.delta.exchange/v2/l2orderbook/{symbol}",
+        params={"depth":depth},
+        timeout=5)
 
         data=r.json()["result"]
 
-        bids=data["buy"][:10]
-        asks=data["sell"][:10]
-
-        bid_vol=sum(float(b[1]) for b in bids)
-        ask_vol=sum(float(a[1]) for a in asks)
-
-        return bid_vol,ask_vol
+        return data["buy"],data["sell"]
 
     except:
 
         return None,None
 
 
-# ================= VALUE AREA =================
+# ================= IMBALANCE =================
 
-def value_area(df):
+def orderbook_imbalance(bids,asks):
 
-    today=df[df.index.date==df.index[-1].date()]
+    try:
 
-    bins=np.round(today["close"],1)
+        bid=sum(float(b[1]) for b in bids)
+        ask=sum(float(a[1]) for a in asks)
 
-    vp=today.groupby(bins)["volume"].sum()
+        if bid+ask==0:
+            return 0.5
 
-    poc=vp.idxmax()
+        return bid/(bid+ask)
 
-    total=vp.sum()
-
-    sorted_vol=vp.sort_values(ascending=False)
-
-    cum=0
-    prices=[]
-
-    for p,v in sorted_vol.items():
-
-        cum+=v
-        prices.append(p)
-
-        if cum>=total*0.7:
-            break
-
-    VAH=max(prices)
-    VAL=min(prices)
-
-    return VAH,VAL,poc
+    except:
+        return 0.5
 
 
-# ================= INDICATORS =================
+# ================= LIQUIDITY WALL =================
 
-def indicators(df):
+def detect_liquidity_wall(bids,asks):
 
-    df["EMA200"]=ta.ema(df.close,200)
+    try:
 
-    df["ATR"]=ta.atr(df.high,df.low,df.close,14)
+        bid_sizes=[float(b[1]) for b in bids]
+        ask_sizes=[float(a[1]) for a in asks]
 
-    df["VWAP"]=(df.close*df.volume).cumsum()/df.volume.cumsum()
+        avg_bid=np.mean(bid_sizes)
+        avg_ask=np.mean(ask_sizes)
 
-    dev=df.close.std()
+        bid_wall=max(bid_sizes)>avg_bid*2
+        ask_wall=max(ask_sizes)>avg_ask*2
 
-    df["VWAP_U"]=df["VWAP"]+dev
-    df["VWAP_L"]=df["VWAP"]-dev
+        return bid_wall,ask_wall
 
-    st=ta.supertrend(df.high,df.low,df.close,10,3)
+    except:
+        return False,False
 
-    df["ST_DIR"]=st["SUPERTd_10_3.0"]
 
-    return df
+# ================= POC =================
+
+def calculate_poc(df,bins=40):
+
+    try:
+
+        if len(df)<20:
+            return None
+
+        price=df["Close"]
+        volume=df["Volume"]
+
+        hist,edges=np.histogram(price,bins=bins,weights=volume)
+
+        poc_index=np.argmax(hist)
+
+        poc=(edges[poc_index]+edges[poc_index+1])/2
+
+        return float(poc)
+
+    except:
+        return None
 
 
 # ================= LIQUIDITY SWEEP =================
 
-def liquidity_sweep(df):
+def detect_liquidity_sweep(df):
 
-    prev_high=df.high.iloc[-3]
-    prev_low=df.low.iloc[-3]
+    last=df.iloc[-2]
+    prev=df.iloc[-3]
 
-    high=df.high.iloc[-2]
-    low=df.low.iloc[-2]
-    close=df.close.iloc[-2]
-
-    sweep_high=high>prev_high and close<prev_high
-    sweep_low=low<prev_low and close>prev_low
+    sweep_high=last.High>prev.High
+    sweep_low=last.Low<prev.Low
 
     return sweep_high,sweep_low
 
 
+# ================= INDICATORS =================
+
+def calculate_indicators(df):
+
+    st=ta.supertrend(df.High,df.Low,df.Close,length=21,multiplier=2.5)
+
+    df["SUPERTREND"]=st["SUPERT_21_2.5"]
+
+    df["VWAP"]=ta.vwap(df.High,df.Low,df.Close,df.Volume)
+
+    return df
+
+
 # ================= STRATEGY =================
 
-def process(symbol,df,state):
+def process_symbol(symbol,df,price,state):
 
-    df=indicators(df)
+    df=calculate_indicators(df)
 
-    if len(df)<210:
+    last=df.iloc[-2]
+
+    supertrend=last.SUPERTREND
+    vwap=last.VWAP
+
+    poc=calculate_poc(df)
+
+    if poc is None or vwap is None or supertrend is None:
         return
 
-    price=fetch_price(symbol)
+    sweep_high,sweep_low=detect_liquidity_sweep(df)
 
-    if price is None:
+    bids,asks=fetch_orderbook(symbol)
+
+    if bids is None:
         return
 
-    ema=df.EMA200.iloc[-2]
+    imbalance=orderbook_imbalance(bids,asks)
 
-    VAH,VAL,POC=value_area(df)
-
-    vwap_u=df.VWAP_U.iloc[-2]
-    vwap_l=df.VWAP_L.iloc[-2]
-
-    st=df.ST_DIR.iloc[-2]
-
-    sweep_high,sweep_low=liquidity_sweep(df)
-
-    bid,ask=order_book(symbol)
+    bid_wall,ask_wall=detect_liquidity_wall(bids,asks)
 
     pos=state["position"]
 
+    now=datetime.now()
+
+    log(f"{symbol} price:{price} vwap:{round(vwap,2)} poc:{round(poc,2)} imb:{round(imbalance,2)} sweepH:{sweep_high} sweepL:{sweep_low}")
+
+
     # ================= ENTRY =================
 
-    if pos is None and bid and ask:
+    if pos is None:
 
-        # LONG
-
-        if (
-            sweep_low
-            and price < VAL
-            and price < vwap_l
-            and st==1
-            and bid > ask*1.2
-        ):
+        if price>vwap and imbalance>0.55 and sweep_low:
 
             state["position"]={
-                "side":"long",
-                "entry":price,
-                "target":POC,
-                "stop":price*0.995,
-                "qty":CONTRACTS[symbol],
-                "trail":price
+            "side":"long",
+            "entry":price,
+            "stop":supertrend,
+            "trail_price":price,
+            "qty":DEFAULT_CONTRACTS[symbol],
+            "entry_time":now
             }
 
-            log(f"{symbol} LONG {price}")
-            send_telegram(f"{symbol} LONG {price}")
+            log(f"🟢 {symbol} LONG {price}",tg=True)
 
-        # SHORT
+            return
 
-        elif (
-            sweep_high
-            and price > VAH
-            and price > vwap_u
-            and st==-1
-            and ask > bid*1.2
-        ):
+
+        if price<vwap and imbalance<0.45 and sweep_high:
 
             state["position"]={
-                "side":"short",
-                "entry":price,
-                "target":POC,
-                "stop":price*1.005,
-                "qty":CONTRACTS[symbol],
-                "trail":price
+            "side":"short",
+            "entry":price,
+            "stop":supertrend,
+            "trail_price":price,
+            "qty":DEFAULT_CONTRACTS[symbol],
+            "entry_time":now
             }
 
-            log(f"{symbol} SHORT {price}")
-            send_telegram(f"{symbol} SHORT {price}")
+            log(f"🔴 {symbol} SHORT {price}",tg=True)
+
+            return
 
 
-    # ================= EXIT =================
+    # ================= TRAILING =================
 
     if pos:
 
-        # trailing stop
+        step=TRAIL_STEP[symbol]
 
         if pos["side"]=="long":
 
-            if price>pos["trail"]:
-                pos["trail"]=price
+            if price-pos["trail_price"]>=step:
 
-            stop=max(pos["stop"],pos["trail"]*0.995)
+                pos["stop"]+=step
+                pos["trail_price"]=price
 
-            if price>=pos["target"] or price<stop:
-                exit_trade(symbol,price,pos,state)
+            if price<=pos["stop"]:
 
-        else:
+                pnl=(price-pos["entry"])*CONTRACT_SIZE[symbol]*pos["qty"]
 
-            if price<pos["trail"]:
-                pos["trail"]=price
+                fee=commission(price,pos["qty"],symbol)
 
-            stop=min(pos["stop"],pos["trail"]*1.005)
+                net=pnl-fee
 
-            if price<=pos["target"] or price>stop:
-                exit_trade(symbol,price,pos,state)
+                save_trade({
+                "symbol":symbol,
+                "side":pos["side"],
+                "entry_price":pos["entry"],
+                "exit_price":price,
+                "qty":pos["qty"],
+                "net_pnl":round(net,6),
+                "entry_time":pos["entry_time"],
+                "exit_time":now
+                })
+
+                log(f"{symbol} LONG EXIT {price} PNL {net}",tg=True)
+
+                state["position"]=None
 
 
-# ================= EXIT =================
+        if pos["side"]=="short":
 
-def exit_trade(symbol,price,pos,state):
+            if pos["trail_price"]-price>=step:
 
-    pnl=(
+                pos["stop"]-=step
+                pos["trail_price"]=price
 
-        (price-pos["entry"])
-        if pos["side"]=="long"
-        else (pos["entry"]-price)
+            if price>=pos["stop"]:
 
-    )*CONTRACT_SIZE[symbol]*pos["qty"]
+                pnl=(pos["entry"]-price)*CONTRACT_SIZE[symbol]*pos["qty"]
 
-    net=pnl-commission(price,pos["qty"],symbol)
+                fee=commission(price,pos["qty"],symbol)
 
-    trade={
+                net=pnl-fee
 
-        "entry_time":datetime.now(),
-        "exit_time":datetime.now(),
-        "symbol":symbol,
-        "side":pos["side"],
-        "entry":pos["entry"],
-        "exit":price,
-        "qty":pos["qty"],
-        "pnl":round(net,6)
+                save_trade({
+                "symbol":symbol,
+                "side":pos["side"],
+                "entry_price":pos["entry"],
+                "exit_price":price,
+                "qty":pos["qty"],
+                "net_pnl":round(net,6),
+                "entry_time":pos["entry_time"],
+                "exit_time":now
+                })
 
-    }
+                log(f"{symbol} SHORT EXIT {price} PNL {net}",tg=True)
 
-    pd.DataFrame([trade]).to_csv(
-        TRADE_FILE,
-        mode="a",
-        header=not os.path.exists(TRADE_FILE),
-        index=False
-    )
-
-    log(f"{symbol} EXIT {net}")
-
-    send_telegram(f"{symbol} EXIT PnL {round(net,6)}")
-
-    state["position"]=None
+                state["position"]=None
 
 
 # ================= MAIN =================
 
 def run():
 
-    log("LIQUIDITY PRO BOT STARTED")
+    if not os.path.exists(TRADE_CSV):
 
-    send_telegram("LIQUIDITY PRO BOT STARTED")
+        pd.DataFrame(columns=[
+        "entry_time","exit_time","symbol","side",
+        "entry_price","exit_price","qty","net_pnl"
+        ]).to_csv(TRADE_CSV,index=False)
 
-    state={s:{"position":None} for s in SYMBOLS}
 
-    last_candle={s:None for s in SYMBOLS}
+    state={s:{"position":None,"last_candle":None} for s in SYMBOLS}
+
+    log("🚀 POC VWAP ORDERBOOK BOT STARTED",tg=True)
+
 
     while True:
 
@@ -400,29 +445,30 @@ def run():
 
                 df=fetch_candles(symbol)
 
-                if df is None:
+                if df is None or len(df)<100:
                     continue
 
-                candle=df.index[-1]
+                latest=df.index[-1]
 
-                if last_candle[symbol]==candle:
+                if state[symbol]["last_candle"]==latest:
                     continue
 
-                last_candle[symbol]=candle
+                state[symbol]["last_candle"]=latest
 
-                process(symbol,df,state[symbol])
+                price=fetch_price(symbol)
 
-            time.sleep(10)
+                if price is None:
+                    continue
 
-        except Exception:
+                process_symbol(symbol,df,price,state[symbol])
 
-            log("ERROR")
+            time.sleep(60)
 
-            log(traceback.format_exc())
+        except Exception as e:
 
-            send_telegram("BOT ERROR")
+            log(f"runtime error {e}",tg=True)
 
-            time.sleep(30)
+            time.sleep(5)
 
 
 if __name__=="__main__":
