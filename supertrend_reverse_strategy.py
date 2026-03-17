@@ -44,7 +44,7 @@ DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 
-stop = {"BTCUSD":100,"ETHUSD":10}
+stop = {"BTCUSD":200,"ETHUSD":20}
 
 TAKER_FEE = 0.0005
 ATR_MULTIPLIER = 1.5
@@ -245,7 +245,7 @@ def process_symbol(symbol, df, state):
             # if price > pos["entry"] + atr:
             #     pos["tsl"] = max(pos["tsl"], pos["entry"])
 
-            if last.HA_close > last.Trendline:
+            if last.HA_close > last.Trendline or price < pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
@@ -257,7 +257,7 @@ def process_symbol(symbol, df, state):
             # if price < pos["entry"] - atr:
             #     pos["tsl"] = min(pos["tsl"], pos["entry"])
 
-            if last.HA_close < last.Trendline:
+            if last.HA_close < last.Trendline or price > pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
