@@ -182,8 +182,8 @@ def build_indicators(df):
 
     ha["UPPER"] = ha["HA_high"].rolling(42).max()
     ha["LOWER"] = ha["HA_low"].rolling(42).min()
-    ha["UP"] = ha["HA_high"].rolling(3).max()
-    ha["LOW"] = ha["HA_low"].rolling(3).min()
+    ha["UP"] = ha["HA_high"].rolling(5).max()
+    ha["LOW"] = ha["HA_low"].rolling(5).min()
 
     trendline = np.zeros(len(ha))
 
@@ -283,14 +283,14 @@ def process_symbol(symbol,df,state):
 
             pos["stop"] = last.Trendline
 
-            if price < pos["stop"]:
+            if last.HA_close < pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
         else:
 
             pos["stop"] = last.Trendline
 
-            if price > pos["stop"]:
+            if last.HA_close > pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
 
