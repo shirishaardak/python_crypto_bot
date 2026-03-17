@@ -151,8 +151,8 @@ def build_indicators(df):
     ha["ATR"] = df["ATR"]
 
     # Trend logic
-    ha["UPPER"] = ha["HA_high"].rolling(42).max()
-    ha["LOWER"] = ha["HA_low"].rolling(42).min()
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
     ha["UP"] = ha["HA_high"].rolling(5).max()
     ha["LOW"] = ha["HA_low"].rolling(5).min()
 
@@ -245,7 +245,7 @@ def process_symbol(symbol, df, state):
             # if price > pos["entry"] + atr:
             #     pos["tsl"] = max(pos["tsl"], pos["entry"])
 
-            if last.HA_close > last.Trendline or price > pos["tsl"]:
+            if last.HA_close > last.Trendline:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
@@ -257,7 +257,7 @@ def process_symbol(symbol, df, state):
             # if price < pos["entry"] - atr:
             #     pos["tsl"] = min(pos["tsl"], pos["entry"])
 
-            if last.HA_close < last.Trendline or price < pos["tsl"]:
+            if last.HA_close < last.Trendline:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
