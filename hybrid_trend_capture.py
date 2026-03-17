@@ -283,14 +283,14 @@ def process_symbol(symbol,df,state):
 
             pos["stop"] = last.Trendline
 
-            if last.HA_close < pos["stop"]:
+            if price < pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
         else:
 
             pos["stop"] = last.Trendline
 
-            if last.HA_close > pos["stop"]:
+            if price > pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
 
