@@ -320,7 +320,7 @@ def process_symbol(symbol,df,price,state):
 
     if pos is None:
 
-        if price>vwap and imbalance>0.55 and sweep_low:
+        if price>vwap and imbalance>0.5 and sweep_low:
 
             state["position"]={
             "side":"long",
@@ -336,7 +336,7 @@ def process_symbol(symbol,df,price,state):
             return
 
 
-        if price<vwap and imbalance<0.45 and sweep_high:
+        if price<vwap and imbalance<0.5 and sweep_high:
 
             state["position"]={
             "side":"short",
