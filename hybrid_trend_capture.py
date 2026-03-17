@@ -110,7 +110,17 @@ def save_trade(trade):
         index=False
     )
 
-
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["Trendline"],
+    })
+    out.to_csv(path, index=False)
 # ================= DATA =================
 
 def fetch_candles(symbol):
@@ -172,8 +182,8 @@ def build_indicators(df):
 
     ha["UPPER"] = ha["HA_high"].rolling(42).max()
     ha["LOWER"] = ha["HA_low"].rolling(42).min()
-    ha["UP"] = ha["HA_high"].rolling(5).max()
-    ha["LOW"] = ha["HA_low"].rolling(5).min()
+    ha["UP"] = ha["HA_high"].rolling(3).max()
+    ha["LOW"] = ha["HA_low"].rolling(3).min()
 
     trendline = np.zeros(len(ha))
 
@@ -187,16 +197,16 @@ def build_indicators(df):
         ha_low = ha["HA_low"].iloc[i]
         ha_close = ha["HA_close"].iloc[i]
 
-        upper = ha["UPPER"].iloc[i-1]
-        lower = ha["LOWER"].iloc[i-1]
+        upper = ha["UPPER"].iloc[i]
+        lower = ha["LOWER"].iloc[i]
 
         up = ha["UP"].iloc[i-1]
         low = ha["LOW"].iloc[i-1]
 
-        if ha_high >= upper and ha_close > trend:
+        if ha_high == upper:
             trend = low
 
-        elif ha_low <= lower and ha_close < trend:
+        elif ha_low == lower:
             trend = up
 
         trendline[i] = trend
@@ -211,6 +221,8 @@ def build_indicators(df):
 def process_symbol(symbol,df,state):
 
     ha = build_indicators(df)
+
+    save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
