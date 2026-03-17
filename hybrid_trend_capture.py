@@ -170,8 +170,10 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    ha["UPPER"] = ha["HA_high"].rolling(42).max()
+    ha["LOWER"] = ha["HA_low"].rolling(42).min()
+    ha["UP"] = ha["HA_high"].rolling(5).max()
+    ha["LOW"] = ha["HA_low"].rolling(5).min()
 
     trendline = np.zeros(len(ha))
 
@@ -188,11 +190,14 @@ def build_indicators(df):
         upper = ha["UPPER"].iloc[i-1]
         lower = ha["LOWER"].iloc[i-1]
 
+        up = ha["UP"].iloc[i-1]
+        low = ha["LOW"].iloc[i-1]
+
         if ha_high >= upper and ha_close > trend:
-            trend = lower
+            trend = low
 
         elif ha_low <= lower and ha_close < trend:
-            trend = upper
+            trend = up
 
         trendline[i] = trend
 
