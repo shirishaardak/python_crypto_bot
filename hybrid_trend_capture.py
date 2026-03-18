@@ -51,11 +51,13 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 
+STOP = {"BTCUSD":150,"ETHUSD":15}
+
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 5
 
 BASE_DIR = os.getcwd()
@@ -180,10 +182,10 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
-    ha["UPPER"] = ha["HA_high"].rolling(42).max()
-    ha["LOWER"] = ha["HA_low"].rolling(42).min()
-    ha["UP"] = ha["HA_high"].rolling(5).max()
-    ha["LOW"] = ha["HA_low"].rolling(5).min()
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    ha["UP"] = ha["HA_high"].rolling(3).max()
+    ha["LOW"] = ha["HA_low"].rolling(3).min()
 
     trendline = np.zeros(len(ha))
 
@@ -200,8 +202,8 @@ def build_indicators(df):
         upper = ha["UPPER"].iloc[i]
         lower = ha["LOWER"].iloc[i]
 
-        up = ha["UP"].iloc[i-1]
-        low = ha["LOW"].iloc[i-1]
+        up = ha["UP"].iloc[i]
+        low = ha["LOW"].iloc[i]
 
         if ha_high == upper:
             trend = low
@@ -249,7 +251,7 @@ def process_symbol(symbol,df,state):
             state["position"] = {
                 "side":"long",
                 "entry":price,
-                "stop":last.Trendline,
+                "stop":last.Trendline - STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -265,7 +267,7 @@ def process_symbol(symbol,df,state):
             state["position"] = {
                 "side":"short",
                 "entry":price,
-                "stop":last.Trendline,
+                "stop":last.Trendline + STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -281,16 +283,14 @@ def process_symbol(symbol,df,state):
 
         if pos["side"] == "long":
 
-            pos["stop"] = last.Trendline
-
-            if last.HA_close < pos["stop"]:
+            if last.HA_close < last.Trendline or price < pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
         else:
 
             pos["stop"] = last.Trendline
 
-            if last.HA_close > pos["stop"]:
+            if last.HA_close < last.Trendline or price > pos["stop"]:
                 exit_trade(symbol,price,pos,state)
 
 
