@@ -18,7 +18,6 @@ _last_tg = {}
 
 def send_telegram(msg, key=None, cooldown=30):
     try:
-
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
             return
 
@@ -80,29 +79,22 @@ def commission(price,qty,symbol):
 # ================= LIVE PRICE =================
 
 def fetch_price(symbol):
-
     try:
-
         r = requests.get(
             f"https://api.india.delta.exchange/v2/tickers/{symbol}",
             timeout=5
         )
-
         return float(r.json()["result"]["mark_price"])
 
     except Exception as e:
-
         log(f"{symbol} PRICE fetch error: {e}")
-
         send_telegram(f"⚠️ {symbol} price fetch error")
-
         return None
 
 
 # ================= SAVE TRADE =================
 
 def save_trade(trade):
-
     df = pd.DataFrame([trade])
 
     df.to_csv(
@@ -112,17 +104,7 @@ def save_trade(trade):
         index=False
     )
 
-def save_processed_data(df, ha, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": ha["HA_open"],
-        "HA_high": ha["HA_high"],
-        "HA_low": ha["HA_low"],
-        "HA_close": ha["HA_close"],
-        "trendline": ha["Trendline"],
-    })
-    out.to_csv(path, index=False)
+
 # ================= DATA =================
 
 def fetch_candles(symbol):
@@ -148,7 +130,6 @@ def fetch_candles(symbol):
     )
 
     df["time"] = pd.to_datetime(df["time"],unit="s")
-
     df.set_index("time",inplace=True)
     df.sort_index(inplace=True)
 
@@ -188,16 +169,13 @@ def build_indicators(df):
     ha["LOW"] = ha["HA_low"].rolling(3).min()
 
     trendline = np.zeros(len(ha))
-
     trend = ha["HA_close"].iloc[0]
-
     trendline[0] = trend
 
     for i in range(1,len(ha)):
 
         ha_high = ha["HA_high"].iloc[i]
         ha_low = ha["HA_low"].iloc[i]
-        ha_close = ha["HA_close"].iloc[i]
 
         upper = ha["UPPER"].iloc[i]
         lower = ha["LOWER"].iloc[i]
@@ -207,7 +185,6 @@ def build_indicators(df):
 
         if ha_high == upper:
             trend = low
-
         elif ha_low == lower:
             trend = up
 
@@ -218,81 +195,9 @@ def build_indicators(df):
     return ha
 
 
-# ================= STRATEGY =================
-
-def process_symbol(symbol,df,state):
-
-    ha = build_indicators(df)
-
-    #save_processed_data(df, ha, symbol)
-
-    if len(ha) < 50:
-        return
-
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
-
-    price = fetch_price(symbol)
-
-    if price is None:
-        return
-
-    pos = state["position"]
-
-    cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
-    cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
-
-    candle_time = ha.index[-2]
-
-    if pos is None and state["last_candle"] != candle_time:
-
-        if cross_up:
-
-            state["position"] = {
-                "side":"long",
-                "entry":price,
-                "stop":last.Trendline - STOP[symbol],
-                "qty":DEFAULT_CONTRACTS[symbol],
-                "entry_time":datetime.now()
-            }
-
-            state["last_candle"] = candle_time
-
-            log(f"{symbol} LONG {price}")
-
-            send_telegram(f"🟢 {symbol} LONG {price}")
-
-        elif cross_down:
-
-            state["position"] = {
-                "side":"short",
-                "entry":price,
-                "stop":last.Trendline + STOP[symbol],
-                "qty":DEFAULT_CONTRACTS[symbol],
-                "entry_time":datetime.now()
-            }
-
-            state["last_candle"] = candle_time
-
-            log(f"{symbol} SHORT {price}")
-
-            send_telegram(f"🔴 {symbol} SHORT {price}")
-
-
-    if pos:
-
-        if pos["side"] == "long":
-            if last.HA_close < last.Trendline or price < pos["stop"]:
-                exit_trade(symbol,price,pos,state)
-
-        else:
-            if last.HA_close > last.Trendline or price > pos["stop"]:
-                exit_trade(symbol,price,pos,state)
-
-
 # ================= EXIT =================
 
-def exit_trade(symbol,price,pos,state):
+def exit_trade(symbol, price, pos, state, candle_time):
 
     pnl = (
         (price-pos["entry"]) if pos["side"]=="long"
@@ -320,7 +225,82 @@ def exit_trade(symbol,price,pos,state):
         f"✅ {symbol} {pos['side']} EXIT\nPnL {round(net,6)}"
     )
 
+    # 🔥 FIX: block same candle re-entry
     state["position"] = None
+    state["last_candle"] = candle_time
+
+
+# ================= STRATEGY =================
+
+def process_symbol(symbol, df, state):
+
+    ha = build_indicators(df)
+
+    if len(ha) < 50:
+        return
+
+    last = ha.iloc[-2]
+    prev = ha.iloc[-3]
+
+    price = fetch_price(symbol)
+    if price is None:
+        return
+
+    candle_time = ha.index[-2]
+
+    # ✅ ENTRY
+    if state["position"] is None and state["last_candle"] != candle_time:
+
+        # Strong candle filter (optional but powerful)
+        body = abs(last.HA_close - last.HA_open)
+        range_ = last.HA_high - last.HA_low
+        strong_candle = body > 0.6 * range_
+
+        cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
+        cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
+
+        if cross_up:
+
+            state["position"] = {
+                "side":"long",
+                "entry":price,
+                "stop":last.Trendline - STOP[symbol],
+                "qty":DEFAULT_CONTRACTS[symbol],
+                "entry_time":datetime.now()
+            }
+
+            state["last_candle"] = candle_time
+
+            log(f"{symbol} LONG {price}")
+            send_telegram(f"🟢 {symbol} LONG {price}")
+
+        elif cross_down:
+
+            state["position"] = {
+                "side":"short",
+                "entry":price,
+                "stop":last.Trendline + STOP[symbol],
+                "qty":DEFAULT_CONTRACTS[symbol],
+                "entry_time":datetime.now()
+            }
+
+            state["last_candle"] = candle_time
+
+            log(f"{symbol} SHORT {price}")
+            send_telegram(f"🔴 {symbol} SHORT {price}")
+
+    # ✅ EXIT (safe reference)
+    if state["position"]:
+
+        pos = state["position"]
+
+        if pos["side"] == "long":
+            if last.HA_close < last.Trendline or price < pos["stop"]:
+                exit_trade(symbol, price, pos, state, candle_time)
+
+        else:
+            if last.HA_close > last.Trendline or price > pos["stop"]:
+                exit_trade(symbol, price, pos, state, candle_time)
 
 
 # ================= MAIN LOOP =================
@@ -333,7 +313,6 @@ def run():
     }
 
     log("BOT STARTED")
-
     send_telegram("🚀 Bot Started")
 
     while True:
@@ -347,18 +326,15 @@ def run():
                 if len(df) < 50:
                     continue
 
-                process_symbol(symbol,df,state[symbol])
+                process_symbol(symbol, df, state[symbol])
 
             time.sleep(10)
 
         except Exception:
 
             log("ERROR")
-
             log(traceback.format_exc())
-
             send_telegram("⚠️ BOT ERROR")
-
             time.sleep(10)
 
 
