@@ -44,7 +44,7 @@ DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 
-stop = {"BTCUSD":200,"ETHUSD":20}
+stop = {"BTCUSD":100,"ETHUSD":10}
 
 TAKER_FEE = 0.0005
 ATR_MULTIPLIER = 1.5
@@ -67,6 +67,17 @@ def commission(price,qty,symbol):
     return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
 # ================= LIVE PRICE =================
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["SUPERTREND"],
+    })
+    out.to_csv(path, index=False)
 
 def fetch_price(symbol):
     try:
@@ -145,32 +156,14 @@ def calculate_heikin_ashi(df):
 def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
-
-    # ATR
-    df["ATR"] = ta.atr(df.high, df.low, df.close, length=14)
-    ha["ATR"] = df["ATR"]
-    ha["ATR_MA"] = ha["ATR"].rolling(21).mean()
-    # Trend logic
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
-    ha["UP"] = ha["HA_high"].rolling(5).max()
-    ha["LOW"] = ha["HA_low"].rolling(5).min()
-
-    trendline = np.zeros(len(ha))
-    trend = ha["HA_close"].iloc[0]
-    trendline[0] = trend
-
-    for i in range(1,len(ha)):
-
-        if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["LOW"].iloc[i-1]
-        elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["UP"].iloc[i-1]
-
-        trendline[i] = trend
-
-    ha["Trendline"] = trendline
-
+    ha["SUPERTREND"] = ta.supertrend(
+    high=ha["HA_high"],
+    low=ha["HA_low"],
+    close=ha["HA_close"],
+    length=7,
+    multiplier=2.1
+)["SUPERT_7_2.1"]
+   
     return ha
 
 # ================= STRATEGY =================
@@ -178,6 +171,7 @@ def build_indicators(df):
 def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
+    # save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
@@ -191,8 +185,8 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.Trendline and prev.HA_close <= prev.Trendline and last.ATR < last.ATR_MA
-    cross_down = last.HA_close < last.Trendline and prev.HA_close >= prev.Trendline and last.ATR < last.ATR_MA
+    cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND 
+    cross_down = last.HA_close < last.SUPERTREND and prev.HA_close >= prev.SUPERTREND
 
     candle_time = ha.index[-2]
 
@@ -200,7 +194,7 @@ def process_symbol(symbol, df, state):
 
     if pos is None and state["last_candle"] != candle_time:
 
-        atr = last.ATR
+        
 
         if cross_up:
             # 🔴 SHORT
@@ -234,7 +228,6 @@ def process_symbol(symbol, df, state):
 
     if pos:
 
-        atr = last.ATR
 
         if pos["side"] == "long":
 
@@ -245,7 +238,7 @@ def process_symbol(symbol, df, state):
             # if price > pos["entry"] + atr:
             #     pos["tsl"] = max(pos["tsl"], pos["entry"])
 
-            if last.HA_close > last.Trendline:
+            if last.HA_close > last.SUPERTREND or price < pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
@@ -257,7 +250,7 @@ def process_symbol(symbol, df, state):
             # if price < pos["entry"] - atr:
             #     pos["tsl"] = min(pos["tsl"], pos["entry"])
 
-            if last.HA_close < last.Trendline:
+            if last.HA_close < last.SUPERTREND or price > pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
