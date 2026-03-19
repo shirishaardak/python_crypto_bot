@@ -12,8 +12,8 @@ load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKE")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_I")
+TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 _last_tg = {}
 
 def send_telegram(msg, key=None, cooldown=30):
@@ -43,17 +43,14 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
-
-stop = {"BTCUSD":100,"ETHUSD":10}
-
+stop = {"BTCUSD":200,"ETHUSD":15}
 TAKER_FEE = 0.0005
-ATR_MULTIPLIER = 2.5
 
 TIMEFRAME = "1m"
 DAYS = 1
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR,"data","reverse_atr_bot")
+SAVE_DIR = os.path.join(BASE_DIR,"data","atr_bot")
 os.makedirs(SAVE_DIR,exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR,"live_trades.csv")
@@ -66,9 +63,11 @@ def log(msg):
 def commission(price,qty,symbol):
     return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
-# ================= LIVE PRICE =================
+# ================= SAVE =================
+
 def save_processed_data(df, ha, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+
     out = pd.DataFrame({
         "time": df.index,
         "HA_open": ha["HA_open"],
@@ -77,20 +76,8 @@ def save_processed_data(df, ha, symbol):
         "HA_close": ha["HA_close"],
         "trendline": ha["SUPERTREND"],
     })
+
     out.to_csv(path, index=False)
-
-def fetch_price(symbol):
-    try:
-        r = requests.get(
-            f"https://api.india.delta.exchange/v2/tickers/{symbol}",
-            timeout=5
-        )
-        return float(r.json()["result"]["mark_price"])
-    except Exception as e:
-        log(f"{symbol} price error: {e}")
-        return None
-
-# ================= SAVE =================
 
 def save_trade(trade):
     df = pd.DataFrame([trade])
@@ -103,8 +90,17 @@ def save_trade(trade):
 
 # ================= DATA =================
 
-def fetch_candles(symbol):
+def fetch_price(symbol):
+    try:
+        r = requests.get(
+            f"https://api.india.delta.exchange/v2/tickers/{symbol}",
+            timeout=5
+        )
+        return float(r.json()["result"]["mark_price"])
+    except:
+        return None
 
+def fetch_candles(symbol):
     start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
     r = requests.get(
@@ -118,10 +114,8 @@ def fetch_candles(symbol):
         timeout=10
     )
 
-    data = r.json()["result"]
-
     df = pd.DataFrame(
-        data,
+        r.json()["result"],
         columns=["time","open","high","low","close","volume"]
     )
 
@@ -134,18 +128,15 @@ def fetch_candles(symbol):
 # ================= HEIKIN ASHI =================
 
 def calculate_heikin_ashi(df):
-
     ha = pd.DataFrame(index=df.index)
 
     ha["HA_close"] = (df.open+df.high+df.low+df.close)/4
 
     ha_open = [(df.open.iloc[0]+df.close.iloc[0])/2]
-
     for i in range(1,len(df)):
         ha_open.append((ha_open[i-1]+ha["HA_close"].iloc[i-1])/2)
 
     ha["HA_open"] = ha_open
-
     ha["HA_high"] = ha[["HA_open","HA_close"]].join(df.high).max(axis=1)
     ha["HA_low"] = ha[["HA_open","HA_close"]].join(df.low).min(axis=1)
 
@@ -154,16 +145,18 @@ def calculate_heikin_ashi(df):
 # ================= INDICATORS =================
 
 def build_indicators(df):
-
     ha = calculate_heikin_ashi(df)
-    ha["SUPERTREND"] = ta.supertrend(
-    high=ha["HA_high"],
-    low=ha["HA_low"],
-    close=ha["HA_close"],
-    length=7,
-    multiplier=3.1
-)["SUPERT_7_3.1"]
-   
+
+    st = ta.supertrend(
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
+        length=7,
+        multiplier=2.1
+    )
+
+    ha["SUPERTREND"] = st[f"SUPERT_7_2.1"]
+
     return ha
 
 # ================= STRATEGY =================
@@ -171,7 +164,8 @@ def build_indicators(df):
 def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
-    # save_processed_data(df, ha, symbol)
+
+    save_processed_data(df, ha, symbol)  # ✅ save candles
 
     if len(ha) < 50:
         return
@@ -185,37 +179,30 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND 
+    cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND
     cross_down = last.HA_close < last.SUPERTREND and prev.HA_close >= prev.SUPERTREND
+
+    # ✅ sideways filter
+    if abs(last.HA_close - last.SUPERTREND) < (0.002 * price):
+        return
+
+    # ✅ strong candle
+    body = abs(last.HA_close - last.HA_open)
+    rng = last.HA_high - last.HA_low
+    strong = body > (0.6 * rng)
 
     candle_time = ha.index[-2]
 
-    # ================= ENTRY (REVERSE) =================
+    # ================= ENTRY =================
 
     if pos is None and state["last_candle"] != candle_time:
 
-        
-
-        if cross_up:
-            # 🔴 SHORT
+        if cross_up and strong:
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "tsl": price + stop[symbol],
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
-            }
-
-            state["last_candle"] = candle_time
-            log(f"{symbol} SHORT {price}")
-            send_telegram(f"🔴 {symbol} SHORT {price}")
-
-        elif cross_down:
-            # 🟢 LONG
-            state["position"] = {
-                "side": "short",
-                "entry": price,
                 "tsl": price - stop[symbol],
+                "best_price": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": datetime.now()
             }
@@ -224,33 +211,52 @@ def process_symbol(symbol, df, state):
             log(f"{symbol} LONG {price}")
             send_telegram(f"🟢 {symbol} LONG {price}")
 
+        elif cross_down and strong:
+            state["position"] = {
+                "side": "short",
+                "entry": price,
+                "tsl": price + stop[symbol],
+                "best_price": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now()
+            }
+
+            state["last_candle"] = candle_time
+            log(f"{symbol} SHORT {price}")
+            send_telegram(f"🔴 {symbol} SHORT {price}")
+
     # ================= TRAILING =================
 
     if pos:
 
+        move_step = stop[symbol] * 0.5
 
         if pos["side"] == "long":
 
-            # new_tsl = price - atr * ATR_MULTIPLIER
-            # pos["tsl"] = max(pos["tsl"], new_tsl)
+            if last.HA_close > pos["best_price"]:
+                pos["best_price"] = price
 
-            # # break-even
-            # if price > pos["entry"] + atr:
-            #     pos["tsl"] = max(pos["tsl"], pos["entry"])
+            profit_move = pos["best_price"] - pos["entry"]
 
-            if last.HA_close < last.SUPERTREND or price > pos["tsl"]:
+            if profit_move > stop[symbol]:
+                new_tsl = pos["entry"] + (profit_move - move_step)
+                pos["tsl"] = max(pos["tsl"], new_tsl)
+
+            if price <= pos["tsl"] or cross_down:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
 
-            # new_tsl = price + atr * ATR_MULTIPLIER
-            # pos["tsl"] = min(pos["tsl"], new_tsl)
+            if last.HA_close < pos["best_price"]:
+                pos["best_price"] = price
 
-            # # break-even
-            # if price < pos["entry"] - atr:
-            #     pos["tsl"] = min(pos["tsl"], pos["entry"])
+            profit_move = pos["entry"] - pos["best_price"]
 
-            if last.HA_close > last.SUPERTREND or price < pos["tsl"]:
+            if profit_move > stop[symbol]:
+                new_tsl = pos["entry"] - (profit_move - move_step)
+                pos["tsl"] = min(pos["tsl"], new_tsl)
+
+            if price >= pos["tsl"] or cross_up:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
