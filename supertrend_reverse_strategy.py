@@ -199,7 +199,7 @@ def process_symbol(symbol, df, state):
         if cross_up:
             # 🔴 SHORT
             state["position"] = {
-                "side": "short",
+                "side": "long",
                 "entry": price,
                 "tsl": price + stop[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -213,7 +213,7 @@ def process_symbol(symbol, df, state):
         elif cross_down:
             # 🟢 LONG
             state["position"] = {
-                "side": "long",
+                "side": "short",
                 "entry": price,
                 "tsl": price - stop[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -238,7 +238,7 @@ def process_symbol(symbol, df, state):
             # if price > pos["entry"] + atr:
             #     pos["tsl"] = max(pos["tsl"], pos["entry"])
 
-            if last.HA_close > last.SUPERTREND or price < pos["tsl"]:
+            if last.HA_close < last.SUPERTREND or price > pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
@@ -250,7 +250,7 @@ def process_symbol(symbol, df, state):
             # if price < pos["entry"] - atr:
             #     pos["tsl"] = min(pos["tsl"], pos["entry"])
 
-            if last.HA_close < last.SUPERTREND or price > pos["tsl"]:
+            if last.HA_close > last.SUPERTREND or price < pos["tsl"]:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
