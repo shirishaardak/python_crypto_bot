@@ -39,6 +39,7 @@ def ist_today():
 def ist_time():
     return ist_now().time()
 
+
 # ================= CONFIG =================
 CLIENT_ID = "98E1TAKD4T-100"
 QTY = 30
@@ -53,6 +54,7 @@ os.makedirs(folder, exist_ok=True)
 
 TRADES_FILE = f"{folder}/live_trades.csv"
 TOKEN_FILE = "auth/api_key/access_token.txt"
+
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
@@ -70,51 +72,75 @@ def send_telegram(msg):
 
 # ================= GLOBAL STATE =================
 fyers = None
+last_login_date = None
+
 position_type = None
 entry_price = 0
 entry_time = None
 symbol = None
-last_exit_time = None
 
 ce_symbol_cached = None
 pe_symbol_cached = None
 symbol_cache_date = None
 
 last_candle_time = None
-
 data_cache = {}
 ltp_cache = {}
 
-# ================= TRADE SAVE =================
-def save_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, qty):
 
-    gross = (exit_price - entry_price) * qty
-    brokerage = (entry_price + exit_price) * qty * COMMISSION_RATE
-    net = gross - brokerage
+# ================= FYERS INIT =================
+def init_fyers(force=False):
 
-    trade = {
-        "entry_time": entry_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "exit_time": exit_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "symbol": symbol,
-        "side": side,
-        "entry_price": entry_price,
-        "exit_price": exit_price,
-        "qty": qty,
-        "net_pnl": round(net,2)
-    }
+    global fyers, last_login_date
 
-    df = pd.DataFrame([trade])
+    today = ist_today()
 
-    df.to_csv(
-        TRADES_FILE,
-        mode="a",
-        header=not os.path.exists(TRADES_FILE),
-        index=False
-    )
+    if not force and last_login_date == today and fyers is not None:
+        return
+
+    send_telegram("🔄 Initializing Fyers...")
+
+    for _ in range(5):
+        try:
+            os.system("python auth/fyers_auth.py")
+
+            if os.path.exists(TOKEN_FILE):
+                token = open(TOKEN_FILE).read().strip()
+
+                fyers_model = fyersModel.FyersModel(
+                    client_id=CLIENT_ID,
+                    token=token,
+                    is_async=False
+                )
+
+                test = fyers_model.quotes({"symbols": SPOT_SYMBOL})
+
+                if "d" in test:
+                    fyers = fyers_model
+                    last_login_date = today
+                    send_telegram("✅ Fyers Connected")
+                    return
+
+        except Exception as e:
+            send_telegram(f"Init Error: {e}")
+
+        t.sleep(3)
+
+    send_telegram("❌ Fyers Login Failed")
+
+
+def is_fyers_alive():
+    try:
+        test = fyers.quotes({"symbols": SPOT_SYMBOL})
+        return "d" in test
+    except:
+        return False
 
 
 # ================= SAFE LTP =================
 def get_ltp(sym):
+
+    global fyers
 
     if sym in ltp_cache:
         return ltp_cache[sym]
@@ -124,8 +150,17 @@ def get_ltp(sym):
         price = data["d"][0]["v"]["lp"]
         ltp_cache[sym] = price
         return price
-    except:
-        return None
+
+    except Exception as e:
+        send_telegram(f"LTP Error: {e}")
+
+        init_fyers(force=True)
+
+        try:
+            data = fyers.quotes({"symbols": sym})
+            return data["d"][0]["v"]["lp"]
+        except:
+            return None
 
 
 # ================= CANDLE ENGINE =================
@@ -148,6 +183,8 @@ def is_new_candle():
 # ================= HIST DATA =================
 def get_history(symbol):
 
+    global fyers
+
     if symbol in data_cache:
         return data_cache[symbol]
 
@@ -164,7 +201,7 @@ def get_history(symbol):
         res = fyers.history(data=data)
 
         if "candles" not in res:
-            return None
+            raise Exception("No candles")
 
         df = pd.DataFrame(res["candles"])
         df = df.rename(columns={0:'Date',1:'Open',2:'High',3:'Low',4:'Close',5:'V'})
@@ -174,7 +211,9 @@ def get_history(symbol):
         data_cache[symbol] = df
         return df
 
-    except:
+    except Exception as e:
+        send_telegram(f"History Error: {e}")
+        init_fyers(force=True)
         return None
 
 
@@ -182,13 +221,11 @@ def get_history(symbol):
 def calculate_indicators(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"])
-
     df["HA_Close"] = ha["HA_close"]
     df["HA_Open"] = ha["HA_open"]
 
     st = ta.supertrend(df["High"], df["Low"], df["Close"], length=10, multiplier=3)
     st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
-
     df["ST_dir"] = st[st_dir_col]
 
     adx = ta.adx(df["High"], df["Low"], df["Close"], length=ADX_PERIOD)
@@ -199,7 +236,6 @@ def calculate_indicators(df):
 
 # ================= EXPIRY =================
 def get_last_thursday(year, month):
-
     last_day = date(year, month, 1) + timedelta(days=32)
     last_day = last_day.replace(day=1) - timedelta(days=1)
 
@@ -210,12 +246,10 @@ def get_last_thursday(year, month):
 
 
 def get_current_monthly_expiry():
-
     today = ist_today()
     expiry = get_last_thursday(today.year, today.month)
 
     if today > expiry:
-
         month = today.month + 1
         year = today.year
 
@@ -237,12 +271,31 @@ def get_atm_option(option_type):
         return None
 
     strike = int(round(spot/100)*100)
-
     expiry = get_current_monthly_expiry()
-
     expiry_str = expiry.strftime("%y%b").upper()
 
     return f"NSE:BANKNIFTY{expiry_str}{strike}{option_type}"
+
+
+# ================= TRADE SAVE =================
+def save_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, qty):
+
+    gross = (exit_price - entry_price) * qty
+    brokerage = (entry_price + exit_price) * qty * COMMISSION_RATE
+    net = gross - brokerage
+
+    df = pd.DataFrame([{
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "symbol": symbol,
+        "side": side,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "qty": qty,
+        "net_pnl": round(net,2)
+    }])
+
+    df.to_csv(TRADES_FILE, mode="a", header=not os.path.exists(TRADES_FILE), index=False)
 
 
 # ================= EXIT =================
@@ -251,16 +304,13 @@ def exit_trade(reason):
     global position_type
 
     price = get_ltp(symbol)
-
     if price is None:
         return
 
     exit_time = ist_now()
-
     save_trade(entry_time, exit_time, symbol, position_type, entry_price, price, QTY)
 
     pnl = (price - entry_price) * QTY
-
     send_telegram(f"EXIT {symbol} {reason} PnL {round(pnl,2)}")
 
     position_type = None
@@ -314,7 +364,6 @@ def run_strategy():
             return
 
         price = get_ltp(symbol)
-
         if price is None:
             return
 
@@ -322,7 +371,6 @@ def run_strategy():
         entry_time = ist_now()
 
         send_telegram(f"BUY {symbol} {price}")
-
 
     if position_type:
 
@@ -336,69 +384,30 @@ def run_strategy():
             exit_trade("Time Exit")
 
 
-# ================= AUTH =================
-def init_fyers():
-
-    global fyers
-
-    send_telegram("Initializing Fyers Connection...")
-
-    while True:
-
-        try:
-
-            os.system("python auth/fyers_auth.py")
-
-            if os.path.exists(TOKEN_FILE):
-
-                token = open(TOKEN_FILE).read().strip()
-
-                fyers_model = fyersModel.FyersModel(
-                    client_id=CLIENT_ID,
-                    token=token,
-                    is_async=False
-                )
-
-                test = fyers_model.quotes({"symbols": SPOT_SYMBOL})
-
-                if "d" in test:
-                    fyers = fyers_model
-                    send_telegram("Fyers Connected")
-                    return
-
-        except Exception as e:
-            send_telegram(f"Fyers Init Error {e}")
-
-        t.sleep(5)
-
-
-# ================= MAIN =================
-send_telegram("BankNifty Algo Starting")
-
-while True:
-
-    now = ist_time()
-
-    if time(9,0) <= now < time(10,30):
-        init_fyers()
-        break
-
-    t.sleep(5)
-
+# ================= MAIN LOOP =================
+send_telegram("🚀 BankNifty Algo Started")
 
 while True:
 
     try:
+        now = ist_time()
 
-        if time(9,30) <= ist_time() <= time(15,30):
+        # ✅ DAILY LOGIN WINDOW
+        if time(8,55) <= now <= time(9,5):
+            init_fyers()
 
+        # ✅ AUTO RECONNECT
+        if fyers is None or not is_fyers_alive():
+            send_telegram("⚠️ Reconnecting Fyers...")
+            init_fyers(force=True)
+
+        # ✅ RUN STRATEGY
+        if time(9,30) <= now <= time(15,30):
             if is_new_candle():
                 run_strategy()
 
         t.sleep(0.5)
 
     except Exception as e:
-
-        send_telegram(f"Algo Error {e}")
-
+        send_telegram(f"Algo Error: {e}")
         t.sleep(5)
