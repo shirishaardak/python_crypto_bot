@@ -165,7 +165,7 @@ def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
 
-    save_processed_data(df, ha, symbol)  # ✅ save candles
+    # save_processed_data(df, ha, symbol)  # ✅ save candles
 
     if len(ha) < 50:
         return

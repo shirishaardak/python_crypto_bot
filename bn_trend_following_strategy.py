@@ -356,7 +356,7 @@ def run_strategy():
             symbol = ce_symbol
             position_type = "CE"
 
-        elif index_last.ST_dir == -1 and pe_last.ST_dir == -1 and pe_momentum and pe_last.ADX > ADX_THRESHOLD:
+        elif index_last.ST_dir == -1 and pe_last.ST_dir == 1 and pe_momentum and pe_last.ADX > ADX_THRESHOLD:
             symbol = pe_symbol
             position_type = "PE"
 
@@ -377,7 +377,7 @@ def run_strategy():
         if position_type == "CE" and ce_last.ST_dir == -1:
             exit_trade("Supertrend Flip")
 
-        if position_type == "PE" and pe_last.ST_dir == 1:
+        if position_type == "PE" and pe_last.ST_dir == -1:
             exit_trade("Supertrend Flip")
 
         if ist_time() >= time(15,15):
