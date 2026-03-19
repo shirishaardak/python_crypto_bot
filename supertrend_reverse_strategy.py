@@ -161,8 +161,8 @@ def build_indicators(df):
     low=ha["HA_low"],
     close=ha["HA_close"],
     length=7,
-    multiplier=2.1
-)["SUPERT_7_2.1"]
+    multiplier=3.1
+)["SUPERT_7_3.1"]
    
     return ha
 
