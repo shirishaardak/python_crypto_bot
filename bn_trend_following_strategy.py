@@ -22,10 +22,12 @@ import pandas_ta as ta
 from fyers_apiv3 import fyersModel
 from datetime import datetime, time, timedelta, timezone, date
 from dotenv import load_dotenv
+from scipy.signal import argrelextrema
 import requests
 
 sys.path.append(os.getcwd())
 load_dotenv()
+
 
 # ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -41,223 +43,118 @@ def ist_time():
 
 
 # ================= CONFIG =================
-CLIENT_ID = "98E1TAKD4T-100"
-QTY = 30
-COMMISSION_RATE = 0.0004
-SPOT_SYMBOL = "NSE:NIFTYBANK-INDEX"
+CLIENT_ID="98E1TAKD4T-100"
+QTY=30
+COMMISSION_RATE=0.0004
+SPOT_SYMBOL="NSE:NIFTYBANK-INDEX"
 
-ADX_PERIOD = 14
-ADX_THRESHOLD = 20
+ADX_PERIOD=14
+ADX_THRESHOLD=20
 
-folder = "data/Trend_Following"
-os.makedirs(folder, exist_ok=True)
-
-TRADES_FILE = f"{folder}/live_trades.csv"
-TOKEN_FILE = "auth/api_key/access_token.txt"
+folder="data/Trend_Following"
+os.makedirs(folder,exist_ok=True)
+TRADES_FILE=f"{folder}/live_trades.csv"
+TOKEN_FILE="auth/api_key/access_token.txt"
 
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN = os.getenv("TEL_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+TELEGRAM_BOT_TOKEN=os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID=os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-            requests.post(url, json=payload, timeout=2)
+            url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
+            requests.post(url,json=payload,timeout=5)
     except:
         pass
 
 
 # ================= GLOBAL STATE =================
-fyers = None
-last_login_date = None
+fyers=None
+position_type=None
+entry_price=0
+entry_time=None
+symbol=None
+last_reset_date=None
+token_load_date=None
+model_load_date=None
+last_exit_time=None
+stop_loss=None
+trail_level=None
 
-position_type = None
-entry_price = 0
-entry_time = None
-symbol = None
-
-ce_symbol_cached = None
-pe_symbol_cached = None
-symbol_cache_date = None
-
-last_candle_time = None
-data_cache = {}
-ltp_cache = {}
-
-
-# ================= FYERS INIT =================
-def init_fyers(force=False):
-
-    global fyers, last_login_date
-
-    today = ist_today()
-
-    if not force and last_login_date == today and fyers is not None:
-        return
-
-    send_telegram("🔄 Initializing Fyers...")
-
-    for _ in range(5):
-        try:
-            os.system("python auth/fyers_auth.py")
-
-            if os.path.exists(TOKEN_FILE):
-                token = open(TOKEN_FILE).read().strip()
-
-                fyers_model = fyersModel.FyersModel(
-                    client_id=CLIENT_ID,
-                    token=token,
-                    is_async=False
-                )
-
-                test = fyers_model.quotes({"symbols": SPOT_SYMBOL})
-
-                if "d" in test:
-                    fyers = fyers_model
-                    last_login_date = today
-                    send_telegram("✅ Fyers Connected")
-                    return
-
-        except Exception as e:
-            send_telegram(f"Init Error: {e}")
-
-        t.sleep(3)
-
-    send_telegram("❌ Fyers Login Failed")
+NSE_HOLIDAYS=set()
+holiday_load_date=None
 
 
-def is_fyers_alive():
+# ================= UTILS =================
+def commission(price,qty):
+    return round(price*qty*COMMISSION_RATE,6)
+
+def calculate_pnl(entry,exit,qty):
+    return round((exit-entry)*qty,6)
+
+def save_trade(data):
+    df=pd.DataFrame([data])
+    if not os.path.exists(TRADES_FILE):
+        df.to_csv(TRADES_FILE,index=False)
+    else:
+        df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
+
+
+# ================= HOLIDAY ENGINE =================
+def fetch_nse_holidays():
+    global NSE_HOLIDAYS
     try:
-        test = fyers.quotes({"symbols": SPOT_SYMBOL})
-        return "d" in test
-    except:
+        url="https://www.nseindia.com/api/holiday-master?type=trading"
+        headers={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
+        session=requests.Session()
+        session.get("https://www.nseindia.com",headers=headers,timeout=5)
+        response=session.get(url,headers=headers,timeout=5)
+        data=response.json()
+
+        NSE_HOLIDAYS.clear()
+        for item in data["CM"]:
+            h_date=datetime.strptime(item["tradingDate"],"%d-%b-%Y").date()
+            NSE_HOLIDAYS.add(h_date)
+
+        send_telegram("✅ NSE Holidays Loaded")
+    except Exception as e:
+        send_telegram(f"⚠ Holiday Fetch Failed {e}")
+
+
+def is_market_open():
+    today=ist_today()
+    if today.weekday()>=5:
         return False
-
-
-# ================= SAFE LTP =================
-def get_ltp(sym):
-
-    global fyers
-
-    if sym in ltp_cache:
-        return ltp_cache[sym]
-
-    try:
-        data = fyers.quotes({"symbols": sym})
-        price = data["d"][0]["v"]["lp"]
-        ltp_cache[sym] = price
-        return price
-
-    except Exception as e:
-        send_telegram(f"LTP Error: {e}")
-
-        init_fyers(force=True)
-
-        try:
-            data = fyers.quotes({"symbols": sym})
-            return data["d"][0]["v"]["lp"]
-        except:
-            return None
-
-
-# ================= CANDLE ENGINE =================
-def is_new_candle():
-
-    global last_candle_time, data_cache, ltp_cache
-
-    now = ist_now().replace(second=0, microsecond=0)
-
-    if now.minute % 5 == 0:
-        if now != last_candle_time:
-            last_candle_time = now
-            data_cache = {}
-            ltp_cache = {}
-            return True
-
-    return False
-
-
-# ================= HIST DATA =================
-def get_history(symbol):
-
-    global fyers
-
-    if symbol in data_cache:
-        return data_cache[symbol]
-
-    data = {
-        "symbol": symbol,
-        "resolution": "5",
-        "date_format": "1",
-        "range_from": (ist_today() - timedelta(days=5)).strftime("%Y-%m-%d"),
-        "range_to": ist_today().strftime("%Y-%m-%d"),
-        "cont_flag": "1"
-    }
-
-    try:
-        res = fyers.history(data=data)
-
-        if "candles" not in res:
-            raise Exception("No candles")
-
-        df = pd.DataFrame(res["candles"])
-        df = df.rename(columns={0:'Date',1:'Open',2:'High',3:'Low',4:'Close',5:'V'})
-        df['Date'] = pd.to_datetime(df['Date'], unit='s')
-        df.set_index("Date", inplace=True)
-
-        data_cache[symbol] = df
-        return df
-
-    except Exception as e:
-        send_telegram(f"History Error: {e}")
-        init_fyers(force=True)
-        return None
-
-
-# ================= INDICATORS =================
-def calculate_indicators(df):
-
-    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"])
-    df["HA_Close"] = ha["HA_close"]
-    df["HA_Open"] = ha["HA_open"]
-
-    st = ta.supertrend(df["High"], df["Low"], df["Close"], length=10, multiplier=3)
-    st_dir_col = [c for c in st.columns if "SUPERTd" in c][0]
-    df["ST_dir"] = st[st_dir_col]
-
-    adx = ta.adx(df["High"], df["Low"], df["Close"], length=ADX_PERIOD)
-    df["ADX"] = adx[f"ADX_{ADX_PERIOD}"]
-
-    return df
+    if today in NSE_HOLIDAYS:
+        return False
+    return True
 
 
 # ================= EXPIRY =================
-def get_last_thursday(year, month):
-    last_day = date(year, month, 1) + timedelta(days=32)
-    last_day = last_day.replace(day=1) - timedelta(days=1)
-
-    while last_day.weekday() != 3:
-        last_day -= timedelta(days=1)
-
+def get_last_thursday(year,month):
+    last_day=date(year,month,1)+timedelta(days=32)
+    last_day=last_day.replace(day=1)-timedelta(days=1)
+    while last_day.weekday()!=3:
+        last_day-=timedelta(days=1)
     return last_day
 
 
 def get_current_monthly_expiry():
-    today = ist_today()
-    expiry = get_last_thursday(today.year, today.month)
 
-    if today > expiry:
-        month = today.month + 1
-        year = today.year
+    today=ist_today()
+    now=ist_time()
+    expiry=get_last_thursday(today.year,today.month)
 
-        if month == 13:
-            month = 1
-            year += 1
-
-        expiry = get_last_thursday(year, month)
+    if today>expiry or (today==expiry and now>=time(15,30)):
+        next_month=today.month+1
+        next_year=today.year
+        if next_month==13:
+            next_month=1
+            next_year+=1
+        expiry=get_last_thursday(next_year,next_month)
 
     return expiry
 
@@ -265,149 +162,261 @@ def get_current_monthly_expiry():
 # ================= ATM OPTION =================
 def get_atm_option(option_type):
 
-    spot = get_ltp(SPOT_SYMBOL)
-
-    if spot is None:
+    if not is_market_open():
         return None
 
-    strike = int(round(spot/100)*100)
-    expiry = get_current_monthly_expiry()
-    expiry_str = expiry.strftime("%y%b").upper()
+    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    strike=int(round(spot/100)*100)
+
+    expiry=get_current_monthly_expiry()
+    expiry_str=expiry.strftime("%y%b").upper()
 
     return f"NSE:BANKNIFTY{expiry_str}{strike}{option_type}"
 
 
-# ================= TRADE SAVE =================
-def save_trade(entry_time, exit_time, symbol, side, entry_price, exit_price, qty):
+# ================= DATA =================
+def get_stock_historical_data(data):
+    final_data=fyers.history(data=data)
+    df=pd.DataFrame(final_data['candles'])
+    df=df.rename(columns={0:'Date',1:'Open',2:'High',3:'Low',4:'Close',5:'V'})
+    df['Date']=pd.to_datetime(df['Date'],unit='s')
+    df.set_index("Date",inplace=True)
+    return df
 
-    gross = (exit_price - entry_price) * qty
-    brokerage = (entry_price + exit_price) * qty * COMMISSION_RATE
-    net = gross - brokerage
 
-    df = pd.DataFrame([{
-        "entry_time": entry_time,
-        "exit_time": exit_time,
-        "symbol": symbol,
-        "side": side,
-        "entry_price": entry_price,
-        "exit_price": exit_price,
-        "qty": qty,
-        "net_pnl": round(net,2)
-    }])
+# ================= TRENDLINE =================
+def calculate_trendline(df):
 
-    df.to_csv(TRADES_FILE, mode="a", header=not os.path.exists(TRADES_FILE), index=False)
+    ha=ta.ha(df["Open"],df["High"],df["Low"],df["Close"]).reset_index(drop=True)
+    data=df.copy().reset_index(drop=True)
+
+    data["HA_Close"]=ha["HA_close"]
+    data["HA_Open"]=ha["HA_open"]
+    data["HA_High"]=ha["HA_high"]
+    data["HA_Low"]=ha["HA_low"]
+
+    high_vals=data["HA_High"].values
+    low_vals=data["HA_Low"].values
+
+    max_idx=argrelextrema(high_vals,np.greater_equal,order=21)[0]
+    min_idx=argrelextrema(low_vals,np.less_equal,order=21)[0]
+
+    data["smoothed_high"]=np.nan
+    data["smoothed_low"]=np.nan
+
+    data.iloc[max_idx,data.columns.get_loc("smoothed_high")]=data["HA_High"].iloc[max_idx]
+    data.iloc[min_idx,data.columns.get_loc("smoothed_low")]=data["HA_Low"].iloc[min_idx]
+
+    data[["smoothed_high","smoothed_low"]]=data[["smoothed_high","smoothed_low"]].ffill()
+
+    trendline=data["HA_Close"].iloc[0]
+    data["trendline"]=trendline
+
+    for i in range(1,len(data)):
+        if data["HA_High"].iloc[i]==data["smoothed_high"].iloc[i]:
+            trendline=data["HA_Low"].iloc[i]
+        elif data["HA_Low"].iloc[i]==data["smoothed_low"].iloc[i]:
+            trendline=data["HA_High"].iloc[i]
+        data.loc[i,"trendline"]=trendline
+
+    adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
+    data["ADX"]=adx["ADX_14"]
+
+    data.index=df.index
+    return data
 
 
 # ================= EXIT =================
 def exit_trade(reason):
 
-    global position_type
+    global position_type,last_exit_time,stop_loss,trail_level
 
-    price = get_ltp(symbol)
-    if price is None:
-        return
+    price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+    net=calculate_pnl(entry_price,price,QTY)-commission(price,QTY)
 
-    exit_time = ist_now()
-    save_trade(entry_time, exit_time, symbol, position_type, entry_price, price, QTY)
+    save_trade({
+        "entry_time":entry_time.isoformat(),
+        "exit_time":ist_now().isoformat(),
+        "symbol":symbol,
+        "side":position_type,
+        "entry_price":entry_price,
+        "exit_price":price,
+        "qty":QTY,
+        "net_pnl":net
+    })
 
-    pnl = (price - entry_price) * QTY
-    send_telegram(f"EXIT {symbol} {reason} PnL {round(pnl,2)}")
+    send_telegram(f"🔁 EXIT {symbol} | {reason} | PnL ₹{round(net,2)}")
 
-    position_type = None
+    position_type=None
+    stop_loss=None
+    trail_level=None
+    last_exit_time=ist_now()
 
 
 # ================= STRATEGY =================
 def run_strategy():
 
-    global position_type, entry_price, entry_time, symbol
-    global ce_symbol_cached, pe_symbol_cached, symbol_cache_date
+    global position_type, entry_price, entry_time
+    global symbol, stop_loss, trail_level
 
-    if symbol_cache_date != ist_today():
-        ce_symbol_cached = get_atm_option("CE")
-        pe_symbol_cached = get_atm_option("PE")
-        symbol_cache_date = ist_today()
-
-    ce_symbol = ce_symbol_cached
-    pe_symbol = pe_symbol_cached
-
-    df_index = get_history(SPOT_SYMBOL)
-    df_ce = get_history(ce_symbol)
-    df_pe = get_history(pe_symbol)
-
-    if df_index is None or df_ce is None or df_pe is None:
+    if last_exit_time and (ist_now()-last_exit_time).seconds<300:
         return
 
-    df_index = calculate_indicators(df_index)
-    df_ce = calculate_indicators(df_ce)
-    df_pe = calculate_indicators(df_pe)
+    ce_symbol=get_atm_option("CE")
+    pe_symbol=get_atm_option("PE")
 
-    index_last = df_index.iloc[-2]
-    ce_last = df_ce.iloc[-2]
-    ce_prv = df_ce.iloc[-3]
-    pe_last = df_pe.iloc[-2]
-    pe_prv = df_pe.iloc[-3]
+    if ce_symbol is None or pe_symbol is None:
+        return
 
-    ce_momentum = (ce_last.HA_Close > ce_prv.HA_Close and ce_last.HA_Close > ce_prv.HA_Open)
-    pe_momentum = (pe_last.HA_Close < pe_prv.HA_Close and pe_last.HA_Close < pe_prv.HA_Open)
+    hist_template={
+        "resolution":"5",
+        "date_format":"1",
+        "range_from":(ist_today()-timedelta(days=5)).strftime("%Y-%m-%d"),
+        "range_to":ist_today().strftime("%Y-%m-%d"),
+        "cont_flag":"1"
+    }
 
-    if position_type is None and time(9,30) <= ist_time() <= time(15,15):
+    # CE DATA
+    hist_ce=hist_template.copy()
+    hist_ce["symbol"]=ce_symbol
+    df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
+    ce_last=df_ce.iloc[-2]
+    ce_prv=df_ce.iloc[-3]
 
-        if index_last.ST_dir == 1 and ce_last.ST_dir == 1 and ce_momentum and ce_last.ADX > ADX_THRESHOLD:
-            symbol = ce_symbol
-            position_type = "CE"
+    ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close and ce_last.HA_Close>ce_prv.HA_Open
+    ce_adx=ce_last.ADX
 
-        elif index_last.ST_dir == -1 and pe_last.ST_dir == 1 and pe_momentum and pe_last.ADX > ADX_THRESHOLD:
-            symbol = pe_symbol
-            position_type = "PE"
+    # PE DATA
+    hist_pe=hist_template.copy()
+    hist_pe["symbol"]=pe_symbol
+    df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
+    pe_last=df_pe.iloc[-2]
+    pe_prv=df_pe.iloc[-3]
+
+    pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close and pe_last.HA_Close>pe_prv.HA_Open
+    pe_adx=pe_last.ADX
+
+      # ENTRY
+    if position_type is None and time(9,30)<=ist_time()<=time(15,15):
+
+        if ce_bullish:
+            symbol=ce_symbol
+            position_type="CE"
+
+        elif pe_bullish:
+            symbol=pe_symbol
+            position_type="PE"
 
         else:
             return
 
-        price = get_ltp(symbol)
-        if price is None:
-            return
+        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        entry_price = price
-        entry_time = ist_now()
+        entry_price=price
+        entry_time=ist_now()
 
-        send_telegram(f"BUY {symbol} {price}")
+        stop_loss=entry_price-50
+        trail_level=entry_price+25
 
+        send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
+
+
+    # EXIT + TRAILING
     if position_type:
 
-        if position_type == "CE" and ce_last.ST_dir == -1:
-            exit_trade("Supertrend Flip")
+        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if position_type == "PE" and pe_last.ST_dir == -1:
-            exit_trade("Supertrend Flip")
+        if position_type=="CE" and  price<ce_last.trendline:
+            exit_trade("SL / Trendline")
+            return
 
-        if ist_time() >= time(15,15):
+        if position_type=="PE" and  price<pe_last.trendline:
+            exit_trade("SL / Trendline")
+            return
+
+        if price>=trail_level:
+            stop_loss+=25
+            trail_level+=25
+            send_telegram(f"📈 TSL Updated → SL {stop_loss}")
+
+        if ist_time()>=time(15,15):
             exit_trade("Time Exit")
+            return
+
+
+# ================= AUTH =================
+def load_token():
+    os.system("python auth/fyers_auth.py")
+    return True
+
+
+def load_model():
+    token=open(TOKEN_FILE).read().strip()
+
+    model=fyersModel.FyersModel(
+        client_id=CLIENT_ID,
+        token=token,
+        is_async=False,
+        log_path=""
+    )
+
+    send_telegram("📡 Fyers Model Connected")
+    return model
+
+
+# ================= DAILY RESET =================
+def daily_reset():
+
+    global position_type, entry_price, entry_time
+    global symbol, last_exit_time
+    global stop_loss, trail_level
+
+    position_type=None
+    entry_price=0
+    entry_time=None
+    symbol=None
+    last_exit_time=None
+    stop_loss=None
+    trail_level=None
+
+    send_telegram("🔄 Daily Reset Completed")
 
 
 # ================= MAIN LOOP =================
-send_telegram("🚀 BankNifty Algo Started")
+send_telegram("🚀 BankNifty Option Trend Algo Started")
 
 while True:
 
     try:
-        now = ist_time()
 
-        # ✅ DAILY LOGIN WINDOW
-        if time(8,55) <= now <= time(9,5):
-            init_fyers()
+        now=ist_time()
+        today=ist_today()
 
-        # ✅ AUTO RECONNECT
-        if fyers is None or not is_fyers_alive():
-            send_telegram("⚠️ Reconnecting Fyers...")
-            init_fyers(force=True)
+        if now >= time(16,0) and last_reset_date != today:
+            daily_reset()
+            last_reset_date = today
 
-        # ✅ RUN STRATEGY
-        if time(9,30) <= now <= time(15,30):
-            if is_new_candle():
+        if time(8,55)<=now<time(9,0) and holiday_load_date!=today:
+            fetch_nse_holidays()
+            holiday_load_date=today
+
+        if time(9,0)<=now<time(15,30):
+            if token_load_date!=today:
+                load_token()
+                token_load_date=today
+
+        if time(9,0)<=now<time(15,30):
+            if model_load_date!=today:
+                fyers=load_model()
+                model_load_date=today
+
+        if time(9,20)<=now<=time(15,30) and model_load_date==today:
+
+            if is_market_open():
                 run_strategy()
 
-        t.sleep(0.5)
+        t.sleep(2)
 
     except Exception as e:
-        send_telegram(f"Algo Error: {e}")
+        send_telegram(f"❌ Algo Error: {e}")
         t.sleep(5)
