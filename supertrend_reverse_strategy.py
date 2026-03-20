@@ -242,7 +242,7 @@ def process_symbol(symbol, df, state):
                 new_tsl = pos["entry"] + (profit_move - move_step)
                 pos["tsl"] = max(pos["tsl"], new_tsl)
 
-            if price <= pos["tsl"] or cross_down:
+            if price <= pos["tsl"] or last.HA_close < last.SUPERTREND:
                 exit_trade(symbol, price, pos, state)
 
         elif pos["side"] == "short":
@@ -256,7 +256,7 @@ def process_symbol(symbol, df, state):
                 new_tsl = pos["entry"] - (profit_move - move_step)
                 pos["tsl"] = min(pos["tsl"], new_tsl)
 
-            if price >= pos["tsl"] or cross_up:
+            if price >= pos["tsl"] or last.HA_close > last.SUPERTREND:
                 exit_trade(symbol, price, pos, state)
 
 # ================= EXIT =================
@@ -311,12 +311,12 @@ def run():
 
                 process_symbol(symbol, df, state[symbol])
 
-            time.sleep(10)
+            time.sleep(2)
 
         except Exception:
             log(traceback.format_exc())
             send_telegram("⚠️ BOT ERROR")
-            time.sleep(10)
+            time.sleep(2)
 
 if __name__=="__main__":
     run()
