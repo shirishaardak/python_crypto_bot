@@ -56,7 +56,7 @@ CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
+TIMEFRAME = "1m"
 DAYS = 5
 
 BASE_DIR = os.getcwd()
@@ -104,7 +104,17 @@ def save_trade(trade):
         index=False
     )
 
-
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["Trendline"],
+    })
+    out.to_csv(path, index=False)
 # ================= DATA =================
 
 def fetch_candles(symbol):
@@ -165,28 +175,22 @@ def build_indicators(df):
 
     ha["UPPER"] = ha["HA_high"].rolling(21).max()
     ha["LOWER"] = ha["HA_low"].rolling(21).min()
-    ha["UP"] = ha["HA_high"].rolling(3).max()
-    ha["LOW"] = ha["HA_low"].rolling(3).min()
 
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
     trendline[0] = trend
 
     for i in range(1,len(ha)):
+        ha_close = ha["HA_close"].iloc[i]
 
-        ha_high = ha["HA_high"].iloc[i]
-        ha_low = ha["HA_low"].iloc[i]
+        upper = ha["UPPER"].iloc[i-1]
+        lower = ha["LOWER"].iloc[i-1]
 
-        upper = ha["UPPER"].iloc[i]
-        lower = ha["LOWER"].iloc[i]
 
-        up = ha["UP"].iloc[i]
-        low = ha["LOW"].iloc[i]
-
-        if ha_high == upper:
-            trend = low
-        elif ha_low == lower:
-            trend = up
+        if ha_close > upper and ha_close > trend:
+            trend = lower
+        elif ha_close < lower and ha_close < trend:
+            trend = upper
 
         trendline[i] = trend
 
@@ -235,6 +239,7 @@ def exit_trade(symbol, price, pos, state, candle_time):
 def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
+    # save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
