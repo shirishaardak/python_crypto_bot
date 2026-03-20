@@ -56,8 +56,8 @@ CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1m"
-DAYS = 5
+TIMEFRAME = "5m"
+DAYS = 3
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR,"data","hybrid_fast_bot")
@@ -174,8 +174,8 @@ def build_indicators(df):
     ha = calculate_heikin_ashi(df)
 
     # === RANGE CHANNEL ===
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    ha["UPPER"] = ha["HA_high"].rolling(13).max()
+    ha["LOWER"] = ha["HA_low"].rolling(13).min()
 
     # === TRENDLINE LOGIC ===
     trendline = np.zeros(len(ha))
@@ -249,7 +249,7 @@ def exit_trade(symbol, price, pos, state, candle_time):
 def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
-    save_processed_data(df, ha, symbol)
+    # save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
@@ -271,8 +271,8 @@ def process_symbol(symbol, df, state):
         range_ = last.HA_high - last.HA_low
         strong_candle = body > 0.6 * range_
 
-        cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.ADX > 30 
-        cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.ADX > 30
+        cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
+        cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
 
         if cross_up:
 
