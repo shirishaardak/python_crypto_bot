@@ -43,7 +43,7 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
-stop = {"BTCUSD":200,"ETHUSD":15}
+stop = {"BTCUSD":150,"ETHUSD":10}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1m"
@@ -233,7 +233,7 @@ def process_symbol(symbol, df, state):
 
         if pos["side"] == "long":
 
-            if last.HA_close > pos["best_price"]:
+            if price > pos["best_price"]:
                 pos["best_price"] = price
 
             profit_move = pos["best_price"] - pos["entry"]
@@ -247,7 +247,7 @@ def process_symbol(symbol, df, state):
 
         elif pos["side"] == "short":
 
-            if last.HA_close < pos["best_price"]:
+            if price < pos["best_price"]:
                 pos["best_price"] = price
 
             profit_move = pos["entry"] - pos["best_price"]
