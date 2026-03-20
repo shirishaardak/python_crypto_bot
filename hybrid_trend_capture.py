@@ -173,31 +173,41 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
+    # === RANGE CHANNEL ===
     ha["UPPER"] = ha["HA_high"].rolling(21).max()
     ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
+    # === TRENDLINE LOGIC ===
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
     trendline[0] = trend
 
-    for i in range(1,len(ha)):
+    for i in range(1, len(ha)):
         ha_close = ha["HA_close"].iloc[i]
+        ha_high = ha["HA_high"].iloc[i]
+        ha_low = ha["HA_low"].iloc[i]
 
         upper = ha["UPPER"].iloc[i-1]
         lower = ha["LOWER"].iloc[i-1]
 
-
-        if ha_close > upper and ha_close > trend:
+        if ha_high > upper and ha_close > trend:
             trend = lower
-        elif ha_close < lower and ha_close < trend:
+        elif ha_low < lower and ha_close < trend:
             trend = upper
 
         trendline[i] = trend
 
     ha["Trendline"] = trendline
 
-    return ha
+    # === ADD ADX ===
+    adx = ta.adx(df["high"], df["low"], df["close"], length=14)
 
+    # Merge ADX into HA dataframe
+    ha["ADX"] = adx["ADX_14"]
+    ha["+DI"] = adx["DMP_14"]
+    ha["-DI"] = adx["DMN_14"]
+
+    return ha
 
 # ================= EXIT =================
 
@@ -239,7 +249,7 @@ def exit_trade(symbol, price, pos, state, candle_time):
 def process_symbol(symbol, df, state):
 
     ha = build_indicators(df)
-    # save_processed_data(df, ha, symbol)
+    save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
@@ -261,8 +271,8 @@ def process_symbol(symbol, df, state):
         range_ = last.HA_high - last.HA_low
         strong_candle = body > 0.6 * range_
 
-        cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
-        cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
+        cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.ADX > 30 
+        cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.ADX > 30
 
         if cross_up:
 
