@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 
 load_dotenv()
 
-# ================= SESSION (IMPORTANT FIX) =================
+# ================= SESSION =================
 
 session = requests.Session()
 
@@ -47,7 +47,6 @@ def send_telegram(msg, key=None, cooldown=30):
             json={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=5
         )
-
     except:
         print("Telegram Error")
 
@@ -143,6 +142,7 @@ def calculate_heikin_ashi(df):
 # ================= INDICATORS =================
 
 def build_indicators(df):
+
     ha = calculate_heikin_ashi(df)
 
     st = ta.supertrend(
@@ -178,19 +178,26 @@ def process_symbol(symbol, df, state):
     cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND
     cross_down = last.HA_close < last.SUPERTREND and prev.HA_close >= prev.SUPERTREND
 
-    if abs(last.HA_close - last.SUPERTREND) < (0.002 * price):
+    # NEW TREND FILTER
+    st_up = last.SUPERTREND > prev.SUPERTREND
+    st_down = last.SUPERTREND < prev.SUPERTREND
+
+    # REDUCED DISTANCE FILTER
+    if abs(last.HA_close - last.SUPERTREND) < (0.0007 * price):
         return
 
+    # STRONG CANDLE FILTER
     body = abs(last.HA_close - last.HA_open)
     rng = last.HA_high - last.HA_low
-    strong = body > (0.6 * rng)
+    strong = body > (0.5 * rng)
 
     candle_time = ha.index[-2]
 
     # ENTRY
     if pos is None and state["last_candle"] != candle_time:
 
-        if cross_up and strong:
+        if cross_up and strong and st_up:
+
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -202,10 +209,10 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} LONG {price}")
-            send_telegram(f"🟢 {symbol} LONG {price}", key=f"{symbol}_entry", cooldown=60)
-            
+            send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down and strong:
+        elif cross_down and strong and st_down:
+
             state["position"] = {
                 "side": "short",
                 "entry": price,
@@ -217,7 +224,7 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} SHORT {price}")
-            send_telegram(f"🔴 {symbol} SHORT {price}", key=f"{symbol}_entry", cooldown=60)
+            send_telegram(f"🔴 {symbol} SHORT {price}")
 
     # TRAILING
     if pos:
@@ -262,7 +269,7 @@ def exit_trade(symbol, price, pos, state):
     net = pnl - commission(price,pos["qty"],symbol)
 
     log(f"{symbol} EXIT {net}")
-    send_telegram(f"✅ {symbol} EXIT PnL {round(net,6)}", key=f"{symbol}_exit", cooldown=60)
+    send_telegram(f"✅ {symbol} EXIT PnL {round(net,6)}")
 
     state["position"] = None
 
@@ -280,6 +287,7 @@ def run():
 
     while True:
         try:
+
             for symbol in SYMBOLS:
 
                 df = fetch_candles(symbol)
@@ -287,13 +295,13 @@ def run():
                 if not df.empty:
                     process_symbol(symbol, df, state[symbol])
 
-                time.sleep(1)  # 👈 reduce API pressure
+                time.sleep(1)
 
             time.sleep(2)
 
         except Exception:
             log(traceback.format_exc())
-            send_telegram("⚠️ BOT ERROR", key="bot_error", cooldown=120)
+            send_telegram("⚠️ BOT ERROR")
             time.sleep(5)
 
 if __name__=="__main__":
