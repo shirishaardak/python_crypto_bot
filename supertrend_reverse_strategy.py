@@ -7,8 +7,23 @@ from datetime import datetime, timedelta
 import pandas_ta as ta
 from dotenv import load_dotenv
 import traceback
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 load_dotenv()
+
+# ================= SESSION (IMPORTANT FIX) =================
+
+session = requests.Session()
+
+retry = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+)
+
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("https://", adapter)
 
 # ================= TELEGRAM =================
 
@@ -27,14 +42,14 @@ def send_telegram(msg, key=None, cooldown=30):
                 return
             _last_tg[key] = now
 
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": msg
-        }, timeout=5)
+        session.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
+            timeout=5
+        )
 
-    except Exception:
-        print("Telegram Error:", traceback.format_exc())
+    except:
+        print("Telegram Error")
 
 # ================= SETTINGS =================
 
@@ -49,12 +64,6 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "1m"
 DAYS = 1
 
-BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR,"data","atr_bot")
-os.makedirs(SAVE_DIR,exist_ok=True)
-
-TRADE_CSV = os.path.join(SAVE_DIR,"live_trades.csv")
-
 # ================= UTIL =================
 
 def log(msg):
@@ -63,64 +72,53 @@ def log(msg):
 def commission(price,qty,symbol):
     return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
-# ================= SAVE =================
+# ================= SAFE REQUEST =================
 
-def save_processed_data(df, ha, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": ha["HA_open"],
-        "HA_high": ha["HA_high"],
-        "HA_low": ha["HA_low"],
-        "HA_close": ha["HA_close"],
-        "trendline": ha["SUPERTREND"],
-    })
-
-    out.to_csv(path, index=False)
-
-def save_trade(trade):
-    df = pd.DataFrame([trade])
-    df.to_csv(
-        TRADE_CSV,
-        mode="a",
-        header=not os.path.exists(TRADE_CSV),
-        index=False
-    )
+def safe_get(url, params=None):
+    try:
+        r = session.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception:
+        return None
 
 # ================= DATA =================
 
 def fetch_price(symbol):
+    data = safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
     try:
-        r = requests.get(
-            f"https://api.india.delta.exchange/v2/tickers/{symbol}",
-            timeout=5
-        )
-        return float(r.json()["result"]["mark_price"])
+        return float(data["result"]["mark_price"])
     except:
         return None
 
 def fetch_candles(symbol):
+
     start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
-    r = requests.get(
+    data = safe_get(
         "https://api.india.delta.exchange/v2/history/candles",
         params={
-            "resolution":TIMEFRAME,
-            "symbol":symbol,
-            "start":str(start),
-            "end":str(int(time.time()))
-        },
-        timeout=10
+            "resolution": TIMEFRAME,
+            "symbol": symbol,
+            "start": str(start),
+            "end": str(int(time.time()))
+        }
     )
 
+    if not data or "result" not in data:
+        return pd.DataFrame()
+
     df = pd.DataFrame(
-        r.json()["result"],
+        data["result"],
         columns=["time","open","high","low","close","volume"]
     )
 
-    df["time"] = pd.to_datetime(df["time"],unit="s")
-    df.set_index("time",inplace=True)
+    if df.empty:
+        return df
+
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    df.set_index("time", inplace=True)
     df.sort_index(inplace=True)
 
     return df.astype(float)
@@ -163,12 +161,10 @@ def build_indicators(df):
 
 def process_symbol(symbol, df, state):
 
-    ha = build_indicators(df)
-
-    # save_processed_data(df, ha, symbol)  # ✅ save candles
-
-    if len(ha) < 50:
+    if df.empty or len(df) < 50:
         return
+
+    ha = build_indicators(df)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
@@ -182,19 +178,16 @@ def process_symbol(symbol, df, state):
     cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND
     cross_down = last.HA_close < last.SUPERTREND and prev.HA_close >= prev.SUPERTREND
 
-    # ✅ sideways filter
     if abs(last.HA_close - last.SUPERTREND) < (0.002 * price):
         return
 
-    # ✅ strong candle
     body = abs(last.HA_close - last.HA_open)
     rng = last.HA_high - last.HA_low
     strong = body > (0.6 * rng)
 
     candle_time = ha.index[-2]
 
-    # ================= ENTRY =================
-
+    # ENTRY
     if pos is None and state["last_candle"] != candle_time:
 
         if cross_up and strong:
@@ -209,7 +202,6 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} LONG {price}")
-            send_telegram(f"🟢 {symbol} LONG {price}")
 
         elif cross_down and strong:
             state["position"] = {
@@ -223,38 +215,34 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} SHORT {price}")
-            send_telegram(f"🔴 {symbol} SHORT {price}")
 
-    # ================= TRAILING =================
-
+    # TRAILING
     if pos:
 
         move_step = stop[symbol] * 0.5
 
         if pos["side"] == "long":
 
-            if last.HA_close > pos["best_price"]:
+            if price > pos["best_price"]:
                 pos["best_price"] = price
 
             profit_move = pos["best_price"] - pos["entry"]
 
             if profit_move > stop[symbol]:
-                new_tsl = pos["entry"] + (profit_move - move_step)
-                pos["tsl"] = max(pos["tsl"], new_tsl)
+                pos["tsl"] = max(pos["tsl"], pos["entry"] + (profit_move - move_step))
 
             if price <= pos["tsl"] or last.HA_close < last.SUPERTREND:
                 exit_trade(symbol, price, pos, state)
 
-        elif pos["side"] == "short":
+        else:
 
-            if last.HA_close < pos["best_price"]:
+            if price < pos["best_price"]:
                 pos["best_price"] = price
 
             profit_move = pos["entry"] - pos["best_price"]
 
             if profit_move > stop[symbol]:
-                new_tsl = pos["entry"] - (profit_move - move_step)
-                pos["tsl"] = min(pos["tsl"], new_tsl)
+                pos["tsl"] = min(pos["tsl"], pos["entry"] - (profit_move - move_step))
 
             if price >= pos["tsl"] or last.HA_close > last.SUPERTREND:
                 exit_trade(symbol, price, pos, state)
@@ -270,21 +258,7 @@ def exit_trade(symbol, price, pos, state):
 
     net = pnl - commission(price,pos["qty"],symbol)
 
-    trade = {
-        "entry_time":pos["entry_time"],
-        "exit_time":datetime.now(),
-        "symbol":symbol,
-        "side":pos["side"],
-        "entry_price":pos["entry"],
-        "exit_price":price,
-        "qty":pos["qty"],
-        "net_pnl":round(net,6)
-    }
-
-    save_trade(trade)
-
     log(f"{symbol} EXIT {net}")
-    send_telegram(f"✅ {symbol} EXIT PnL {round(net,6)}")
 
     state["position"] = None
 
@@ -298,25 +272,23 @@ def run():
     }
 
     log("BOT STARTED")
-    send_telegram("🚀 Bot Started")
 
     while True:
-
         try:
             for symbol in SYMBOLS:
 
                 df = fetch_candles(symbol)
-                if len(df) < 50:
-                    continue
 
-                process_symbol(symbol, df, state[symbol])
+                if not df.empty:
+                    process_symbol(symbol, df, state[symbol])
+
+                time.sleep(1)  # 👈 reduce API pressure
 
             time.sleep(2)
 
         except Exception:
             log(traceback.format_exc())
-            send_telegram("⚠️ BOT ERROR")
-            time.sleep(2)
+            time.sleep(5)
 
 if __name__=="__main__":
     run()

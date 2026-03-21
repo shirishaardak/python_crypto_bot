@@ -343,14 +343,14 @@ def run():
 
                 process_symbol(symbol, df, state[symbol])
 
-            time.sleep(10)
+            time.sleep(25)
 
         except Exception:
 
             log("ERROR")
             log(traceback.format_exc())
             send_telegram("⚠️ BOT ERROR")
-            time.sleep(10)
+            time.sleep(25)
 
 
 if __name__=="__main__":
