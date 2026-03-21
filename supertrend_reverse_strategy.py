@@ -12,8 +12,8 @@ load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKE")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_I")
 _last_tg = {}
 
 def send_telegram(msg, key=None, cooldown=30):
@@ -43,11 +43,11 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
-stop = {"BTCUSD":100,"ETHUSD":6}
+stop = {"BTCUSD":100,"ETHUSD":7}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1m"
-DAYS = 2
+DAYS = 1
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR,"data","atr_bot")
@@ -100,43 +100,30 @@ def fetch_price(symbol):
     except:
         return None
 
-def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
-    start = int((datetime.now() - timedelta(days=days)).timestamp())
+def fetch_candles(symbol):
+    start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
-    params = {
-        "resolution": resolution,
-        "symbol": symbol,
-        "start": str(start),
-        "end": str(int(time.time()))
-    }
+    r = requests.get(
+        "https://api.india.delta.exchange/v2/history/candles",
+        params={
+            "resolution":TIMEFRAME,
+            "symbol":symbol,
+            "start":str(start),
+            "end":str(int(time.time()))
+        },
+        timeout=10
+    )
 
-    try:
-        r = requests.get(
-            "https://api.india.delta.exchange/v2/history/candles",
-            params=params,
-            timeout=10
-        )
-        r.raise_for_status()
+    df = pd.DataFrame(
+        r.json()["result"],
+        columns=["time","open","high","low","close","volume"]
+    )
 
-        df = pd.DataFrame(
-            r.json()["result"],
-            columns=["time","open","high","low","close","volume"]
-        )
+    df["time"] = pd.to_datetime(df["time"],unit="s")
+    df.set_index("time",inplace=True)
+    df.sort_index(inplace=True)
 
-        df.rename(columns=str.title, inplace=True)
-        df["Time"] = (
-            pd.to_datetime(df["Time"], unit="s", utc=True)
-              .dt.tz_convert(tz)
-        )
-        df.set_index("Time", inplace=True)
-        df.sort_index(inplace=True)
-
-        df = df.astype(float)
-        return df.dropna()
-
-    except Exception as e:
-        log(f"{symbol} fetch error: {e}")
-        return None
+    return df.astype(float)
 
 # ================= HEIKIN ASHI =================
 
