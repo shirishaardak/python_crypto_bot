@@ -57,7 +57,7 @@ TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
 STOP_LOSS   = {"BTCUSD": 200, "ETHUSD": 20}
 
 ADX_LENGTH = 24
-ADX_THRESHOLD = 18
+ADX_THRESHOLD = 22
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "trend_following_strategy")
