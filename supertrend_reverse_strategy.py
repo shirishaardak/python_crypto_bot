@@ -12,8 +12,8 @@ load_dotenv()
 
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKE")
-TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_I")
+TELEGRAM_TOKEN = os.getenv("TEL_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 _last_tg = {}
 
 def send_telegram(msg, key=None, cooldown=30):
