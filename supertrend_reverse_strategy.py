@@ -202,6 +202,8 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} LONG {price}")
+            send_telegram(f"🟢 {symbol} LONG {price}", key=f"{symbol}_entry", cooldown=60)
+            
 
         elif cross_down and strong:
             state["position"] = {
@@ -215,6 +217,7 @@ def process_symbol(symbol, df, state):
 
             state["last_candle"] = candle_time
             log(f"{symbol} SHORT {price}")
+            send_telegram(f"🔴 {symbol} SHORT {price}", key=f"{symbol}_entry", cooldown=60)
 
     # TRAILING
     if pos:
@@ -259,6 +262,7 @@ def exit_trade(symbol, price, pos, state):
     net = pnl - commission(price,pos["qty"],symbol)
 
     log(f"{symbol} EXIT {net}")
+    send_telegram(f"✅ {symbol} EXIT PnL {round(net,6)}", key=f"{symbol}_exit", cooldown=60)
 
     state["position"] = None
 
@@ -272,6 +276,7 @@ def run():
     }
 
     log("BOT STARTED")
+    send_telegram("🚀 Bot Started")
 
     while True:
         try:
@@ -288,6 +293,7 @@ def run():
 
         except Exception:
             log(traceback.format_exc())
+            send_telegram("⚠️ BOT ERROR", key="bot_error", cooldown=120)
             time.sleep(5)
 
 if __name__=="__main__":
