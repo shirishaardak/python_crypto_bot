@@ -182,21 +182,21 @@ def process_symbol(symbol, df, state):
     st_up = last.SUPERTREND > prev.SUPERTREND
     st_down = last.SUPERTREND < prev.SUPERTREND
 
-    # REDUCED DISTANCE FILTER
-    if abs(last.HA_close - last.SUPERTREND) < (0.0007 * price):
-        return
+    # # REDUCED DISTANCE FILTER
+    # if abs(last.HA_close - last.SUPERTREND) < (0.0007 * price):
+    #     return
 
     # STRONG CANDLE FILTER
     body = abs(last.HA_close - last.HA_open)
     rng = last.HA_high - last.HA_low
-    strong = body > (0.5 * rng)
+    strong = body > (0.6 * rng)
 
     candle_time = ha.index[-2]
 
     # ENTRY
     if pos is None and state["last_candle"] != candle_time:
 
-        if cross_up and strong and st_up:
+        if cross_up and strong:
 
             state["position"] = {
                 "side": "long",
@@ -211,7 +211,7 @@ def process_symbol(symbol, df, state):
             log(f"{symbol} LONG {price}")
             send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down and strong and st_down:
+        elif cross_down and strong:
 
             state["position"] = {
                 "side": "short",
