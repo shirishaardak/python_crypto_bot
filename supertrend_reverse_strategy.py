@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import traceback
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import numpy as np
 
 load_dotenv()
 
@@ -58,7 +59,7 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
-stop = {"BTCUSD":100,"ETHUSD":7}
+stop = {"BTCUSD":100,"ETHUSD":10}
 
 TAKER_FEE = 0.0005
 
@@ -169,15 +170,31 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
-    st = ta.supertrend(
-        high=ha["HA_high"],
-        low=ha["HA_low"],
-        close=ha["HA_close"],
-        length=7,
-        multiplier=2.5
-    )
+     # === RANGE CHANNEL ===
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
-    ha["SUPERTREND"] = st["SUPERT_7_2.5"]
+    # === TRENDLINE LOGIC ===
+    trendline = np.zeros(len(ha))
+    trend = ha["HA_close"].iloc[0]
+    trendline[0] = trend
+
+    for i in range(1, len(ha)):
+        ha_close = ha["HA_close"].iloc[i]
+        ha_high = ha["HA_high"].iloc[i]
+        ha_low = ha["HA_low"].iloc[i]
+
+        upper = ha["UPPER"].iloc[i-1]
+        lower = ha["LOWER"].iloc[i-1]
+
+        if ha_high > upper and ha_close > trend:
+            trend = lower
+        elif ha_low < lower and ha_close < trend:
+            trend = upper
+
+        trendline[i] = trend
+
+    ha["Trendline"] = trendline
 
     return ha
 
@@ -257,28 +274,28 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.SUPERTREND and prev.HA_close <= prev.SUPERTREND
-    cross_down = last.HA_close < last.SUPERTREND and prev.HA_close >= prev.SUPERTREND
+    cross_up = last.HA_close > last.Trendline and prev.HA_close <= prev.Trendline
+    cross_down = last.HA_close < last.Trendline and prev.HA_close >= prev.Trendline
 
-    if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
-        return
+    # if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
+    #     return
 
-    body = abs(last.HA_close-last.HA_open)
-    rng = last.HA_high-last.HA_low
+    # body = abs(last.HA_close-last.HA_open)
+    # rng = last.HA_high-last.HA_low
 
-    strong = body > (0.6*rng)
+    # strong = body > (0.6*rng)
 
     candle_time = ha.index[-2]
 
     if pos is None and state["last_candle"] != candle_time:
 
-        if cross_up and strong:
+        if cross_up:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"long",
                 "entry":price,
-                "tsl":price-stop[symbol],
+                "tsl":price-last.Trendline,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -290,13 +307,13 @@ def process_symbol(symbol, df, state):
 
             send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down and strong:
+        elif cross_down:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"short",
                 "entry":price,
-                "tsl":price+stop[symbol],
+                "tsl":price+last.Trendline,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -314,7 +331,7 @@ def process_symbol(symbol, df, state):
 
         if pos["side"]=="long":
 
-            if price>pos["best_price"]:
+            if last.HA_close>pos["best_price"]:
                 pos["best_price"]=price
 
             profit_move = pos["best_price"]-pos["entry"]
@@ -326,12 +343,12 @@ def process_symbol(symbol, df, state):
                     pos["entry"]+(profit_move-move_step)
                 )
 
-            if price<=pos["tsl"] or last.HA_close<last.SUPERTREND:
+            if price<=pos["tsl"] or last.HA_close<last.Trendline:
                 exit_trade(symbol,price,pos,state)
 
         else:
 
-            if price<pos["best_price"]:
+            if last.HA_close<pos["best_price"]:
                 pos["best_price"]=price
 
             profit_move = pos["entry"]-pos["best_price"]
@@ -343,7 +360,7 @@ def process_symbol(symbol, df, state):
                     pos["entry"]-(profit_move-move_step)
                 )
 
-            if price>=pos["tsl"] or last.HA_close>last.SUPERTREND:
+            if price>=pos["tsl"] or last.HA_close>last.Trendline:
                 exit_trade(symbol,price,pos,state)
 
 # ================= MAIN =================
