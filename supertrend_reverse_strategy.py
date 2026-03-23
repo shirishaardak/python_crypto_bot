@@ -274,8 +274,8 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.Trendline and prev.HA_close <= prev.Trendline
-    cross_down = last.HA_close < last.Trendline and prev.HA_close >= prev.Trendline
+    cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close
+    cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close
 
     # if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
     #     return
