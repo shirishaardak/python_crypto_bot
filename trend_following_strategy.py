@@ -65,6 +65,17 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
+def save_processed_data(df, ha, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": ha["HA_open"],
+        "HA_high": ha["HA_high"],
+        "HA_low": ha["HA_low"],
+        "HA_close": ha["HA_close"],
+        "trendline": ha["trendline"],
+    })
+    out.to_csv(path, index=False)
 
 # ================= UTILITIES =================
 def log(msg, tg=False, key=None):
@@ -105,7 +116,7 @@ def fetch_price(symbol):
         return None
 
 
-def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS):
+def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
     start = int((datetime.now() - timedelta(days=days)).timestamp())
 
     params = {
@@ -121,6 +132,7 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS):
             params=params,
             timeout=10
         )
+        r.raise_for_status()
 
         df = pd.DataFrame(
             r.json()["result"],
@@ -128,19 +140,19 @@ def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS):
         )
 
         df.rename(columns=str.title, inplace=True)
-
-        df["Time"] = pd.to_datetime(df["Time"], unit="s")
-
+        df["Time"] = (
+            pd.to_datetime(df["Time"], unit="s", utc=True)
+              .dt.tz_convert(tz)
+        )
         df.set_index("Time", inplace=True)
+        df.sort_index(inplace=True)
 
         df = df.astype(float)
-
-        return df
+        return df.dropna()
 
     except Exception as e:
         log(f"{symbol} fetch error: {e}")
         return None
-
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
@@ -150,30 +162,30 @@ def calculate_trendline(df):
     # ===== ADX =====
     adx = ta.adx(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=ADX_LENGTH)
     ha["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
-
-    # ===== DONCHIAN =====
-    order = 21
-
-    ha["UPPER"] = ha["HA_high"].rolling(order).max()
-    ha["LOWER"] = ha["HA_low"].rolling(order).min()
-
-    # ===== TRENDLINE =====
-    ha["Trendline"] = np.nan
-
-    trend = ha.loc[0, "HA_close"]
-
-    ha.loc[0, "Trendline"] = trend
+    # === RANGE CHANNEL ===
+    ha["UPPER"] = ha["HA_high"].rolling(27).max()
+    ha["LOWER"] = ha["HA_low"].rolling(27).min()
+    # === TRENDLINE LOGIC ===
+    trendline = np.zeros(len(ha))
+    trend = ha["HA_close"].iloc[0]
+    trendline[0] = trend
 
     for i in range(1, len(ha)):
+        ha_close = ha["HA_close"].iloc[i]
+        ha_high = ha["HA_high"].iloc[i]
+        ha_low = ha["HA_low"].iloc[i]
 
-        if ha.loc[i, "HA_high"] == ha.loc[i, "UPPER"]:
-            trend = ha.loc[i, "HA_low"]
+        upper = ha["UPPER"].iloc[i]
+        lower = ha["LOWER"].iloc[i]
 
-        elif ha.loc[i, "HA_low"] == ha.loc[i, "LOWER"]:
-            trend = ha.loc[i, "HA_high"]
+        if ha_high == upper :
+            trend = ha_low
+        elif ha_low == lower :
+            trend = ha_high
 
-        ha.loc[i, "Trendline"] = trend
+        trendline[i] = trend
 
+    ha["trendline"] = trendline
     return ha
 
 
@@ -181,7 +193,7 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state):
 
     ha = calculate_trendline(df)
-
+    save_processed_data(df, ha, symbol)
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
 
@@ -198,7 +210,7 @@ def process_symbol(symbol, df, price, state):
 
         if adx_ok:
 
-            if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
+            if last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
                 state["position"] = {
                     "side": "long",
@@ -213,7 +225,7 @@ def process_symbol(symbol, df, price, state):
                 return
 
 
-            if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
+            if last.HA_close < last.trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
                 state["position"] = {
                     "side": "short",
@@ -235,13 +247,13 @@ def process_symbol(symbol, df, price, state):
         pnl = 0
 
         if pos["side"] == "long" :
-            if price <= pos["stop"] or price <= last.Trendline:
+            if price <= pos["stop"] or price <= last.trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
 
         if pos["side"] == "short":
-            if price >= pos["stop"] or price >= last.Trendline:
+            if price >= pos["stop"] or price >= last.trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
