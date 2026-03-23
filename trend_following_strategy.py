@@ -54,7 +54,7 @@ TIMEFRAME = "15m"
 DAYS = 10
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS   = {"BTCUSD": 200, "ETHUSD": 20}
+STOP_LOSS   = {"BTCUSD": 500, "ETHUSD": 30}
 
 ADX_LENGTH = 24
 ADX_THRESHOLD = 22
@@ -191,12 +191,12 @@ def process_symbol(symbol, df, price, state):
 
     # ===== ADX CONDITIONS =====
     adx_ok = last.ADX > ADX_THRESHOLD
-    adx_rising = last.ADX > ha.iloc[-5].ADX
+    adx_rising = last.ADX > ha.iloc[-3].ADX
 
     # ===== ENTRY =====
     if pos is None:
 
-        if adx_ok and adx_rising:
+        if adx_ok:
 
             if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
@@ -234,18 +234,16 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price < last.Trendline:
+        if pos["side"] == "long" :
+            if price <= pos["stop"] or price <= last.Trendline:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-            exit_trade = True
-
-
-        if pos["side"] == "short" and price > last.Trendline:
-
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-
-            exit_trade = True
+        if pos["side"] == "short":
+            if price >= pos["stop"] or price >= last.Trendline:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
 
         if exit_trade:
