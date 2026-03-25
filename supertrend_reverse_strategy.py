@@ -253,25 +253,25 @@ def process_symbol(symbol, df, state):
     cross_up = last.HA_close > last.SUPERTREND and prev.HA_close < prev.SUPERTREND 
     cross_down = last.HA_close < last.SUPERTREND and prev.HA_close > prev.SUPERTREND 
 
-    # if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
-    #     return
+    if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
+        return
 
-    # body = abs(last.HA_close-last.HA_open)
-    # rng = last.HA_high-last.HA_low
+    body = abs(last.HA_close-last.HA_open)
+    rng = last.HA_high-last.HA_low
 
-    # strong = body > (0.6*rng)
+    strong = body > (0.6*rng)
 
     candle_time = ha.index[-2]
 
     if pos is None and state["last_candle"] != candle_time:
 
-        if cross_up:
+        if cross_up and strong:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"long",
                 "entry":price,
-                "tsl":price-last.SUPERTREND,
+                "tsl":last.SUPERTREND,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -283,13 +283,13 @@ def process_symbol(symbol, df, state):
 
             send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down:
+        elif cross_down and strong:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"short",
                 "entry":price,
-                "tsl":price+last.SUPERTREND,
+                "tsl":last.SUPERTREND,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
