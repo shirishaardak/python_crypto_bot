@@ -165,9 +165,12 @@ def build_indicators(df):
         length=21,
         multiplier=2.5
     )["SUPERT_21_2.5"]
+
     adx = ta.adx(df["high"], df["low"], df["close"], length=ADX_LENGTH)
     df["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
     df["ADX_MA"] = df["ADX"].rolling(14).mean()
+
+    return df   # ✅ ADD THIS LINE
 
 # ================= SAVE TRADE =================
 
