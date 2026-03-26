@@ -195,6 +195,10 @@ def calculate_trendline(df):
     data["HA_High"]=ha["HA_high"]
     data["HA_Low"]=ha["HA_low"]
 
+    # ===== SUPER TREND =====
+    st = ta.supertrend(df["High"], df["Low"], df["Close"], length=10, multiplier=3)
+    data["ST"] = st["SUPERT_10_3.0"]
+
     high_vals=data["HA_High"].values
     low_vals=data["HA_Low"].values
 
@@ -276,34 +280,41 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    # CE DATA
+    # ===== INDEX =====
+    hist_index=hist_template.copy()
+    hist_index["symbol"]=SPOT_SYMBOL
+    df_index=calculate_trendline(get_stock_historical_data(hist_index))
+    index_last=df_index.iloc[-2]
+
+    index_price=index_last.Close
+    index_st=index_last.ST
+
+    # ===== CE =====
     hist_ce=hist_template.copy()
     hist_ce["symbol"]=ce_symbol
     df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
     ce_last=df_ce.iloc[-2]
-    ce_prv=df_ce.iloc[-3]
 
-    ce_bullish=ce_last.HA_Close>ce_last.trendline and ce_last.HA_Close>ce_prv.HA_Close and ce_last.HA_Close>ce_prv.HA_Open
-    ce_adx=ce_last.ADX
-
-    # PE DATA
+    # ===== PE =====
     hist_pe=hist_template.copy()
     hist_pe["symbol"]=pe_symbol
     df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
     pe_last=df_pe.iloc[-2]
-    pe_prv=df_pe.iloc[-3]
 
-    pe_bullish=pe_last.HA_Close>pe_last.trendline and pe_last.HA_Close>pe_prv.HA_Close and pe_last.HA_Close>pe_prv.HA_Open
-    pe_adx=pe_last.ADX
+    ce_price=ce_last.Close
+    ce_st=ce_last.ST
 
-      # ENTRY
+    pe_price=pe_last.Close
+    pe_st=pe_last.ST
+
+    # ===== ENTRY =====
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        if ce_bullish:
+        if index_price>index_st and ce_price>ce_st:
             symbol=ce_symbol
             position_type="CE"
 
-        elif pe_bullish:
+        elif index_price<index_st and pe_price>pe_st:
             symbol=pe_symbol
             position_type="PE"
 
@@ -320,24 +331,23 @@ def run_strategy():
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
-
-    # EXIT + TRAILING
+    # ===== EXIT =====
     if position_type:
 
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
-        if position_type=="CE" and  price<ce_last.trendline:
-            exit_trade("SL / Trendline")
+        if position_type=="CE" and price<ce_last.ST:
+            exit_trade("Supertrend Break")
             return
 
-        if position_type=="PE" and  price<pe_last.trendline:
-            exit_trade("SL / Trendline")
+        if position_type=="PE" and price<pe_last.ST:
+            exit_trade("Supertrend Break")
             return
 
-        if price>=trail_level:
-            stop_loss+=25
-            trail_level+=25
-            send_telegram(f"📈 TSL Updated → SL {stop_loss}")
+        # if price>=trail_level:
+        #     stop_loss+=25
+        #     trail_level+=25
+        #     send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if ist_time()>=time(15,15):
             exit_trade("Time Exit")
