@@ -195,34 +195,19 @@ def calculate_trendline(df):
     data["HA_High"]=ha["HA_high"]
     data["HA_Low"]=ha["HA_low"]
 
-    # ===== SUPER TREND =====
-    st = ta.supertrend(df["High"], df["Low"], df["Close"], length=10, multiplier=3)
-    data["ST"] = st["SUPERT_10_3.0"]
+    # ===== SUPER TREND FIXED =====
+    st = ta.supertrend(
+        high=ha["HA_high"],
+        low=ha["HA_low"],
+        close=ha["HA_close"],
+        length=21,
+        multiplier=2.5
+    )
 
-    high_vals=data["HA_High"].values
-    low_vals=data["HA_Low"].values
+    data["ST"] = st["SUPERT_21_2.5"]
+    data["ST"] = data["ST"].ffill()
 
-    max_idx=argrelextrema(high_vals,np.greater_equal,order=21)[0]
-    min_idx=argrelextrema(low_vals,np.less_equal,order=21)[0]
-
-    data["smoothed_high"]=np.nan
-    data["smoothed_low"]=np.nan
-
-    data.iloc[max_idx,data.columns.get_loc("smoothed_high")]=data["HA_High"].iloc[max_idx]
-    data.iloc[min_idx,data.columns.get_loc("smoothed_low")]=data["HA_Low"].iloc[min_idx]
-
-    data[["smoothed_high","smoothed_low"]]=data[["smoothed_high","smoothed_low"]].ffill()
-
-    trendline=data["HA_Close"].iloc[0]
-    data["trendline"]=trendline
-
-    for i in range(1,len(data)):
-        if data["HA_High"].iloc[i]==data["smoothed_high"].iloc[i]:
-            trendline=data["HA_Low"].iloc[i]
-        elif data["HA_Low"].iloc[i]==data["smoothed_low"].iloc[i]:
-            trendline=data["HA_High"].iloc[i]
-        data.loc[i,"trendline"]=trendline
-
+    # ===== ADX =====
     adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
     data["ADX"]=adx["ADX_14"]
 
@@ -286,7 +271,7 @@ def run_strategy():
     df_index=calculate_trendline(get_stock_historical_data(hist_index))
     index_last=df_index.iloc[-2]
 
-    index_price=index_last.Close
+    index_price=index_last.HA_Close
     index_st=index_last.ST
 
     # ===== CE =====
@@ -301,20 +286,24 @@ def run_strategy():
     df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
     pe_last=df_pe.iloc[-2]
 
-    ce_price=ce_last.Close
+    ce_price=ce_last.HA_Close
     ce_st=ce_last.ST
 
-    pe_price=pe_last.Close
+    pe_price=pe_last.HA_Close
     pe_st=pe_last.ST
 
     # ===== ENTRY =====
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        if index_price>index_st and ce_price>ce_st:
+        # ADX FILTER (avoid sideways)
+        if ce_last.ADX < ADX_THRESHOLD:
+            return
+
+        if index_price > index_st and ce_price > ce_st:
             symbol=ce_symbol
             position_type="CE"
 
-        elif index_price<index_st and pe_price>pe_st:
+        elif index_price < index_st and pe_price > pe_st:
             symbol=pe_symbol
             position_type="PE"
 
@@ -343,11 +332,6 @@ def run_strategy():
         if position_type=="PE" and price<pe_last.ST:
             exit_trade("Supertrend Break")
             return
-
-        # if price>=trail_level:
-        #     stop_loss+=25
-        #     trail_level+=25
-        #     send_telegram(f"📈 TSL Updated → SL {stop_loss}")
 
         if ist_time()>=time(15,15):
             exit_trade("Time Exit")
