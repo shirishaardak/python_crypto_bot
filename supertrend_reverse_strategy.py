@@ -170,7 +170,33 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
     
-    ha["SUPERTREND"] = ta.supertrend(high=ha["HA_high"], low=ha["HA_low"], close=ha["HA_close"], length=21, multiplier=2.5)["SUPERT_21_2.5"]   
+    ha["SUPERTREND"] = ta.supertrend(high=ha["HA_high"], low=ha["HA_low"], close=ha["HA_close"], length=21, multiplier=2.5)["SUPERT_21_2.5"]
+
+    # === RANGE CHANNEL ===
+    ha["UPPER"] = ha["HA_high"].rolling(9).max()
+    ha["LOWER"] = ha["HA_low"].rolling(9).min()
+
+    # === TRENDLINE LOGIC ===
+    trendline = np.zeros(len(ha))
+    trend = ha["HA_close"].iloc[0]
+    trendline[0] = trend
+
+    for i in range(1, len(ha)):
+        ha_close = ha["HA_close"].iloc[i]
+        ha_high = ha["HA_high"].iloc[i]
+        ha_low = ha["HA_low"].iloc[i]
+
+        upper = ha["UPPER"].iloc[i-1]
+        lower = ha["LOWER"].iloc[i-1]
+
+        if ha_high > upper and ha_close > trend:
+            trend = lower
+        elif ha_low < lower and ha_close < trend:
+            trend = upper
+
+        trendline[i] = trend
+
+    ha["Trendline"] = trendline   
 
     return ha
 
@@ -250,28 +276,28 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.SUPERTREND and prev.HA_close < prev.SUPERTREND 
-    cross_down = last.HA_close < last.SUPERTREND and prev.HA_close > prev.SUPERTREND 
+    cross_up = last.HA_close > last.Trendline and prev.HA_close < prev.Trendline 
+    cross_down = last.HA_close < last.Trendline and prev.HA_close > prev.Trendline 
 
-    if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
-        return
+    # if abs(last.HA_close-last.SUPERTREND) < (0.0006*price):
+    #     return
 
-    body = abs(last.HA_close-last.HA_open)
-    rng = last.HA_high-last.HA_low
+    # body = abs(last.HA_close-last.HA_open)
+    # rng = last.HA_high-last.HA_low
 
-    strong = body > (0.6*rng)
+    # strong = body > (0.6*rng)
 
     candle_time = ha.index[-2]
 
     if pos is None and state["last_candle"] != candle_time:
 
-        if cross_up and strong:
+        if cross_up:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"long",
                 "entry":price,
-                "tsl":last.SUPERTREND,
+                "tsl":last.Trendline,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -283,13 +309,13 @@ def process_symbol(symbol, df, state):
 
             send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down and strong:
+        elif cross_down:
 
             state["position"]={
                 "symbol":symbol,
                 "side":"short",
                 "entry":price,
-                "tsl":last.SUPERTREND,
+                "tsl":last.Trendline,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -319,7 +345,7 @@ def process_symbol(symbol, df, state):
                     pos["entry"]+(profit_move-move_step)
                 )
 
-            if price<=pos["tsl"] or last.HA_close<last.SUPERTREND:
+            if price<=pos["tsl"] or last.HA_close<last.Trendline:
                 exit_trade(symbol,price,pos,state)
 
         else:
@@ -336,7 +362,7 @@ def process_symbol(symbol, df, state):
                     pos["entry"]-(profit_move-move_step)
                 )
 
-            if price>=pos["tsl"] or last.HA_close>last.SUPERTREND:
+            if price>=pos["tsl"] or last.HA_close>last.Trendline:
                 exit_trade(symbol,price,pos,state)
 
 # ================= MAIN =================
