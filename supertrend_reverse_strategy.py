@@ -33,25 +33,31 @@ TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 _last_tg = {}
 
+BOT_NAME = "supertrend_reverse_strategy"
+
 def send_telegram(msg, key=None, cooldown=30):
     try:
-        if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-            return
-
         now = time.time()
 
+        if key and key in _last_tg and now - _last_tg[key] < cooldown:
+            return
+
         if key:
-            if key in _last_tg and now - _last_tg[key] < cooldown:
-                return
             _last_tg[key] = now
 
-        session.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID,"text": msg},
+        # ADD BOT NAME PREFIX
+        msg = f"{BOT_NAME} | {msg}"
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+        requests.post(
+            url,
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=5
         )
-    except:
-        print("Telegram Error")
+
+    except Exception:
+        pass
 
 # ================= GIT CONFIG =================
 
