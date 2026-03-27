@@ -67,19 +67,32 @@ last_git_push = time.time()
 def auto_git_push():
     global last_git_push
 
-    if time.time() - last_git_push >= 3600:
-        try:
-            subprocess.run("git add -f data", shell=True)
-            subprocess.run('git commit -m "auto update"', shell=True)
-            subprocess.run("git push origin main", shell=True)
+    if time.time() - last_git_push < 3600:
+        return
 
+    try:
+        # Stage changes
+        subprocess.run("git add -A", shell=True, check=True)
+
+        # Commit only if there are changes
+        res = subprocess.run('git diff --cached --quiet || git commit -m "auto update"', shell=True, capture_output=True, text=True)
+        if res.returncode == 0:
+            log("No changes to commit")
+        else:
+            log("✅ Changes committed")
+
+        # Push to origin
+        res = subprocess.run("git push origin main", shell=True, capture_output=True, text=True)
+        if res.returncode == 0:
             log("✅ Git Auto Push Done")
             send_telegram("📤 Git Auto Push Done")
-
-        except Exception as e:
-            log(f"Git Error {e}")
+        else:
+            log(f"Git Push Failed: {res.stderr}")
 
         last_git_push = time.time()
+
+    except Exception as e:
+        log(f"Git Error: {e}")
 
 # ================= SETTINGS =================
 
