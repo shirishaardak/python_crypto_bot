@@ -97,12 +97,12 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
-stop = {"BTCUSD":10,"ETHUSD":1}
+stop = {"BTCUSD":200,"ETHUSD":15}
 TGT = {"BTCUSD":100,"ETHUSD":10}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1m"
+TIMEFRAME = "5m"
 DAYS = 1
 ADX_LENGTH= 14
 
@@ -269,7 +269,7 @@ def process_symbol(symbol, df, state):
         if cross_up:
             state["position"]={
                 "symbol":symbol,"side":"long","entry":price,
-                "stop":price - stop[symbol],
+                "stop":last.SUPERTREND,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -282,7 +282,7 @@ def process_symbol(symbol, df, state):
         elif cross_down:
             state["position"]={
                 "symbol":symbol,"side":"short","entry":price,
-                "stop":price + stop[symbol],
+                "stop":last.SUPERTREND,
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
