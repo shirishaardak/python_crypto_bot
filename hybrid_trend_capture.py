@@ -301,7 +301,7 @@ def process_symbol(symbol, df, state):
             state["position"] = {
                 "side":"long",
                 "entry":price,
-                "stop":last.Trendline - STOP[symbol],
+                "stop":prev.HA_low - STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -316,7 +316,7 @@ def process_symbol(symbol, df, state):
             state["position"] = {
                 "side":"short",
                 "entry":price,
-                "stop":last.Trendline + STOP[symbol],
+                "stop":prev.HA_high + STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
