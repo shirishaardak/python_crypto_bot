@@ -12,7 +12,6 @@ class SafeZoneInfo(zoneinfo.ZoneInfo):
 
 zoneinfo.ZoneInfo = SafeZoneInfo
 
-
 # ================= IMPORTS =================
 import os, sys
 import time as t
@@ -28,7 +27,6 @@ import requests
 sys.path.append(os.getcwd())
 load_dotenv()
 
-
 # ================= IST TIME =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -40,7 +38,6 @@ def ist_today():
 
 def ist_time():
     return ist_now().time()
-
 
 # ================= CONFIG =================
 CLIENT_ID="98E1TAKD4T-100"
@@ -56,7 +53,6 @@ os.makedirs(folder,exist_ok=True)
 TRADES_FILE=f"{folder}/live_trades.csv"
 TOKEN_FILE="auth/api_key/access_token.txt"
 
-
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN=os.getenv("TEL_BOT_TOKEN")
 TELEGRAM_CHAT_ID=os.getenv("TEL_CHAT_ID")
@@ -69,7 +65,6 @@ def send_telegram(msg):
             requests.post(url,json=payload,timeout=5)
     except:
         pass
-
 
 # ================= GLOBAL STATE =================
 fyers=None
@@ -87,7 +82,6 @@ trail_level=None
 NSE_HOLIDAYS=set()
 holiday_load_date=None
 
-
 # ================= UTILS =================
 def commission(price,qty):
     return round(price*qty*COMMISSION_RATE,6)
@@ -101,7 +95,6 @@ def save_trade(data):
         df.to_csv(TRADES_FILE,index=False)
     else:
         df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
-
 
 # ================= HOLIDAY ENGINE =================
 def fetch_nse_holidays():
@@ -123,7 +116,6 @@ def fetch_nse_holidays():
     except Exception as e:
         send_telegram(f"⚠ Holiday Fetch Failed {e}")
 
-
 def is_market_open():
     today=ist_today()
     if today.weekday()>=5:
@@ -131,7 +123,6 @@ def is_market_open():
     if today in NSE_HOLIDAYS:
         return False
     return True
-
 
 # ================= EXPIRY =================
 def get_last_thursday(year,month):
@@ -141,9 +132,7 @@ def get_last_thursday(year,month):
         last_day-=timedelta(days=1)
     return last_day
 
-
 def get_current_monthly_expiry():
-
     today=ist_today()
     now=ist_time()
     expiry=get_last_thursday(today.year,today.month)
@@ -157,7 +146,6 @@ def get_current_monthly_expiry():
         expiry=get_last_thursday(next_year,next_month)
 
     return expiry
-
 
 # ================= ATM OPTION =================
 def get_atm_option(option_type):
@@ -173,16 +161,34 @@ def get_atm_option(option_type):
 
     return f"NSE:BANKNIFTY{expiry_str}{strike}{option_type}"
 
-
 # ================= DATA =================
 def get_stock_historical_data(data):
-    final_data=fyers.history(data=data)
-    df=pd.DataFrame(final_data['candles'])
-    df=df.rename(columns={0:'Date',1:'Open',2:'High',3:'Low',4:'Close',5:'V'})
-    df['Date']=pd.to_datetime(df['Date'],unit='s')
-    df.set_index("Date",inplace=True)
-    return df
+    try:
+        final_data=fyers.history(data=data)
 
+        if "candles" not in final_data or not final_data["candles"]:
+            return pd.DataFrame()
+
+        df=pd.DataFrame(final_data['candles'])
+
+        if df.shape[1] < 6:
+            return pd.DataFrame()
+
+        df=df.iloc[:, :6]
+        df.columns=['Date','Open','High','Low','Close','V']
+
+        df['Date']=pd.to_datetime(df['Date'],unit='s',errors='coerce')
+        df.dropna(inplace=True)
+
+        if df.empty:
+            return pd.DataFrame()
+
+        df.set_index("Date",inplace=True)
+        return df
+
+    except Exception as e:
+        send_telegram(f"⚠ Data Fetch Error {e}")
+        return pd.DataFrame()
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
@@ -195,7 +201,6 @@ def calculate_trendline(df):
     data["HA_High"]=ha["HA_high"]
     data["HA_Low"]=ha["HA_low"]
 
-    # ===== SUPER TREND FIXED =====
     st = ta.supertrend(
         high=ha["HA_high"],
         low=ha["HA_low"],
@@ -204,16 +209,14 @@ def calculate_trendline(df):
         multiplier=2.5
     )
 
-    data["ST"] = st["SUPERT_21_2.5"]
+    data["ST"] = st.iloc[:,0]   # FIXED
     data["ST"] = data["ST"].ffill()
 
-    # ===== ADX =====
     adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
     data["ADX"]=adx["ADX_14"]
 
     data.index=df.index
     return data
-
 
 # ================= EXIT =================
 def exit_trade(reason):
@@ -241,7 +244,6 @@ def exit_trade(reason):
     trail_level=None
     last_exit_time=ist_now()
 
-
 # ================= STRATEGY =================
 def run_strategy():
 
@@ -268,7 +270,15 @@ def run_strategy():
     # ===== INDEX =====
     hist_index=hist_template.copy()
     hist_index["symbol"]=SPOT_SYMBOL
-    df_index=calculate_trendline(get_stock_historical_data(hist_index))
+
+    df_index_raw=get_stock_historical_data(hist_index)
+    if df_index_raw.empty:
+        return
+
+    df_index=calculate_trendline(df_index_raw)
+    if df_index.empty or len(df_index)<50:
+        return
+
     index_last=df_index.iloc[-2]
 
     index_price=index_last.HA_Close
@@ -278,12 +288,16 @@ def run_strategy():
     hist_ce=hist_template.copy()
     hist_ce["symbol"]=ce_symbol
     df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
+    if df_ce.empty or len(df_ce)<50:
+        return
     ce_last=df_ce.iloc[-2]
 
     # ===== PE =====
     hist_pe=hist_template.copy()
     hist_pe["symbol"]=pe_symbol
     df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
+    if df_pe.empty or len(df_pe)<50:
+        return
     pe_last=df_pe.iloc[-2]
 
     ce_price=ce_last.HA_Close
@@ -295,8 +309,8 @@ def run_strategy():
     # ===== ENTRY =====
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        # ADX FILTER (avoid sideways)
-        if ce_last.ADX < ADX_THRESHOLD:
+        # INDEX ADX FILTER
+        if index_last.ADX < ADX_THRESHOLD:
             return
 
         if index_price > index_st and ce_price > ce_st:
@@ -326,23 +340,21 @@ def run_strategy():
         price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
 
         if position_type=="CE" and price<ce_last.ST:
-            exit_trade("Supertrend Break")
+            exit_trade("CE Supertrend Break")
             return
 
         if position_type=="PE" and price<pe_last.ST:
-            exit_trade("Supertrend Break")
+            exit_trade("PE Supertrend Break")
             return
 
         if ist_time()>=time(15,15):
             exit_trade("Time Exit")
             return
 
-
 # ================= AUTH =================
 def load_token():
     os.system("python auth/fyers_auth.py")
     return True
-
 
 def load_model():
     token=open(TOKEN_FILE).read().strip()
@@ -356,7 +368,6 @@ def load_model():
 
     send_telegram("📡 Fyers Model Connected")
     return model
-
 
 # ================= DAILY RESET =================
 def daily_reset():
@@ -374,7 +385,6 @@ def daily_reset():
     trail_level=None
 
     send_telegram("🔄 Daily Reset Completed")
-
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 BankNifty Option Trend Algo Started")
