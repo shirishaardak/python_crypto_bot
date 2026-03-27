@@ -9,6 +9,7 @@ import traceback
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import numpy as np
+import subprocess
 
 load_dotenv()
 
@@ -51,6 +52,37 @@ def send_telegram(msg, key=None, cooldown=30):
         )
     except:
         print("Telegram Error")
+
+# ================= GIT CONFIG =================
+
+GIT_USERNAME = os.getenv("GIT_USERNAME")
+GIT_TOKEN = os.getenv("GIT_TOKEN")
+GIT_REPO = os.getenv("GIT_REPO")
+
+last_git_push = time.time()
+
+def auto_git_push():
+    global last_git_push
+
+    if time.time() - last_git_push >= 3600:
+
+        try:
+            repo_url = GIT_REPO.replace(
+                "https://",
+                f"https://{GIT_USERNAME}:{GIT_TOKEN}@"
+            )
+
+            subprocess.run("git add -f data", shell=True)
+            subprocess.run('git commit -m "auto update"', shell=True)
+            subprocess.run(f"git push {repo_url}", shell=True)
+
+            log("✅ Git Auto Push Done")
+            send_telegram("📤 Git Auto Push Done")
+
+        except Exception as e:
+            log(f"Git Error {e}")
+
+        last_git_push = time.time()
 
 # ================= SETTINGS =================
 
@@ -136,25 +168,6 @@ def fetch_candles(symbol):
 
     return df.astype(float)
 
-# ================= HEIKIN ASHI =================
-
-def calculate_heikin_ashi(df):
-
-    ha = pd.DataFrame(index=df.index)
-
-    ha["HA_close"] = (df.open+df.high+df.low+df.close)/4
-
-    ha_open = [(df.open.iloc[0]+df.close.iloc[0])/2]
-
-    for i in range(1,len(df)):
-        ha_open.append((ha_open[i-1]+ha["HA_close"].iloc[i-1])/2)
-
-    ha["HA_open"] = ha_open
-    ha["HA_high"] = ha[["HA_open","HA_close"]].join(df.high).max(axis=1)
-    ha["HA_low"] = ha[["HA_open","HA_close"]].join(df.low).min(axis=1)
-
-    return ha
-
 # ================= INDICATORS =================
 
 def build_indicators(df):    
@@ -170,7 +183,7 @@ def build_indicators(df):
     df["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
     df["ADX_MA"] = df["ADX"].rolling(14).mean()
 
-    return df   # ✅ ADD THIS LINE
+    return df
 
 # ================= SAVE TRADE =================
 
@@ -229,10 +242,10 @@ def process_symbol(symbol, df, state):
     if df.empty or len(df) < 50:
         return
 
-    ha = build_indicators(df)
+    df = build_indicators(df)
 
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
+    last = df.iloc[-2]
+    prev = df.iloc[-3]
 
     price = fetch_price(symbol)
     if price is None:
@@ -240,49 +253,51 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.close > last.SUPERTREND and prev.close < prev.SUPERTREND and last.ADX < last.ADX_MA
-    cross_down = last.close < last.SUPERTREND and prev.close > prev.SUPERTREND and last.ADX < last.ADX_MA
+    cross_up = last.close > last.SUPERTREND and prev.close < prev.SUPERTREND
+    cross_down = last.close < last.SUPERTREND and prev.close > prev.SUPERTREND
 
-   
-    candle_time = ha.index[-2]
-
-    # ================= ENTRY =================
+    candle_time = df.index[-2]
 
     if pos is None and state["last_candle"] != candle_time:
 
         if cross_up:
             state["position"]={
-                "symbol":symbol,"side":"short","entry":price,
-                "stop":price+TGT[symbol],
+                "symbol":symbol,"side":"long","entry":price,
+                "stop":price - stop[symbol],
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
 
             state["last_candle"]=candle_time
-            log(f"{symbol} short {price}")
-            send_telegram(f"🟢 {symbol} short {price}")
+            log(f"{symbol} LONG {price}")
+            send_telegram(f"🟢 {symbol} LONG {price}")
 
         elif cross_down:
             state["position"]={
-                "symbol":symbol,"side":"long","entry":price,
-                "stop":price-TGT[symbol],
+                "symbol":symbol,"side":"short","entry":price,
+                "stop":price + stop[symbol],
                 "best_price":price,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
 
             state["last_candle"]=candle_time
-            log(f"{symbol} long {price}")
-            send_telegram(f"🔴 {symbol} long {price}")
-
-    # ================= EXIT =================
+            log(f"{symbol} SHORT {price}")
+            send_telegram(f"🔴 {symbol} SHORT {price}")
 
     if pos:
 
-        buffer = 0.001 * price
+        if pos["side"] == "long":
+            if price > pos["best_price"]:
+                pos["best_price"] = price
+                pos["stop"] = max(pos["stop"], price - stop[symbol])
 
-        # ===== STOPLOSS HIT =====
+        elif pos["side"] == "short":
+            if price < pos["best_price"]:
+                pos["best_price"] = price
+                pos["stop"] = min(pos["stop"], price + stop[symbol])
+
         if pos["side"] == "long" and price <= pos["stop"]:
             exit_trade(symbol, price, pos, state)
             return
@@ -291,16 +306,6 @@ def process_symbol(symbol, df, state):
             exit_trade(symbol, price, pos, state)
             return
 
-        # ===== EXIT ON TREND CONTINUATION =====
-        # (Very important for reverse strategy)
-
-        if pos["side"] == "long" and last.close > last.SUPERTREND:
-            exit_trade(symbol, price, pos, state)
-            return
-
-        if pos["side"] == "short" and last.close < last.SUPERTREND:
-            exit_trade(symbol, price, pos, state)
-            return
 # ================= MAIN =================
 
 def run():
@@ -324,6 +329,8 @@ def run():
                     process_symbol(symbol,df,state[symbol])
 
                 time.sleep(1)
+
+            auto_git_push()
 
             time.sleep(2)
 
