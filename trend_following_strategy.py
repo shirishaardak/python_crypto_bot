@@ -50,14 +50,14 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
-DAYS = 10
+TIMEFRAME = "5m"
+DAYS = 5
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
 STOP_LOSS   = {"BTCUSD": 500, "ETHUSD": 30}
 
 ADX_LENGTH = 24
-ADX_THRESHOLD = 22
+ADX_THRESHOLD = 25
 
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "trend_following_strategy")
@@ -163,8 +163,8 @@ def calculate_trendline(df):
     adx = ta.adx(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=ADX_LENGTH)
     ha["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
     # === RANGE CHANNEL ===
-    ha["UPPER"] = ha["HA_high"].rolling(27).max()
-    ha["LOWER"] = ha["HA_low"].rolling(27).min()
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
     # === TRENDLINE LOGIC ===
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
@@ -247,13 +247,13 @@ def process_symbol(symbol, df, price, state):
         pnl = 0
 
         if pos["side"] == "long" :
-            if price <= pos["stop"] or price <= last.trendline:
+            if last.HA_close <= pos["stop"] or last.HA_close <= last.trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
 
         if pos["side"] == "short":
-            if price >= pos["stop"] or price >= last.trendline:
+            if last.HA_close >= pos["stop"] or last.HA_close >= last.trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
