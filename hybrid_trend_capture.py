@@ -7,13 +7,30 @@ from datetime import datetime, timedelta
 import pandas_ta as ta
 from dotenv import load_dotenv
 import traceback
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 load_dotenv()
 
+# ================= SESSION (🔥 FIX ADDED) =================
+
+session = requests.Session()
+
+retry = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[429,500,502,503,504],
+    allowed_methods=["GET"]
+)
+
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
 # ================= TELEGRAM =================
 
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKE")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_")
 _last_tg = {}
 
 def send_telegram(msg, key=None, cooldown=30):
@@ -30,7 +47,7 @@ def send_telegram(msg, key=None, cooldown=30):
 
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-        requests.post(
+        session.post(
             url,
             json={
                 "chat_id": TELEGRAM_CHAT_ID,
@@ -50,7 +67,7 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 
-STOP = {"BTCUSD":150,"ETHUSD":15}
+STOP = {"BTCUSD":50,"ETHUSD":5}
 
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
@@ -80,7 +97,7 @@ def commission(price,qty,symbol):
 
 def fetch_price(symbol):
     try:
-        r = requests.get(
+        r = session.get(   # 🔥 FIX HERE
             f"https://api.india.delta.exchange/v2/tickers/{symbol}",
             timeout=5
         )
@@ -115,35 +132,43 @@ def save_processed_data(df, ha, symbol):
         "trendline": ha["Trendline"],
     })
     out.to_csv(path, index=False)
+
 # ================= DATA =================
 
 def fetch_candles(symbol):
 
-    start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
+    try:   # 🔥 FIX ADDED
 
-    r = requests.get(
-        "https://api.india.delta.exchange/v2/history/candles",
-        params={
-            "resolution":TIMEFRAME,
-            "symbol":symbol,
-            "start":str(start),
-            "end":str(int(time.time()))
-        },
-        timeout=10
-    )
+        start = int((datetime.now()-timedelta(days=DAYS)).timestamp())
 
-    data = r.json()["result"]
+        r = session.get(   # 🔥 FIX HERE
+            "https://api.india.delta.exchange/v2/history/candles",
+            params={
+                "resolution":TIMEFRAME,
+                "symbol":symbol,
+                "start":str(start),
+                "end":str(int(time.time()))
+            },
+            timeout=10
+        )
 
-    df = pd.DataFrame(
-        data,
-        columns=["time","open","high","low","close","volume"]
-    )
+        data = r.json()["result"]
 
-    df["time"] = pd.to_datetime(df["time"],unit="s")
-    df.set_index("time",inplace=True)
-    df.sort_index(inplace=True)
+        df = pd.DataFrame(
+            data,
+            columns=["time","open","high","low","close","volume"]
+        )
 
-    return df.astype(float)
+        df["time"] = pd.to_datetime(df["time"],unit="s")
+        df.set_index("time",inplace=True)
+        df.sort_index(inplace=True)
+
+        return df.astype(float)
+
+    except Exception as e:
+        log(f"{symbol} CANDLE fetch error: {e}")
+        send_telegram(f"⚠️ {symbol} candle fetch error")
+        return pd.DataFrame()   # 🔥 prevents crash
 
 
 # ================= HEIKIN ASHI =================
@@ -173,11 +198,9 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
-    # === RANGE CHANNEL ===
-    ha["UPPER"] = ha["HA_high"].rolling(13).max()
-    ha["LOWER"] = ha["HA_low"].rolling(13).min()
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
-    # === TRENDLINE LOGIC ===
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
     trendline[0] = trend
@@ -187,27 +210,26 @@ def build_indicators(df):
         ha_high = ha["HA_high"].iloc[i]
         ha_low = ha["HA_low"].iloc[i]
 
-        upper = ha["UPPER"].iloc[i-1]
-        lower = ha["LOWER"].iloc[i-1]
+        upper = ha["UPPER"].iloc[i]
+        lower = ha["LOWER"].iloc[i]
 
-        if ha_high > upper and ha_close > trend:
-            trend = lower
-        elif ha_low < lower and ha_close < trend:
+        if ha_high == upper :
             trend = upper
+        elif ha_low == lower:
+            trend = lower
 
         trendline[i] = trend
 
     ha["Trendline"] = trendline
 
-    # === ADD ADX ===
     adx = ta.adx(df["high"], df["low"], df["close"], length=14)
 
-    # Merge ADX into HA dataframe
     ha["ADX"] = adx["ADX_14"]
     ha["+DI"] = adx["DMP_14"]
     ha["-DI"] = adx["DMN_14"]
 
     return ha
+
 
 # ================= EXIT =================
 
@@ -239,7 +261,6 @@ def exit_trade(symbol, price, pos, state, candle_time):
         f"✅ {symbol} {pos['side']} EXIT\nPnL {round(net,6)}"
     )
 
-    # 🔥 FIX: block same candle re-entry
     state["position"] = None
     state["last_candle"] = candle_time
 
@@ -248,8 +269,11 @@ def exit_trade(symbol, price, pos, state, candle_time):
 
 def process_symbol(symbol, df, state):
 
+    if df.empty:   # 🔥 FIX
+        return
+
     ha = build_indicators(df)
-    # save_processed_data(df, ha, symbol)
+    save_processed_data(df, ha, symbol)
 
     if len(ha) < 50:
         return
@@ -263,10 +287,8 @@ def process_symbol(symbol, df, state):
 
     candle_time = ha.index[-2]
 
-    # ✅ ENTRY
     if state["position"] is None and state["last_candle"] != candle_time:
 
-        # Strong candle filter (optional but powerful)
         body = abs(last.HA_close - last.HA_open)
         range_ = last.HA_high - last.HA_low
         strong_candle = body > 0.6 * range_
@@ -274,7 +296,7 @@ def process_symbol(symbol, df, state):
         cross_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open
         cross_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open
 
-        if cross_up:
+        if cross_up and strong_candle:
 
             state["position"] = {
                 "side":"long",
@@ -289,7 +311,7 @@ def process_symbol(symbol, df, state):
             log(f"{symbol} LONG {price}")
             send_telegram(f"🟢 {symbol} LONG {price}")
 
-        elif cross_down:
+        elif cross_down and strong_candle:
 
             state["position"] = {
                 "side":"short",
@@ -304,17 +326,18 @@ def process_symbol(symbol, df, state):
             log(f"{symbol} SHORT {price}")
             send_telegram(f"🔴 {symbol} SHORT {price}")
 
-    # ✅ EXIT (safe reference)
     if state["position"]:
 
         pos = state["position"]
+        exit_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_open 
+        exit_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_open
 
         if pos["side"] == "long":
-            if last.HA_close < last.Trendline or price < pos["stop"]:
+            if exit_down or price < pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
         else:
-            if last.HA_close > last.Trendline or price > pos["stop"]:
+            if exit_up or price > pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
 
