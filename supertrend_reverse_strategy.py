@@ -61,9 +61,6 @@ def send_telegram(msg, key=None, cooldown=30):
 
 # ================= GIT CONFIG =================
 
-GIT_USERNAME = os.getenv("GIT_USERNAME")
-GIT_TOKEN = os.getenv("GIT_TOKEN")
-GIT_REPO = os.getenv("GIT_REPO")
 
 last_git_push = time.time()
 
@@ -71,16 +68,10 @@ def auto_git_push():
     global last_git_push
 
     if time.time() - last_git_push >= 3600:
-
         try:
-            repo_url = GIT_REPO.replace(
-                "https://",
-                f"https://{GIT_USERNAME}:{GIT_TOKEN}@"
-            )
-
             subprocess.run("git add -f data", shell=True)
             subprocess.run('git commit -m "auto update"', shell=True)
-            subprocess.run(f"git push {repo_url}", shell=True)
+            subprocess.run("git push origin main", shell=True)
 
             log("✅ Git Auto Push Done")
             send_telegram("📤 Git Auto Push Done")
