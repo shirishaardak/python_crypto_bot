@@ -67,13 +67,13 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 
-STOP = {"BTCUSD":50,"ETHUSD":5}
+STOP = {"BTCUSD":30,"ETHUSD":3}
 
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "1m"
 DAYS = 3
 
 BASE_DIR = os.getcwd()
@@ -301,7 +301,7 @@ def process_symbol(symbol, df, state):
             state["position"] = {
                 "side":"long",
                 "entry":price,
-                "stop":prev.HA_low - STOP[symbol],
+                "stop":last.Trendline - STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -316,7 +316,7 @@ def process_symbol(symbol, df, state):
             state["position"] = {
                 "side":"short",
                 "entry":price,
-                "stop":prev.HA_high + STOP[symbol],
+                "stop":last.Trendline + STOP[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
