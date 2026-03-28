@@ -263,8 +263,8 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.close > last.SUPERTREND and prev.close < prev.SUPERTREND
-    cross_down = last.close < last.SUPERTREND and prev.close > prev.SUPERTREND
+    cross_up = last.close > last.SUPERTREND and prev.close < prev.SUPERTREND and last.ADX > 25
+    cross_down = last.close < last.SUPERTREND and prev.close > prev.SUPERTREND and last.ADX > 25
 
     candle_time = df.index[-2]
 
@@ -297,16 +297,16 @@ def process_symbol(symbol, df, state):
             send_telegram(f"🔴 {symbol} SHORT {price}")
 
     if pos:
-
+        distance = abs(last.close - last.SUPERTREND)
         if pos["side"] == "long":
             if price > pos["best_price"]:
                 pos["best_price"] = price
-                pos["stop"] = max(pos["stop"], price - stop[symbol])
+                pos["stop"] = max(pos["stop"], price - distance)
 
         elif pos["side"] == "short":
             if price < pos["best_price"]:
                 pos["best_price"] = price
-                pos["stop"] = min(pos["stop"], price + stop[symbol])
+                pos["stop"] = min(pos["stop"], price + distance)
 
         if pos["side"] == "long" and price <= pos["stop"]:
             exit_trade(symbol, price, pos, state)
