@@ -38,10 +38,10 @@ TAKER_FEE = 0.0005
 
 TIMEFRAME = "1h"
 DAYS = 15
+MIN_CANDLES = 100
 
 STOP_LOSS = {"BTCUSD": 200}
-
-PRODUCT_ID = {"BTCUSD": 27}  # confirm once
+PRODUCT_ID = {"BTCUSD": 27}
 
 order_manager = OrderManager()
 
@@ -51,29 +51,6 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
-
-def save_trade(trade):
-    try:
-        trade_copy = trade.copy()
-
-        for t in ["entry_time", "exit_time"]:
-            trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
-
-        cols = [
-            "entry_time", "exit_time", "symbol",
-            "side", "entry_price", "exit_price",
-            "qty", "net_pnl"
-        ]
-
-        pd.DataFrame([trade_copy])[cols].to_csv(
-            TRADE_CSV,
-            mode="a",
-            header=not os.path.exists(TRADE_CSV),
-            index=False
-        )
-
-    except Exception as e:
-        log(f"❌ Save trade error: {e}", tg=True)
 # ================= UTIL =================
 def log(msg, tg=False, key=None):
     text = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
@@ -82,16 +59,25 @@ def log(msg, tg=False, key=None):
         send_telegram(text, key)
 
 def commission(price, qty, symbol):
-    return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
+    return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE * 2  # entry + exit
 
 # ================= DATA =================
 def fetch_price(symbol):
     try:
         r = requests.get(f"https://api.india.delta.exchange/v2/tickers/{symbol}", timeout=5)
-        return float(r.json()["result"]["mark_price"])
+        if r.status_code != 200:
+            raise Exception(f"HTTP {r.status_code}")
+
+        data = r.json()
+        if not data.get("success"):
+            raise Exception(data)
+
+        return float(data["result"]["mark_price"])
+
     except Exception as e:
         log(f"{symbol} PRICE error: {e}", tg=True)
         return None
+
 
 def fetch_candles(symbol):
     start = int((datetime.now() - timedelta(days=DAYS)).timestamp())
@@ -110,8 +96,15 @@ def fetch_candles(symbol):
             timeout=10
         )
 
+        if r.status_code != 200:
+            raise Exception(f"HTTP {r.status_code}")
+
+        data = r.json()
+        if not data.get("success"):
+            raise Exception(data)
+
         df = pd.DataFrame(
-            r.json()["result"],
+            data["result"],
             columns=["time","open","high","low","close","volume"]
         )
 
@@ -146,91 +139,144 @@ def calculate_trendline(df):
 
     return ha
 
+# ================= SAVE TRADE =================
+def save_trade(trade):
+    try:
+        trade_copy = trade.copy()
+
+        for t in ["entry_time", "exit_time"]:
+            trade_copy[t] = trade_copy[t].strftime("%Y-%m-%d %H:%M:%S")
+
+        cols = [
+            "entry_time", "exit_time", "symbol",
+            "side", "entry_price", "exit_price",
+            "qty", "net_pnl"
+        ]
+
+        pd.DataFrame([trade_copy])[cols].to_csv(
+            TRADE_CSV,
+            mode="a",
+            header=not os.path.exists(TRADE_CSV),
+            index=False
+        )
+
+    except Exception as e:
+        log(f"❌ Save trade error: {e}", tg=True)
+
 # ================= STRATEGY =================
 def process_symbol(symbol, df, price, state):
-    ha = calculate_trendline(df)
+
+    # ===== HA SAFE =====
+    ha = calculate_trendline(df).dropna()
+    if len(ha) < 30:
+        return
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
     pos = state["position"]
     now = datetime.now()
 
+    # ===== HARD SYNC =====
+    if pos is None:
+        if order_manager.has_open_position(PRODUCT_ID[symbol]):
+            log("⚠️ Sync: Existing position found", tg=True)
+
+            state["position"] = {
+                "side": "unknown",
+                "entry": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": now
+            }
+            return
+
     # ===== ENTRY =====
     if pos is None:
 
-        # Sync with exchange
-        if order_manager.has_open_position(PRODUCT_ID[symbol]):
-            log("⚠️ Exchange already has position — skipping", tg=True)
-            return
-
         qty = DEFAULT_CONTRACTS[symbol]
 
-        # LONG ENTRY
+        # LONG
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
             order = order_manager.place_order(
-                product_id=PRODUCT_ID[symbol],
-                size=qty,
-                side="buy",
-                order_type="market"
+                PRODUCT_ID[symbol], qty, "buy", "market"
             )
 
-            if order is None:
+            if not order:
                 log("❌ Entry failed", tg=True)
                 return
+
+            entry_price = price
+            try:
+                entry_price = float(order["result"].get("avg_fill_price", price))
+            except:
+                pass
+
+            # Cancel old orders
+            orders = order_manager.get_live_orders()
+            for o in orders:
+                if o.get("product_id") == PRODUCT_ID[symbol]:
+                    order_manager.cancel_order(o["id"], PRODUCT_ID[symbol])
+
+            order_manager.place_stop_order(
+                PRODUCT_ID[symbol], qty, "sell",
+                entry_price - STOP_LOSS[symbol]
+            )
 
             state["position"] = {
                 "side": "long",
-                "entry": price,
+                "entry": entry_price,
                 "qty": qty,
                 "entry_time": now
             }
 
-            # Stop Loss
-            order_manager.place_stop_order(
-                product_id=PRODUCT_ID[symbol],
-                size=qty,
-                side="sell",
-                stop_price=price - STOP_LOSS[symbol]
-            )
-
-            log(f"🟢 BTC LONG @ {price}", tg=True)
+            log(f"🟢 LONG @ {entry_price}", tg=True)
             return
 
-        # SHORT ENTRY
+        # SHORT
         if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
             order = order_manager.place_order(
-                product_id=PRODUCT_ID[symbol],
-                size=qty,
-                side="sell",
-                order_type="market"
+                PRODUCT_ID[symbol], qty, "sell", "market"
             )
 
-            if order is None:
+            if not order:
                 log("❌ Entry failed", tg=True)
                 return
 
+            entry_price = price
+            try:
+                entry_price = float(order["result"].get("avg_fill_price", price))
+            except:
+                pass
+
+            # Cancel old orders
+            orders = order_manager.get_live_orders()
+            for o in orders:
+                if o.get("product_id") == PRODUCT_ID[symbol]:
+                    order_manager.cancel_order(o["id"], PRODUCT_ID[symbol])
+
+            order_manager.place_stop_order(
+                PRODUCT_ID[symbol], qty, "buy",
+                entry_price + STOP_LOSS[symbol]
+            )
+
             state["position"] = {
                 "side": "short",
-                "entry": price,
+                "entry": entry_price,
                 "qty": qty,
                 "entry_time": now
             }
 
-            # Stop Loss
-            order_manager.place_stop_order(
-                product_id=PRODUCT_ID[symbol],
-                size=qty,
-                side="buy",
-                stop_price=price + STOP_LOSS[symbol]
-            )
-
-            log(f"🔴 BTC SHORT @ {price}", tg=True)
+            log(f"🔴 SHORT @ {entry_price}", tg=True)
             return
 
     # ===== EXIT =====
     if pos:
+
+        if "last_exit_attempt" in state:
+            if (now - state["last_exit_attempt"]).seconds < 60:
+                return
+
         exit_trade = False
 
         if pos["side"] == "long" and price < last.Trendline:
@@ -244,23 +290,23 @@ def process_symbol(symbol, df, price, state):
             exit_trade = True
 
         if exit_trade:
+            state["last_exit_attempt"] = now
 
             order = order_manager.place_order(
-                product_id=PRODUCT_ID[symbol],
-                size=pos["qty"],
-                side=side,
-                order_type="market",
+                PRODUCT_ID[symbol],
+                pos["qty"],
+                side,
+                "market",
                 reduce_only=True
             )
 
-            if order is None:
+            if not order:
                 log("❌ Exit failed", tg=True)
                 return
 
             fee = commission(price, pos["qty"], symbol)
             net = pnl - fee
 
-            # ✅ SAVE TRADE
             save_trade({
                 "symbol": symbol,
                 "side": pos["side"],
@@ -275,6 +321,7 @@ def process_symbol(symbol, df, price, state):
             log(f"{'🟢' if net>0 else '🔴'} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
             state["position"] = None
+
 # ================= MAIN =================
 def run():
     state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
@@ -284,9 +331,9 @@ def run():
     while True:
         try:
             for symbol in SYMBOLS:
-                df = fetch_candles(symbol)
 
-                if df is None or len(df) < 100:
+                df = fetch_candles(symbol)
+                if df is None or len(df) < MIN_CANDLES:
                     continue
 
                 latest = df.index[-1]
@@ -297,7 +344,6 @@ def run():
                 state[symbol]["last_candle_time"] = latest
 
                 price = fetch_price(symbol)
-
                 if price is None:
                     continue
 

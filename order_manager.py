@@ -9,6 +9,7 @@ load_dotenv()
 
 class OrderManager:
     def __init__(self):
+
         # ==============================
         # API CONFIG
         # ==============================
@@ -59,40 +60,61 @@ class OrderManager:
             print(f"[Telegram Error] {e}")
 
     # ==============================
-    # PLACE ORDER (ENTRY / EXIT)
+    # INTERNAL SAFE REQUEST
     # ==============================
-    def place_order(self, product_id, size, side, order_type,
-                    limit_price=None, reduce_only=False):
+    def _request(self, method, endpoint, payload=None):
+        try:
+            res = self.client.request(
+                method,
+                endpoint,
+                payload,
+                auth=True
+            )
+
+            if not res:
+                raise Exception("Empty response")
+
+            if not res.get("success"):
+                raise Exception(res)
+
+            return res
+
+        except Exception as e:
+            print(f"[API ERROR] {method} {endpoint} → {e}")
+            return None
+
+    # ==============================
+    # PLACE ORDER
+    # ==============================
+    def place_order(self, product_id, size, side,
+                    order_type="market",
+                    limit_price=None,
+                    reduce_only=False):
 
         try:
             payload = {
                 "product_id": product_id,
                 "size": size,
-                "side": side,  # buy / sell
-                "order_type": "market_order" if order_type == "market" else "limit_order",
+                "side": side,
+                "order_type": "market" if order_type == "market" else "limit",
                 "reduce_only": reduce_only
             }
 
-            if payload["order_type"] == "limit_order":
+            if payload["order_type"] == "limit":
                 if limit_price is None:
                     raise ValueError("limit_price required for limit order")
                 payload["limit_price"] = str(limit_price)
 
-            res = self.client.request(
-                "POST",
-                "/v2/orders",
-                payload,
-                auth=True
-            )
+            res = self._request("POST", "/v2/orders", payload)
 
-            if not res or not res.get("success"):
-                raise Exception(res)
+            if not res:
+                return None
 
-            self.send_telegram(f"✅ ORDER: {payload}", key="order")
+            self.send_telegram(f"✅ ORDER: {side.upper()} {size}", key="order")
             return res
 
         except Exception as e:
-            msg = f"❌ ORDER ERROR: {e} | {locals()}"
+            msg = f"❌ ORDER ERROR: {e}"
             print(msg)
             self.send_telegram(msg, key="order_error")
             return None
@@ -107,27 +129,22 @@ class OrderManager:
                 "product_id": product_id,
                 "size": size,
                 "side": side,
-                "order_type": "market_order",
+                "order_type": "market",
                 "stop_order_type": "stop_loss_order",
                 "stop_price": str(stop_price),
                 "reduce_only": True
             }
 
-            res = self.client.request(
-                "POST",
-                "/v2/orders",
-                payload,
-                auth=True
-            )
+            res = self._request("POST", "/v2/orders", payload)
 
-            if not res or not res.get("success"):
-                raise Exception(res)
+            if not res:
+                return None
 
-            self.send_telegram(f"🛑 SL PLACED: {payload}", key="sl")
+            self.send_telegram(f"🛑 SL PLACED @ {stop_price}", key="sl")
             return res
 
         except Exception as e:
-            msg = f"❌ SL ERROR: {e} | {locals()}"
+            msg = f"❌ SL ERROR: {e}"
             print(msg)
             self.send_telegram(msg, key="sl_error")
             return None
@@ -143,14 +160,11 @@ class OrderManager:
                 "product_id": product_id
             }
 
-            res = self.client.request(
-                "DELETE",
-                "/v2/orders",
-                payload,
-                auth=True
-            )
+            res = self._request("DELETE", "/v2/orders", payload)
 
-            self.send_telegram(f"⚠️ CANCELLED: {order_id}", key="cancel")
+            if res:
+                self.send_telegram(f"⚠️ CANCELLED: {order_id}", key="cancel")
+
             return res
 
         except Exception as e:
@@ -160,16 +174,17 @@ class OrderManager:
             return None
 
     # ==============================
-    # GET OPEN POSITIONS
+    # GET POSITIONS (FIXED)
     # ==============================
-    def get_positions(self):
+    def get_positions(self, product_id):
 
         try:
-            res = self.client.request(
-                "GET",
-                "/v2/positions",
-                auth=True
-            )
+            payload = {"product_id": product_id}  # 🔥 FIX
+
+            res = self._request("GET", "/v2/positions", payload)
+
+            if not res:
+                return []
 
             return res.get("result", [])
 
@@ -178,15 +193,15 @@ class OrderManager:
             return []
 
     # ==============================
-    # CHECK IF POSITION EXISTS
+    # CHECK POSITION
     # ==============================
     def has_open_position(self, product_id):
 
         try:
-            positions = self.get_positions()
+            positions = self.get_positions(product_id)
 
             for p in positions:
-                if p["product_id"] == product_id and float(p["size"]) != 0:
+                if float(p.get("size", 0)) != 0:
                     return True
 
             return False
@@ -201,11 +216,10 @@ class OrderManager:
     def get_live_orders(self):
 
         try:
-            res = self.client.request(
-                "GET",
-                "/v2/orders",
-                auth=True
-            )
+            res = self._request("GET", "/v2/orders")
+
+            if not res:
+                return []
 
             return res.get("result", [])
 
