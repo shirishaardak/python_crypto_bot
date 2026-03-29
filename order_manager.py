@@ -12,14 +12,14 @@ class OrderManager:
         # ==============================
         # API CONFIG
         # ==============================
-        api_key = os.getenv('DELTA_API_KEY')
-        api_secret = os.getenv('DELTA_API_SECRET')
+        api_key = os.getenv("DELTA_API_KEY")
+        api_secret = os.getenv("DELTA_API_SECRET")
 
         if not api_key or not api_secret:
             raise ValueError("Missing API credentials")
 
         self.client = DeltaRestClient(
-            base_url='https://api.india.delta.exchange',
+            base_url="https://api.india.delta.exchange",
             api_key=api_key,
             api_secret=api_secret
         )
@@ -59,100 +59,75 @@ class OrderManager:
             print(f"[Telegram Error] {e}")
 
     # ==============================
-    # INTERNAL NORMALIZER
+    # PLACE ORDER (ENTRY / EXIT)
     # ==============================
-    def _normalize_order(self, kwargs):
-        k = kwargs.copy()
+    def place_order(self, product_id, size, side, order_type,
+                    limit_price=None, reduce_only=False):
 
-        # ---------- SIDE ----------
-        if "side" not in k:
-            raise ValueError("Missing side")
-
-        k["side"] = k["side"].lower()
-        if k["side"] not in ["buy", "sell"]:
-            raise ValueError("Invalid side")
-
-        # ---------- ORDER TYPE ----------
-        if "order_type" not in k:
-            raise ValueError("Missing order_type")
-
-        ot = k["order_type"].lower()
-
-        if ot in ["market", "market_order"]:
-            k["order_type"] = "market_order"
-        elif ot in ["limit", "limit_order"]:
-            k["order_type"] = "limit_order"
-        else:
-            raise ValueError("Invalid order_type")
-
-        # ---------- PRICE ----------
-        if "limit_price" in k:
-            k["limit_price"] = float(k["limit_price"])
-
-        # ---------- REDUCE ONLY ----------
-        if "reduce_only" in k:
-            k["reduce_only"] = bool(k["reduce_only"])
-        else:
-            k["reduce_only"] = False
-
-        # ---------- CLEAN ----------
-        k.pop("product_symbol", None)
-        k.pop("stop_order_type", None)
-
-        return k
-
-    # ==============================
-    # PLACE ORDER
-    # ==============================
-    def place_order(self, **kwargs):
         try:
-            k = self._normalize_order(kwargs)
+            payload = {
+                "product_id": product_id,
+                "size": size,
+                "side": side,  # buy / sell
+                "order_type": "market_order" if order_type == "market" else "limit_order",
+                "reduce_only": reduce_only
+            }
 
-            res = self.client.place_order(**k)
+            if payload["order_type"] == "limit_order":
+                if limit_price is None:
+                    raise ValueError("limit_price required for limit order")
+                payload["limit_price"] = str(limit_price)
 
-            if not res or "result" not in res:
-                raise Exception(f"Bad response: {res}")
+            res = self.client.request(
+                "POST",
+                "/v2/orders",
+                payload,
+                auth=True
+            )
 
-            self.send_telegram(f"✅ ORDER: {k}", key="order")
+            if not res or not res.get("success"):
+                raise Exception(res)
+
+            self.send_telegram(f"✅ ORDER: {payload}", key="order")
             return res
 
         except Exception as e:
-            msg = f"❌ PLACE ERROR: {e} | {kwargs}"
+            msg = f"❌ ORDER ERROR: {e} | {locals()}"
             print(msg)
-            self.send_telegram(msg, key="place_error")
+            self.send_telegram(msg, key="order_error")
             return None
 
     # ==============================
-    # PLACE STOP LOSS
+    # STOP LOSS ORDER
     # ==============================
-    def place_stop_order(self, **kwargs):
+    def place_stop_order(self, product_id, size, side, stop_price):
+
         try:
-            k = kwargs.copy()
+            payload = {
+                "product_id": product_id,
+                "size": size,
+                "side": side,
+                "order_type": "market_order",
+                "stop_order_type": "stop_loss_order",
+                "stop_price": str(stop_price),
+                "reduce_only": True
+            }
 
-            # SIDE
-            k["side"] = k["side"].lower()
+            res = self.client.request(
+                "POST",
+                "/v2/orders",
+                payload,
+                auth=True
+            )
 
-            # PRICE
-            if "stop_price" not in k:
-                raise ValueError("Missing stop_price")
+            if not res or not res.get("success"):
+                raise Exception(res)
 
-            k["stop_price"] = float(k["stop_price"])
-
-            # DEFAULT TYPE
-            k["order_type"] = "market_order"
-
-            k.pop("stop_order_type", None)
-
-            res = self.client.place_stop_order(**k)
-
-            if not res or "result" not in res:
-                raise Exception(f"Bad response: {res}")
-
-            self.send_telegram(f"🛑 SL: {k}", key="sl")
+            self.send_telegram(f"🛑 SL PLACED: {payload}", key="sl")
             return res
 
         except Exception as e:
-            msg = f"❌ SL ERROR: {e} | {kwargs}"
+            msg = f"❌ SL ERROR: {e} | {locals()}"
             print(msg)
             self.send_telegram(msg, key="sl_error")
             return None
@@ -161,8 +136,19 @@ class OrderManager:
     # CANCEL ORDER
     # ==============================
     def cancel_order(self, order_id, product_id):
+
         try:
-            res = self.client.cancel_order(order_id, product_id)
+            payload = {
+                "id": order_id,
+                "product_id": product_id
+            }
+
+            res = self.client.request(
+                "DELETE",
+                "/v2/orders",
+                payload,
+                auth=True
+            )
 
             self.send_telegram(f"⚠️ CANCELLED: {order_id}", key="cancel")
             return res
@@ -174,25 +160,32 @@ class OrderManager:
             return None
 
     # ==============================
-    # LIVE ORDERS
+    # GET OPEN POSITIONS
     # ==============================
-    def get_live_orders(self):
+    def get_positions(self):
+
         try:
-            return self.client.get_live_orders()
+            res = self.client.request(
+                "GET",
+                "/v2/positions",
+                auth=True
+            )
+
+            return res.get("result", [])
+
         except Exception as e:
-            msg = f"❌ LIVE ORDER ERROR: {e}"
-            print(msg)
-            self.send_telegram(msg, key="live_error")
+            print(f"Position fetch error: {e}")
             return []
 
     # ==============================
-    # POSITION CHECK (IMPORTANT)
+    # CHECK IF POSITION EXISTS
     # ==============================
     def has_open_position(self, product_id):
-        try:
-            positions = self.client.get_positions()
 
-            for p in positions.get("result", []):
+        try:
+            positions = self.get_positions()
+
+            for p in positions:
                 if p["product_id"] == product_id and float(p["size"]) != 0:
                     return True
 
@@ -201,3 +194,21 @@ class OrderManager:
         except Exception as e:
             print(f"Position check error: {e}")
             return False
+
+    # ==============================
+    # GET LIVE ORDERS
+    # ==============================
+    def get_live_orders(self):
+
+        try:
+            res = self.client.request(
+                "GET",
+                "/v2/orders",
+                auth=True
+            )
+
+            return res.get("result", [])
+
+        except Exception as e:
+            print(f"Live orders error: {e}")
+            return []
