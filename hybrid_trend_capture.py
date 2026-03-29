@@ -301,9 +301,9 @@ def process_symbol(symbol, df, state):
         if cross_up and strong_candle:
 
             state["position"] = {
-                "side":"short",
+                "side":"long",
                 "entry":price,
-                "stop":price + STOPLOSS[symbol],
+                "stop":price - STOPLOSS[symbol],
                 "TGT":price - TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
@@ -317,9 +317,9 @@ def process_symbol(symbol, df, state):
         elif cross_down and strong_candle:
 
             state["position"] = {
-                "side":"long",
+                "side":"short",
                 "entry":price,
-                "stop":price - STOPLOSS[symbol],
+                "stop":price + STOPLOSS[symbol],
                 "TGT":price + TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
