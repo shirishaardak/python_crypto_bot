@@ -182,18 +182,30 @@ def fetch_candles(symbol):
 
 def build_indicators(df):
 
-    ha = ta.ha(df["open"], df["high"], df["low"], df["close"]).reset_index(drop=True)    
-    df["SUPERTREND"] = ta.supertrend(
+    # Heikin Ashi
+    ha = ta.ha(df["open"], df["high"], df["low"], df["close"])
+
+    df["HA_open"] = ha["HA_open"]
+    df["HA_high"] = ha["HA_high"]
+    df["HA_low"] = ha["HA_low"]
+    df["HA_close"] = ha["HA_close"]
+
+    # Supertrend on HA
+    st = ta.supertrend(
         high=df["HA_high"],
         low=df["HA_low"],
         close=df["HA_close"],
         length=21,
         multiplier=2.5
-    )["SUPERT_21_2.5"]
+    )
 
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    df["SUPERTREND"] = st["SUPERT_21_2.5"]
 
+    # Rolling levels
+    df["UPPER"] = df["HA_high"].rolling(21).max()
+    df["LOWER"] = df["HA_low"].rolling(21).min()
+
+    # ADX
     adx = ta.adx(df["HA_high"], df["HA_low"], df["HA_close"], length=ADX_LENGTH)
     df["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
     df["ADX_MA"] = df["ADX"].rolling(5).mean()
@@ -268,8 +280,8 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.HA_close > last.SUPERTREND and last.HA_close < prev.UPPER and last.ADX > last.ADX_MA
-    cross_down = last.HA_close < last.SUPERTREND and last.HA_close > prev.UPPER and last.ADX > last.ADX_MA
+    cross_up = last.HA_close > last.SUPERTREND and last.HA_close > prev.UPPER and last.ADX > last.ADX_MA
+    cross_down = last.HA_close < last.SUPERTREND and last.HA_close < prev.LOWER and last.ADX > last.ADX_MA
 
     candle_time = df.index[-2]
 
@@ -302,7 +314,7 @@ def process_symbol(symbol, df, state):
             send_telegram(f"🔴 {symbol} SHORT {price}")
 
     if pos:
-        distance = abs(last.close - last.SUPERTREND)
+        distance = abs(last.HA_close - last.SUPERTREND)
         if pos["side"] == "long":
             if price > pos["best_price"]:
                 pos["best_price"] = price

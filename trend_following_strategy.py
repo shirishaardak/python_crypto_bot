@@ -50,13 +50,13 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 5
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS   = {"BTCUSD": 500, "ETHUSD": 30}
+STOP_LOSS   = {"BTCUSD": 100, "ETHUSD": 10}
 
-ADX_LENGTH = 24
+ADX_LENGTH = 9
 ADX_THRESHOLD = 25
 
 BASE_DIR = os.getcwd()
@@ -215,7 +215,7 @@ def process_symbol(symbol, df, price, state):
                 state["position"] = {
                     "side": "long",
                     "entry": price,
-                    "stop": price - STOP_LOSS[symbol],
+                    "stop": last.trendline - STOP_LOSS[symbol],
                     "tp": price + TAKE_PROFIT[symbol],
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now
@@ -230,7 +230,7 @@ def process_symbol(symbol, df, price, state):
                 state["position"] = {
                     "side": "short",
                     "entry": price,
-                    "stop": price + STOP_LOSS[symbol],
+                    "stop": last.trendline + STOP_LOSS[symbol],
                     "tp": price - TAKE_PROFIT[symbol],
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now
@@ -247,13 +247,13 @@ def process_symbol(symbol, df, price, state):
         pnl = 0
 
         if pos["side"] == "long" :
-            if last.HA_close <= pos["stop"] or last.HA_close <= last.trendline:
+            if price <= pos["stop"] or last.HA_close <= last.trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
 
         if pos["side"] == "short":
-            if last.HA_close >= pos["stop"] or last.HA_close >= last.trendline:
+            if price >= pos["stop"] or last.HA_close >= last.trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
