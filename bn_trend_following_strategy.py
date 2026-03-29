@@ -21,7 +21,6 @@ import pandas_ta as ta
 from fyers_apiv3 import fyersModel
 from datetime import datetime, time, timedelta, timezone, date
 from dotenv import load_dotenv
-from scipy.signal import argrelextrema
 import requests
 
 sys.path.append(os.getcwd())
@@ -82,6 +81,20 @@ trail_level=None
 NSE_HOLIDAYS=set()
 holiday_load_date=None
 
+# ================= SAFE PRICE =================
+def get_last_price(symbol):
+    try:
+        data = fyers.quotes({"symbols": symbol})
+
+        if not data or "d" not in data or not data["d"]:
+            return None
+
+        v = data["d"][0].get("v", {})
+        return v.get("lp")
+
+    except:
+        return None
+
 # ================= UTILS =================
 def commission(price,qty):
     return round(price*qty*COMMISSION_RATE,6)
@@ -96,7 +109,7 @@ def save_trade(data):
     else:
         df.to_csv(TRADES_FILE,mode="a",header=False,index=False)
 
-# ================= HOLIDAY ENGINE =================
+# ================= HOLIDAY =================
 def fetch_nse_holidays():
     global NSE_HOLIDAYS
     try:
@@ -153,7 +166,10 @@ def get_atm_option(option_type):
     if not is_market_open():
         return None
 
-    spot=fyers.quotes({"symbols":SPOT_SYMBOL})["d"][0]["v"]["lp"]
+    spot=get_last_price(SPOT_SYMBOL)
+    if spot is None:
+        return None
+
     strike=int(round(spot/100)*100)
 
     expiry=get_current_monthly_expiry()
@@ -164,21 +180,27 @@ def get_atm_option(option_type):
 # ================= DATA =================
 def get_stock_historical_data(data):
     try:
-        final_data=fyers.history(data=data)
+        final_data = fyers.history(data=data)
 
-        if "candles" not in final_data or not final_data["candles"]:
+        if not isinstance(final_data, dict):
             return pd.DataFrame()
 
-        df=pd.DataFrame(final_data['candles'])
+        candles = final_data.get("candles")
+
+        if not candles:
+            return pd.DataFrame()
+
+        df=pd.DataFrame(candles)
 
         if df.shape[1] < 6:
             return pd.DataFrame()
 
         df=df.iloc[:, :6]
-        df.columns=['Date','Open','High','Low','Close','V']
+        df.columns=['Date','Open','High','Low','Close','Volume']
 
         df['Date']=pd.to_datetime(df['Date'],unit='s',errors='coerce')
-        df.dropna(inplace=True)
+
+        df.dropna(subset=['Date','Open','High','Low','Close'], inplace=True)
 
         if df.empty:
             return pd.DataFrame()
@@ -209,7 +231,7 @@ def calculate_trendline(df):
         multiplier=2.5
     )
 
-    data["ST"] = st.iloc[:,0]   # FIXED
+    data["ST"] = st.iloc[:,0]
     data["ST"] = data["ST"].ffill()
 
     adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
@@ -222,8 +244,12 @@ def calculate_trendline(df):
 def exit_trade(reason):
 
     global position_type,last_exit_time,stop_loss,trail_level
+    global entry_price, entry_time, symbol
 
-    price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+    price = get_last_price(symbol)
+    if price is None:
+        return
+
     net=calculate_pnl(entry_price,price,QTY)-commission(price,QTY)
 
     save_trade({
@@ -267,7 +293,7 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    # ===== INDEX =====
+    # INDEX
     hist_index=hist_template.copy()
     hist_index["symbol"]=SPOT_SYMBOL
 
@@ -281,10 +307,7 @@ def run_strategy():
 
     index_last=df_index.iloc[-2]
 
-    index_price=index_last.HA_Close
-    index_st=index_last.ST
-
-    # ===== CE =====
+    # CE
     hist_ce=hist_template.copy()
     hist_ce["symbol"]=ce_symbol
     df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
@@ -292,7 +315,7 @@ def run_strategy():
         return
     ce_last=df_ce.iloc[-2]
 
-    # ===== PE =====
+    # PE
     hist_pe=hist_template.copy()
     hist_pe["symbol"]=pe_symbol
     df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
@@ -300,31 +323,26 @@ def run_strategy():
         return
     pe_last=df_pe.iloc[-2]
 
-    ce_price=ce_last.HA_Close
-    ce_st=ce_last.ST
-
-    pe_price=pe_last.HA_Close
-    pe_st=pe_last.ST
-
-    # ===== ENTRY =====
+    # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
-        # INDEX ADX FILTER
         if index_last.ADX < ADX_THRESHOLD:
             return
 
-        if index_price > index_st and ce_price > ce_st:
+        if index_last.HA_Close > index_last.ST and ce_last.HA_Close > ce_last.ST:
             symbol=ce_symbol
             position_type="CE"
 
-        elif index_price < index_st and pe_price > pe_st:
+        elif index_last.HA_Close < index_last.ST and pe_last.HA_Close > pe_last.ST:
             symbol=pe_symbol
             position_type="PE"
 
         else:
             return
 
-        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+        price=get_last_price(symbol)
+        if price is None:
+            return
 
         entry_price=price
         entry_time=ist_now()
@@ -334,10 +352,12 @@ def run_strategy():
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
-    # ===== EXIT =====
+    # EXIT
     if position_type:
 
-        price=fyers.quotes({"symbols":symbol})["d"][0]["v"]["lp"]
+        price=get_last_price(symbol)
+        if price is None:
+            return
 
         if position_type=="CE" and price<ce_last.ST:
             exit_trade("CE Supertrend Break")

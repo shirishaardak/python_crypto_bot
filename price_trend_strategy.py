@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 import pandas_ta as ta
 from requests.exceptions import RequestException, ConnectionError
 from dotenv import load_dotenv
+from order_manager import OrderManager   # adjust filename if needed
+
+
 load_dotenv()
 
 # ================= TELEGRAM =================
@@ -30,7 +33,7 @@ def send_telegram(msg, key=None, cooldown=30):
 
 # ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
+DEFAULT_CONTRACTS = {"BTCUSD": 10, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
@@ -46,6 +49,11 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
+order_manager = OrderManager()
+
+PRODUCT_ID = {
+    "BTCUSD": 27   # ⚠️ confirm from Delta (very important)
+}
 # ================= UTILITIES =================
 def log(msg, tg=False, key=None):
     text = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
@@ -167,7 +175,14 @@ def process_symbol(symbol, df, price, state):
 
     # ===== ENTRY =====
     if pos is None:
+        qty = DEFAULT_CONTRACTS[symbol]
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
+            order_manager.place_order(
+                product_id=PRODUCT_ID[symbol],
+                size=qty,
+                side="buy",
+                order_type="market"
+            )
             state["position"] = {
                 "side": "long", "entry": price, "stop": price - STOP_LOSS[symbol], "tp": price + TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol], "entry_time": now
@@ -176,6 +191,12 @@ def process_symbol(symbol, df, price, state):
             return
 
         if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
+            order_manager.place_order(
+                product_id=PRODUCT_ID[symbol],
+                size=qty,
+                side="sell",
+                order_type="market"
+            )
             state["position"] = {
                 "side": "short", "entry": price, "stop": price + STOP_LOSS[symbol], "tp": price - TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol], "entry_time": now
@@ -189,12 +210,21 @@ def process_symbol(symbol, df, price, state):
         pnl = 0
         if pos["side"] == "long" and price < last.Trendline:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            side = "sell"
             exit_trade = True
+
         if pos["side"] == "short" and price > last.Trendline:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            side = "buy"
             exit_trade = True
 
         if exit_trade:
+            order_manager.place_order(
+                product_id=PRODUCT_ID[symbol],
+                size=pos["qty"],
+                side=side,
+                order_type="market"
+            )
             fee = commission(price, pos["qty"], symbol)
             net = pnl - fee
             save_trade({"symbol": symbol, "side": pos["side"], "entry_price": pos["entry"], "exit_price": price,

@@ -7,3 +7,4 @@ pyotp
 fyers-apiv3
 pytz
 python-dotenv
+delta_rest_client
