@@ -67,7 +67,9 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 
-STOP = {"BTCUSD":30,"ETHUSD":3}
+TGT = {"BTCUSD":200,"ETHUSD":20}
+
+STOPLOSS = {"BTCUSD":100,"ETHUSD":10}
 
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
@@ -299,9 +301,10 @@ def process_symbol(symbol, df, state):
         if cross_up and strong_candle:
 
             state["position"] = {
-                "side":"long",
+                "side":"short",
                 "entry":price,
-                "stop":last.Trendline - STOP[symbol],
+                "stop":price + STOPLOSS[symbol],
+                "TGT":price - TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -314,9 +317,10 @@ def process_symbol(symbol, df, state):
         elif cross_down and strong_candle:
 
             state["position"] = {
-                "side":"short",
+                "side":"long",
                 "entry":price,
-                "stop":last.Trendline + STOP[symbol],
+                "stop":price - STOPLOSS[symbol],
+                "TGT":price + TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -329,15 +333,13 @@ def process_symbol(symbol, df, state):
     if state["position"]:
 
         pos = state["position"]
-        exit_up = last.HA_close > last.Trendline and last.HA_close > prev.HA_open 
-        exit_down = last.HA_close < last.Trendline and last.HA_close < prev.HA_open
 
         if pos["side"] == "long":
-            if exit_down or price < pos["stop"]:
+            if price > pos["TGT"] or price < pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
         else:
-            if exit_up or price > pos["stop"]:
+            if  price < pos["TGT"] or price > pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
 
