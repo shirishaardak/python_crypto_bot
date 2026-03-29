@@ -96,7 +96,7 @@ class OrderManager:
                 "product_id": product_id,
                 "size": size,
                 "side": side,
-                "order_type": "market" if order_type == "market" else "limit",
+                "order_type": "market_order" if order_type == "market" else "limit_order",
                 "reduce_only": reduce_only
             }
 
@@ -129,7 +129,7 @@ class OrderManager:
                 "product_id": product_id,
                 "size": size,
                 "side": side,
-                "order_type": "market",
+                "order_type": "market_order",
                 "stop_order_type": "stop_loss_order",
                 "stop_price": str(stop_price),
                 "reduce_only": True
@@ -179,9 +179,11 @@ class OrderManager:
     def get_positions(self, product_id):
 
         try:
-            payload = {"product_id": product_id}  # 🔥 FIX
-
-            res = self._request("GET", "/v2/positions", payload)
+            res = self._request(
+                "GET",
+                "/v2/positions",
+                {"product_id": product_id}   # 🔥 REQUIRED
+            )
 
             if not res:
                 return []
