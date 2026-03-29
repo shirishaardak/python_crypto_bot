@@ -96,9 +96,17 @@ def place_market_order(symbol, side, qty):
             side=side,
             size=qty
         )
+
+        # 🔥 STRICT CHECK
+        if not order or ("success" in order and not order["success"]):
+            log(f"❌ {symbol} ORDER FAILED: {order}", tg=True, key=f"{symbol}_order_fail")
+            return None
+
+        log(f"✅ {symbol} ORDER SUCCESS: {order}", tg=True, key=f"{symbol}_order_success")
         return order
+
     except Exception as e:
-        log(f"{symbol} Order error: {e}", tg=True, key=f"{symbol}_order")
+        log(f"❌ {symbol} Order Exception: {e}", tg=True, key=f"{symbol}_order_error")
         return None
 
 # ================= UTILITIES =================
