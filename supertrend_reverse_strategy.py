@@ -180,18 +180,23 @@ def fetch_candles(symbol):
 
 # ================= INDICATORS =================
 
-def build_indicators(df):    
+def build_indicators(df):
+
+    ha = ta.ha(df["open"], df["high"], df["low"], df["close"]).reset_index(drop=True)    
     df["SUPERTREND"] = ta.supertrend(
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
         length=21,
         multiplier=2.5
     )["SUPERT_21_2.5"]
 
-    adx = ta.adx(df["high"], df["low"], df["close"], length=ADX_LENGTH)
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+
+    adx = ta.adx(df["HA_high"], df["HA_low"], df["HA_close"], length=ADX_LENGTH)
     df["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
-    df["ADX_MA"] = df["ADX"].rolling(14).mean()
+    df["ADX_MA"] = df["ADX"].rolling(5).mean()
 
     return df
 
@@ -255,7 +260,7 @@ def process_symbol(symbol, df, state):
     df = build_indicators(df)
 
     last = df.iloc[-2]
-    prev = df.iloc[-3]
+    prev = df.iloc[-4]
 
     price = fetch_price(symbol)
     if price is None:
@@ -263,8 +268,8 @@ def process_symbol(symbol, df, state):
 
     pos = state["position"]
 
-    cross_up = last.close > last.SUPERTREND and prev.close < prev.SUPERTREND and last.ADX > 25
-    cross_down = last.close < last.SUPERTREND and prev.close > prev.SUPERTREND and last.ADX > 25
+    cross_up = last.HA_close > last.SUPERTREND and last.HA_close < prev.UPPER and last.ADX > last.ADX_MA
+    cross_down = last.HA_close < last.SUPERTREND and last.HA_close > prev.UPPER and last.ADX > last.ADX_MA
 
     candle_time = df.index[-2]
 
