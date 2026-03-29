@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from delta_rest_client import DeltaRestClient
+from delta_rest_client import DeltaRestClient, OrderType
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -53,35 +53,37 @@ class OrderManager:
             requests.post(
                 url,
                 json={"chat_id": self.tg_chat_id, "text": msg},
-                timeout=5
+                timeout=2
             )
 
         except Exception as e:
             print(f"[Telegram Error] {e}")
 
     # ==============================
-    # INTERNAL SAFE REQUEST
+    # SAFE REQUEST (WITH RETRY)
     # ==============================
-    def _request(self, method, endpoint, payload=None):
-        try:
-            res = self.client.request(
-                method,
-                endpoint,
-                payload,
-                auth=True
-            )
+    def _request(self, method, endpoint, payload=None, retries=3):
+        for i in range(retries):
+            try:
+                res = self.client.request(
+                    method,
+                    endpoint,
+                    payload,
+                    auth=True
+                )
 
-            if not res:
-                raise Exception("Empty response")
+                if res and res.get("success"):
+                    return res
 
-            if not res.get("success"):
-                raise Exception(res)
+                print(f"[API ERROR] {res}")
 
-            return res
+            except Exception as e:
+                print(f"[RETRY {i+1}] {method} {endpoint} → {e}")
 
-        except Exception as e:
-            print(f"[API ERROR] {method} {endpoint} → {e}")
-            return None
+            time.sleep(1)
+
+        print(f"[API FAILED] {method} {endpoint}")
+        return None
 
     # ==============================
     # PLACE ORDER
@@ -96,11 +98,11 @@ class OrderManager:
                 "product_id": product_id,
                 "size": size,
                 "side": side,
-                "order_type": "market_order" if order_type == "market" else "limit_order",
+                "order_type": OrderType.MARKET if order_type == "market" else OrderType.LIMIT,
                 "reduce_only": reduce_only
             }
 
-            if payload["order_type"] == "limit":
+            if payload["order_type"] == OrderType.LIMIT:
                 if limit_price is None:
                     raise ValueError("limit_price required for limit order")
                 payload["limit_price"] = str(limit_price)
@@ -129,10 +131,11 @@ class OrderManager:
                 "product_id": product_id,
                 "size": size,
                 "side": side,
-                "order_type": "market_order",
+                "order_type": OrderType.MARKET,
                 "stop_order_type": "stop_loss_order",
                 "stop_price": str(stop_price),
-                "reduce_only": True
+                "reduce_only": True,
+                "time_in_force": "gtc"
             }
 
             res = self._request("POST", "/v2/orders", payload)
@@ -155,12 +158,8 @@ class OrderManager:
     def cancel_order(self, order_id, product_id):
 
         try:
-            payload = {
-                "id": order_id,
-                "product_id": product_id
-            }
-
-            res = self._request("DELETE", "/v2/orders", payload)
+            endpoint = f"/v2/orders?id={order_id}&product_id={product_id}"
+            res = self._request("DELETE", endpoint)
 
             if res:
                 self.send_telegram(f"⚠️ CANCELLED: {order_id}", key="cancel")
@@ -174,7 +173,7 @@ class OrderManager:
             return None
 
     # ==============================
-    # GET POSITIONS (FIXED)
+    # GET POSITIONS
     # ==============================
     def get_positions(self, product_id):
 
@@ -182,7 +181,7 @@ class OrderManager:
             res = self._request(
                 "GET",
                 "/v2/positions",
-                {"product_id": product_id}   # 🔥 REQUIRED
+                {"product_id": product_id}
             )
 
             if not res:
@@ -203,7 +202,7 @@ class OrderManager:
             positions = self.get_positions(product_id)
 
             for p in positions:
-                if float(p.get("size", 0)) != 0:
+                if abs(float(p.get("size", 0))) > 0:
                     return True
 
             return False
@@ -213,12 +212,12 @@ class OrderManager:
             return False
 
     # ==============================
-    # GET LIVE ORDERS
+    # GET LIVE ORDERS (ONLY OPEN)
     # ==============================
     def get_live_orders(self):
 
         try:
-            res = self._request("GET", "/v2/orders")
+            res = self._request("GET", "/v2/orders?state=open")
 
             if not res:
                 return []
@@ -228,3 +227,18 @@ class OrderManager:
         except Exception as e:
             print(f"Live orders error: {e}")
             return []
+
+    # ==============================
+    # CANCEL ALL ORDERS (OPTIONAL)
+    # ==============================
+    def cancel_all_orders(self, product_id):
+
+        try:
+            orders = self.get_live_orders()
+
+            for o in orders:
+                if o.get("product_id") == product_id:
+                    self.cancel_order(o.get("id"), product_id)
+
+        except Exception as e:
+            print(f"Cancel all error: {e}")

@@ -200,8 +200,8 @@ def build_indicators(df):
 
     ha = calculate_heikin_ashi(df)
 
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    ha["UPPER"] = ha["HA_high"].rolling(42).max()
+    ha["LOWER"] = ha["HA_low"].rolling(42).min()
 
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
@@ -304,7 +304,7 @@ def process_symbol(symbol, df, state):
                 "side":"long",
                 "entry":price,
                 "stop":price - STOPLOSS[symbol],
-                "TGT":price - TGT[symbol] ,
+                "TGT":price + TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
@@ -320,7 +320,7 @@ def process_symbol(symbol, df, state):
                 "side":"short",
                 "entry":price,
                 "stop":price + STOPLOSS[symbol],
-                "TGT":price + TGT[symbol] ,
+                "TGT":price - TGT[symbol] ,
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "entry_time":datetime.now()
             }
