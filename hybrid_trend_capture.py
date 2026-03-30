@@ -37,8 +37,8 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("BOT_TOKE"),
-    telegram_chat_id=os.getenv("CHAT_"),
+    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
+    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
