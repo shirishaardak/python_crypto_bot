@@ -373,22 +373,24 @@ def run_strategy():
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
 
     # EXIT
+    # EXIT
     if position_type:
 
-        price=get_last_price(symbol)
+        # ⛔ FORCE TIME EXIT FIRST (NO PRICE DEPENDENCY)
+        if ist_time() >= time(15,15):
+            exit_trade("Time Exit")
+            return
+
+        price = get_last_price(symbol)
         if price is None:
             return
 
-        if position_type=="CE" and price<ce_last.ST:
+        if position_type=="CE" and price < ce_last.ST:
             exit_trade("CE Supertrend Break")
             return
 
-        if position_type=="PE" and price<pe_last.ST:
+        if position_type=="PE" and price < pe_last.ST:
             exit_trade("PE Supertrend Break")
-            return
-
-        if ist_time()>=time(15,15):
-            exit_trade("Time Exit")
             return
 
 # ================= AUTH =================
