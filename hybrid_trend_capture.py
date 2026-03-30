@@ -68,51 +68,35 @@ def update_trailing_sl(symbol, price, pos):
 
         utils.log(f"{symbol} SL Trailed → {pos['stop']}", tg=True)
 
-# ================= HEIKIN ASHI =================
 
-def calculate_heikin_ashi(df):
-
-    ha = pd.DataFrame(index=df.index)
-
-    ha["HA_close"] = (df.open+df.high+df.low+df.close)/4
-
-    ha_open = [(df.open.iloc[0]+df.close.iloc[0])/2]
-
-    for i in range(1,len(df)):
-        ha_open.append((ha_open[i-1]+ha["HA_close"].iloc[i-1])/2)
-
-    ha["HA_open"] = ha_open
-    ha["HA_high"] = ha[["HA_open","HA_close"]].join(df.high).max(axis=1)
-    ha["HA_low"] = ha[["HA_open","HA_close"]].join(df.low).min(axis=1)
-
-    return ha
 
 # ================= INDICATORS =================
-
 def build_indicators(df):
 
-    ha = calculate_heikin_ashi(df)
+    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    ha["UPPER"] = ha["HA_high"].rolling(42).max()
-    ha["LOWER"] = ha["HA_low"].rolling(42).min()
+
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
+    trendline[0] = trend
 
-    for i in range(len(ha)):
+    for i in range(1, len(ha)):
+
         if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["UPPER"].iloc[i]
+            trend = ha["HA_low"].iloc[i]
+
         elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["LOWER"].iloc[i]
+            trend = ha["HA_high"].iloc[i]
 
         trendline[i] = trend
 
     ha["Trendline"] = trendline
 
-    adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-    ha["ADX"] = adx["ADX_14"]
-
     return ha
+
 
 # ================= EXIT =================
 
