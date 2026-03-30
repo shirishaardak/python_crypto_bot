@@ -86,10 +86,10 @@ def build_indicators(df):
     for i in range(1, len(ha)):
 
         if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["HA_low"].iloc[i]
+            trend = ha["LOWER"].iloc[i]
 
         elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["HA_high"].iloc[i]
+            trend = ha["UPPER"].iloc[i]
 
         trendline[i] = trend
 
@@ -148,7 +148,7 @@ def process_symbol(symbol, df, state):
 
     if state["position"] is None and state["last_candle"] != candle_time:
 
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
             state["position"] = {
                 "side":"long",
@@ -162,7 +162,7 @@ def process_symbol(symbol, df, state):
 
             utils.log(f"{symbol} LONG {price}", tg=True)
 
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close:
+        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
             state["position"] = {
                 "side":"short",
@@ -181,14 +181,14 @@ def process_symbol(symbol, df, state):
         pos = state["position"]
 
         # TRAILING
-        update_trailing_sl(symbol, price, pos)
+        update_trailing_sl(symbol, last.HA_close, pos)
 
         if pos["side"] == "long":
-            if price > pos["TGT"] or price < pos["stop"]:
+            if last.HA_close < last.Trendline or price < pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
         else:
-            if price < pos["TGT"] or price > pos["stop"]:
+            if last.HA_close > last.Trendline or price > pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
 # ================= MAIN =================
