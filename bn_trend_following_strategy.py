@@ -85,13 +85,9 @@ holiday_load_date=None
 def get_last_price(symbol):
     try:
         data = fyers.quotes({"symbols": symbol})
-
         if not data or "d" not in data or not data["d"]:
             return None
-
-        v = data["d"][0].get("v", {})
-        return v.get("lp")
-
+        return data["d"][0].get("v", {}).get("lp")
     except:
         return None
 
@@ -162,7 +158,6 @@ def get_current_monthly_expiry():
 
 # ================= ATM OPTION =================
 def get_atm_option(option_type):
-
     if not is_market_open():
         return None
 
@@ -171,7 +166,6 @@ def get_atm_option(option_type):
         return None
 
     strike=int(round(spot/100)*100)
-
     expiry=get_current_monthly_expiry()
     expiry_str=expiry.strftime("%y%b").upper()
 
@@ -186,21 +180,18 @@ def get_stock_historical_data(data):
             return pd.DataFrame()
 
         candles = final_data.get("candles")
-
         if not candles:
             return pd.DataFrame()
 
-        df=pd.DataFrame(candles)
-
+        df = pd.DataFrame(candles)
         if df.shape[1] < 6:
             return pd.DataFrame()
 
-        df=df.iloc[:, :6]
+        df = df.iloc[:, :6]
         df.columns=['Date','Open','High','Low','Close','Volume']
 
         df['Date']=pd.to_datetime(df['Date'],unit='s',errors='coerce')
-
-        df.dropna(subset=['Date','Open','High','Low','Close'], inplace=True)
+        df.dropna(inplace=True)
 
         if df.empty:
             return pd.DataFrame()
@@ -214,35 +205,52 @@ def get_stock_historical_data(data):
 
 # ================= TRENDLINE =================
 def calculate_trendline(df):
+    try:
+        if df is None or df.empty or len(df) < 30:
+            return pd.DataFrame()
 
-    ha=ta.ha(df["Open"],df["High"],df["Low"],df["Close"]).reset_index(drop=True)
-    data=df.copy().reset_index(drop=True)
+        ha = ta.ha(df["Open"],df["High"],df["Low"],df["Close"])
+        if ha is None or ha.empty:
+            return pd.DataFrame()
 
-    data["HA_Close"]=ha["HA_close"]
-    data["HA_Open"]=ha["HA_open"]
-    data["HA_High"]=ha["HA_high"]
-    data["HA_Low"]=ha["HA_low"]
+        data=df.copy()
+        data["HA_Close"]=ha["HA_close"]
+        data["HA_Open"]=ha["HA_open"]
+        data["HA_High"]=ha["HA_high"]
+        data["HA_Low"]=ha["HA_low"]
 
-    st = ta.supertrend(
-        high=ha["HA_high"],
-        low=ha["HA_low"],
-        close=ha["HA_close"],
-        length=21,
-        multiplier=2.5
-    )
+        st = ta.supertrend(
+            high=data["HA_High"],
+            low=data["HA_Low"],
+            close=data["HA_Close"],
+            length=21,
+            multiplier=2.5
+        )
 
-    data["ST"] = st.iloc[:,0]
-    data["ST"] = data["ST"].ffill()
+        if st is None or st.empty:
+            return pd.DataFrame()
 
-    adx=ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
-    data["ADX"]=adx["ADX_14"]
+        st_col = [c for c in st.columns if "SUPERT" in c]
+        if not st_col:
+            return pd.DataFrame()
 
-    data.index=df.index
-    return data
+        data["ST"] = st[st_col[0]].ffill()
+
+        adx = ta.adx(df["High"],df["Low"],df["Close"],length=ADX_PERIOD)
+        if adx is None or "ADX_14" not in adx.columns:
+            return pd.DataFrame()
+
+        data["ADX"] = adx["ADX_14"]
+
+        data.dropna(inplace=True)
+        return data
+
+    except Exception as e:
+        send_telegram(f"⚠ Trendline Error {e}")
+        return pd.DataFrame()
 
 # ================= EXIT =================
 def exit_trade(reason):
-
     global position_type,last_exit_time,stop_loss,trail_level
     global entry_price, entry_time, symbol
 
@@ -272,7 +280,6 @@ def exit_trade(reason):
 
 # ================= STRATEGY =================
 def run_strategy():
-
     global position_type, entry_price, entry_time
     global symbol, stop_loss, trail_level
 
@@ -302,7 +309,7 @@ def run_strategy():
         return
 
     df_index=calculate_trendline(df_index_raw)
-    if df_index.empty or len(df_index)<50:
+    if df_index.empty or len(df_index)<5:
         return
 
     index_last=df_index.iloc[-2]
@@ -310,17 +317,29 @@ def run_strategy():
     # CE
     hist_ce=hist_template.copy()
     hist_ce["symbol"]=ce_symbol
-    df_ce=calculate_trendline(get_stock_historical_data(hist_ce))
-    if df_ce.empty or len(df_ce)<50:
+
+    df_ce_raw=get_stock_historical_data(hist_ce)
+    if df_ce_raw.empty:
         return
+
+    df_ce=calculate_trendline(df_ce_raw)
+    if df_ce.empty or len(df_ce)<5:
+        return
+
     ce_last=df_ce.iloc[-2]
 
     # PE
     hist_pe=hist_template.copy()
     hist_pe["symbol"]=pe_symbol
-    df_pe=calculate_trendline(get_stock_historical_data(hist_pe))
-    if df_pe.empty or len(df_pe)<50:
+
+    df_pe_raw=get_stock_historical_data(hist_pe)
+    if df_pe_raw.empty:
         return
+
+    df_pe=calculate_trendline(df_pe_raw)
+    if df_pe.empty or len(df_pe)<5:
+        return
+
     pe_last=df_pe.iloc[-2]
 
     # ENTRY
@@ -342,6 +361,7 @@ def run_strategy():
 
         price=get_last_price(symbol)
         if price is None:
+            position_type=None
             return
 
         entry_price=price
@@ -391,7 +411,6 @@ def load_model():
 
 # ================= DAILY RESET =================
 def daily_reset():
-
     global position_type, entry_price, entry_time
     global symbol, last_exit_time
     global stop_loss, trail_level
@@ -410,9 +429,7 @@ def daily_reset():
 send_telegram("🚀 BankNifty Option Trend Algo Started")
 
 while True:
-
     try:
-
         now=ist_time()
         today=ist_today()
 
@@ -435,7 +452,6 @@ while True:
                 model_load_date=today
 
         if time(9,20)<=now<=time(15,30) and model_load_date==today:
-
             if is_market_open():
                 run_strategy()
 
