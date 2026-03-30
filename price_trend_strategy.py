@@ -6,6 +6,8 @@ from datetime import datetime
 import pandas_ta as ta
 from dotenv import load_dotenv
 from delta_rest_client import DeltaRestClient, OrderType
+import traceback
+import subprocess
 
 from utils import TradingUtils
 
@@ -27,6 +29,35 @@ DAYS = 15
 TAKE_PROFIT = {"BTCUSD": 300}
 STOP_LOSS   = {"BTCUSD": 200}
 
+
+last_git_push = time.time()
+
+def auto_git_push():
+    global last_git_push
+
+    if time.time() - last_git_push < 3600:
+        return
+
+    try:
+        subprocess.run("git add -A", shell=True)
+
+        res = subprocess.run(
+            'git diff --cached --quiet || git commit -m "auto update"',
+            shell=True
+        )
+
+        if res.returncode != 0:
+            utils.log("✅ Changes committed")
+
+        res = subprocess.run("git push origin main", shell=True)
+
+        if res.returncode == 0:
+            utils.log("✅ Git Push Done", tg=True)
+
+        last_git_push = time.time()
+
+    except Exception as e:
+        utils.log(f"Git Error: {e}")
 # ================= INIT UTILS =================
 
 utils = TradingUtils(
@@ -239,7 +270,8 @@ def run():
                     continue
 
                 process_symbol(symbol, df, price, state[symbol])
-
+                
+                auto_git_push()
             time.sleep(60)
 
         except Exception as e:
