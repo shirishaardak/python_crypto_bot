@@ -103,7 +103,7 @@ def process_symbol(symbol, df, price, state):
     adx_ok = last.ADX > ADX_THRESHOLD
 
     # ENTRY
-    if pos is None and adx_ok:
+    if pos is None:
 
         if last.HA_close > last.trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
@@ -139,12 +139,12 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
 
         if pos["side"] == "long":
-            if price <= pos["stop"] or last.HA_close <= last.trendline:
+            if last.HA_close <= last.trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         else:
-            if price >= pos["stop"] or last.HA_close >= last.trendline:
+            if last.HA_close >= last.trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
