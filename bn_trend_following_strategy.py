@@ -53,16 +53,29 @@ TRADES_FILE=f"{folder}/live_trades.csv"
 TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN=os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID=os.getenv("TEL_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TEL_CHAT_ID")
 
 def send_telegram(msg):
     try:
-        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
-            requests.post(url,json=payload,timeout=5)
-    except:
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            print("❌ Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+            return
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg
+        }
+
+        response = requests.post(url, json=payload, timeout=5)
+
+        # 🔥 DEBUG OUTPUT
+        print("Status:", response.status_code)
+        print("Response:", response.text)
+
+    except Exception as e:
+        print("❌ Telegram Error:", e)
         pass
 
 # ================= GLOBAL STATE =================
