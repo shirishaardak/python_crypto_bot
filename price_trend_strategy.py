@@ -26,11 +26,9 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "1h"
 DAYS = 15
 
-TAKE_PROFIT = {"BTCUSD": 300}
-STOP_LOSS   = {"BTCUSD": 200}
-
-
 last_git_push = time.time()
+
+# ================= AUTO GIT =================
 
 def auto_git_push():
     global last_git_push
@@ -58,6 +56,7 @@ def auto_git_push():
 
     except Exception as e:
         utils.log(f"Git Error: {e}")
+
 # ================= INIT UTILS =================
 
 utils = TradingUtils(
@@ -150,58 +149,24 @@ def calculate_trendline(df):
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, price, state):
+def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    last = ha.iloc[-2]
+    live = ha.iloc[-1]   # LIVE candle (for exit)
+    last = ha.iloc[-2]   # CLOSED candle (for entry)
     prev = ha.iloc[-3]
-    pos  = state["position"]
 
+    pos  = state["position"]
     now = datetime.now()
 
-    # ===== ENTRY =====
-    if pos is None:
-
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
-
-            order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
-
-            if order:
-                state["position"] = {
-                    "side": "long",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now
-                }
-
-                utils.log(f"🟢 {symbol} LONG ORDER @ {price}", tg=True)
-
-            return
-
-        if last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
-
-            order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
-
-            if order:
-                state["position"] = {
-                    "side": "short",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now
-                }
-
-                utils.log(f"🔴 {symbol} SHORT ORDER @ {price}", tg=True)
-
-            return
-
-    # ===== EXIT =====
+    # ================= EXIT (ALWAYS CHECK) =================
     if pos:
 
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price < last.Trendline:
+        if pos["side"] == "long" and price < live.Trendline:
 
             order = place_market_order(symbol, "sell", pos["qty"])
 
@@ -209,7 +174,7 @@ def process_symbol(symbol, df, price, state):
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        if pos["side"] == "short" and price > last.Trendline:
+        if pos["side"] == "short" and price > live.Trendline:
 
             order = place_market_order(symbol, "buy", pos["qty"])
 
@@ -234,16 +199,59 @@ def process_symbol(symbol, df, price, state):
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-
             utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
             state["position"] = None
+            state["last_exit_candle"] = df.index[-1]
+
+            return  # stop further execution
+
+    # ================= ENTRY (ONLY NEW CANDLE) =================
+    if not pos and is_new_candle:
+
+        # prevent re-entry in same candle
+        if state.get("last_exit_candle") == df.index[-1]:
+            return
+
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
+
+            order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
+
+            if order:
+                state["position"] = {
+                    "side": "long",
+                    "entry": price,
+                    "qty": DEFAULT_CONTRACTS[symbol],
+                    "entry_time": now
+                }
+
+                utils.log(f"🟢 {symbol} LONG @ {price}", tg=True)
+
+        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
+
+            order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
+
+            if order:
+                state["position"] = {
+                    "side": "short",
+                    "entry": price,
+                    "qty": DEFAULT_CONTRACTS[symbol],
+                    "entry_time": now
+                }
+
+                utils.log(f"🔴 {symbol} SHORT @ {price}", tg=True)
 
 # ================= MAIN =================
 
 def run():
 
-    state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
+    state = {
+        s: {
+            "position": None,
+            "last_candle_time": None,
+            "last_exit_candle": None
+        } for s in SYMBOLS
+    }
 
     utils.log("🚀 LIVE BOT STARTED", tg=True)
 
@@ -259,24 +267,27 @@ def run():
 
                 latest_candle_time = df.index[-1]
 
-                if state[symbol]["last_candle_time"] == latest_candle_time:
-                    continue
+                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
 
-                state[symbol]["last_candle_time"] = latest_candle_time
+                if is_new_candle:
+                    state[symbol]["last_candle_time"] = latest_candle_time
 
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol])
-                
+                process_symbol(symbol, df, price, state[symbol], is_new_candle)
+
                 auto_git_push()
-            time.sleep(60)
+
+            time.sleep(10)  # faster loop for live exit
 
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
             time.sleep(5)
+
+# ================= START =================
 
 if __name__ == "__main__":
     run()
