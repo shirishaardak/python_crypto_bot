@@ -19,11 +19,11 @@ BOT_NAME = "price_trend_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 10}
+DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1h"
+TIMEFRAME = "15m"
 DAYS = 15
 
 last_git_push = time.time()
@@ -166,7 +166,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price < live.Trendline:
+        if pos["side"] == "long" and last.HA_close < last.Trendline:
 
             order = place_market_order(symbol, "sell", pos["qty"])
 
@@ -174,7 +174,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        if pos["side"] == "short" and price > live.Trendline:
+        if pos["side"] == "short" and last.HA_close > last.Trendline:
 
             order = place_market_order(symbol, "buy", pos["qty"])
 
