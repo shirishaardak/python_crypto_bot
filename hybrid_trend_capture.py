@@ -184,12 +184,14 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
             state["position"] = {
                 "side":"long",
                 "entry":price,
-                "stop":price - STOPLOSS[symbol],
+                "stop":last_1m.Trendline,
                 "TGT":price + TGT[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "trail_step":0,
-                "entry_time":datetime.now()
+                "entry_time":datetime.now(),
+                "entry_candle":candle_time
             }
+            state["last_candle"] = candle_time
 
             utils.log(f"{symbol} LONG {price} (1m & 5m confirmed)", tg=True)
 
@@ -201,12 +203,14 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
             state["position"] = {
                 "side":"short",
                 "entry":price,
-                "stop":price + STOPLOSS[symbol],
+                "stop":last_1m.Trendline,
                 "TGT":price - TGT[symbol],
                 "qty":DEFAULT_CONTRACTS[symbol],
                 "trail_step":0,
-                "entry_time":datetime.now()
+                "entry_time":datetime.now(),
+                "entry_candle":candle_time
             }
+            state["last_candle"] = candle_time
 
             utils.log(f"{symbol} SHORT {price} (1m & 5m confirmed)", tg=True)
 
@@ -218,11 +222,12 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
         # Trail stop loss on current price
         update_trailing_sl(symbol, price, pos)
 
-        # Exit on SL breach
-        if pos["side"] == "long" and price < pos["stop"]:
-            exit_trade(symbol, price, pos, state, candle_time)
-        elif pos["side"] == "short" and price > pos["stop"]:
-            exit_trade(symbol, price, pos, state, candle_time)
+        # Exit on SL breach (but not on entry candle)
+        if candle_time != pos["entry_candle"]:
+            if pos["side"] == "long" and price < pos["stop"]:
+                exit_trade(symbol, price, pos, state, candle_time)
+            elif pos["side"] == "short" and price > pos["stop"]:
+                exit_trade(symbol, price, pos, state, candle_time)
 
 # ================= MAIN =================
 
