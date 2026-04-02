@@ -388,11 +388,11 @@ def run_strategy():
         if price is None:
             return
 
-        if position_type=="CE" and ce_last < ce_last.ST:
+        if position_type=="CE" and ce_last.HA_Close < ce_last.ST:
             exit_trade("CE Supertrend Break")
             return
 
-        if position_type=="PE" and pe_last < pe_last.ST:
+        if position_type=="PE" and pe_last.HA_Close < pe_last.ST:
             exit_trade("PE Supertrend Break")
             return
 
