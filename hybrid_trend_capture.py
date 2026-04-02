@@ -20,14 +20,15 @@ SYMBOLS = ["BTCUSD","ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 
 TGT = {"BTCUSD":200,"ETHUSD":20}
-STOPLOSS = {"BTCUSD":70,"ETHUSD":7}
+STOPLOSS = {"BTCUSD":100,"ETHUSD":5}
 
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
-TRAIL_STEP = {"BTCUSD":70,"ETHUSD":7}
+TRAIL_STEP = {"BTCUSD":50,"ETHUSD":5}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1m"
+TIMEFRAME_1M = "1m"
+TIMEFRAME_5M = "5m"
 DAYS = 3
 
 # ================= INIT UTILS =================
@@ -35,7 +36,7 @@ DAYS = 3
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME,
+    timeframe=TIMEFRAME_1M,
     days=DAYS,
     telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -86,10 +87,10 @@ def build_indicators(df):
     for i in range(1, len(ha)):
 
         if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["LOWER"].iloc[i]
+            trend = ha["HA_low"].iloc[i]
 
         elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["UPPER"].iloc[i]
+            trend = ha["HA_high"].iloc[i]
 
         trendline[i] = trend
 
@@ -97,6 +98,37 @@ def build_indicators(df):
 
     return ha
 
+
+# ================= MULTI-TIMEFRAME DATA FETCH =================
+
+def fetch_multi_timeframe_data(symbol):
+    """Fetch and calculate indicators for both 1m and 5m timeframes"""
+    
+    ha_1m = None
+    ha_5m = None
+    
+    try:
+        # Fetch 1m data
+        df_1m = utils.fetch_candles(symbol)
+        if df_1m is not None and len(df_1m) >= 50:
+            ha_1m = build_indicators(df_1m)
+        
+        # Fetch 5m data
+        original_tf = utils.timeframe
+        utils.timeframe = TIMEFRAME_5M
+        
+        df_5m = utils.fetch_candles(symbol)
+        if df_5m is not None and len(df_5m) >= 50:
+            ha_5m = build_indicators(df_5m)
+        
+        # Restore original timeframe
+        utils.timeframe = original_tf
+        
+    except Exception as e:
+        utils.log(f"Error fetching multi-timeframe data for {symbol}: {e}")
+        return None, None
+    
+    return ha_1m, ha_5m
 
 # ================= EXIT =================
 
@@ -127,28 +159,28 @@ def exit_trade(symbol, price, pos, state, candle_time):
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, state):
+def process_symbol(symbol, ha_1m, ha_5m, state):
 
-    if df.empty:
+    if ha_1m is None or ha_5m is None:
         return
 
-    ha = build_indicators(df)
-
-    if len(ha) < 50:
-        return
-
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
+    last_1m = ha_1m.iloc[-2]
+    prev_1m = ha_1m.iloc[-3]
+    last_5m = ha_5m.iloc[-2]
 
     price = utils.fetch_price(symbol)
     if price is None:
         return
 
-    candle_time = ha.index[-2]
+    candle_time = ha_1m.index[-2]
 
+    # ENTRY - Requires alignment between 1m and 5m trendlines
     if state["position"] is None and state["last_candle"] != candle_time:
 
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
+        # LONG: 1m crossover + 5m confirmation
+        if (last_1m.HA_close > last_1m.Trendline and 
+            prev_1m.HA_close < prev_1m.Trendline and
+            last_5m.HA_close > last_5m.Trendline):
 
             state["position"] = {
                 "side":"long",
@@ -160,9 +192,12 @@ def process_symbol(symbol, df, state):
                 "entry_time":datetime.now()
             }
 
-            utils.log(f"{symbol} LONG {price}", tg=True)
+            utils.log(f"{symbol} LONG {price} (1m & 5m confirmed)", tg=True)
 
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
+        # SHORT: 1m crossover + 5m confirmation
+        elif (last_1m.HA_close < last_1m.Trendline and 
+              prev_1m.HA_close > prev_1m.Trendline and
+              last_5m.HA_close < last_5m.Trendline):
 
             state["position"] = {
                 "side":"short",
@@ -174,21 +209,22 @@ def process_symbol(symbol, df, state):
                 "entry_time":datetime.now()
             }
 
-            utils.log(f"{symbol} SHORT {price}", tg=True)
+            utils.log(f"{symbol} SHORT {price} (1m & 5m confirmed)", tg=True)
 
+    # EXIT - Only based on 1m trendline (faster timeframe)
     if state["position"]:
 
         pos = state["position"]
 
         # TRAILING
-        update_trailing_sl(symbol, last.HA_close, pos)
+        update_trailing_sl(symbol, last_1m.HA_close, pos)
 
         if pos["side"] == "long":
-            if last.HA_close < last.Trendline or price < pos["stop"]:
+            if price < pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
         else:
-            if last.HA_close > last.Trendline or price > pos["stop"]:
+            if price > pos["stop"]:
                 exit_trade(symbol, price, pos, state, candle_time)
 
 # ================= MAIN =================
@@ -206,12 +242,12 @@ def run():
         try:
             for symbol in SYMBOLS:
 
-                df = utils.fetch_candles(symbol)
+                ha_1m, ha_5m = fetch_multi_timeframe_data(symbol)
 
-                if len(df) < 50:
+                if ha_1m is None or ha_5m is None:
                     continue
 
-                process_symbol(symbol, df, state[symbol])
+                process_symbol(symbol, ha_1m, ha_5m, state[symbol])
 
             time.sleep(5)
 
