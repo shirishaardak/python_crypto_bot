@@ -223,8 +223,8 @@ def calculate_trendline(df):
             high=data["HA_High"],
             low=data["HA_Low"],
             close=data["HA_Close"],
-            length=21,
-            multiplier=2.5
+            length=10,
+            multiplier=3
         )
 
         if st is None or st.empty:
@@ -327,6 +327,7 @@ def run_strategy():
         return
 
     ce_last=df_ce.iloc[-2]
+    ce_perv=df_ce.iloc[-3]
 
     # PE
     hist_pe=hist_template.copy()
@@ -341,6 +342,7 @@ def run_strategy():
         return
 
     pe_last=df_pe.iloc[-2]
+    pe_perv=df_pe.iloc[-3]
 
     # ENTRY
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
@@ -348,11 +350,12 @@ def run_strategy():
         if index_last.ADX < ADX_THRESHOLD:
             return
 
-        if index_last.HA_Close > index_last.ST and ce_last.HA_Close > ce_last.ST:
+        if index_last.HA_Close > index_last.ST and ce_last.HA_Close > ce_last.ST and ce_last.HA_Close > ce_perv.HA_Close and ce_last.HA_Close > ce_perv.HA_Open:
             symbol=ce_symbol
             position_type="CE"
 
-        elif index_last.HA_Close < index_last.ST and pe_last.HA_Close > pe_last.ST:
+        elif index_last.HA_Close < index_last.ST and pe_last.HA_Close > pe_last.ST and pe_last.HA_Close > pe_perv.HA_Close and pe_last.HA_Close > pe_perv.HA_Open:
+            symbol=ce_symbol
             symbol=pe_symbol
             position_type="PE"
 
@@ -385,11 +388,11 @@ def run_strategy():
         if price is None:
             return
 
-        if position_type=="CE" and price < ce_last.ST:
+        if position_type=="CE" and ce_last < ce_last.ST:
             exit_trade("CE Supertrend Break")
             return
 
-        if position_type=="PE" and price < pe_last.ST:
+        if position_type=="PE" and pe_last < pe_last.ST:
             exit_trade("PE Supertrend Break")
             return
 
