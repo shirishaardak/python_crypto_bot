@@ -45,29 +45,23 @@ utils = TradingUtils(
 
 # ================= TRAILING SL =================
 
-def update_trailing_sl(symbol, price, pos):
-
+def update_trailing_sl(symbol, current_price, pos):
+    """Trail stop loss based on actual price movement"""
+    
     step_size = TRAIL_STEP[symbol]
 
     if pos["side"] == "long":
-        move = price - pos["entry"]
+        move = current_price - pos["entry"]
+        new_stop = pos["entry"] + (int(move // step_size) * step_size)
+        if new_stop > pos["stop"]:
+            pos["stop"] = new_stop
+            utils.log(f"{symbol} LONG SL Trailed → {pos['stop']}", tg=True)
     else:
-        move = pos["entry"] - price
-
-    steps_crossed = int(move // step_size)
-
-    if steps_crossed > pos["trail_step"]:
-
-        diff_steps = steps_crossed - pos["trail_step"]
-
-        if pos["side"] == "long":
-            pos["stop"] += diff_steps * step_size
-        else:
-            pos["stop"] -= diff_steps * step_size
-
-        pos["trail_step"] = steps_crossed
-
-        utils.log(f"{symbol} SL Trailed → {pos['stop']}", tg=True)
+        move = pos["entry"] - current_price
+        new_stop = pos["entry"] - (int(move // step_size) * step_size)
+        if new_stop < pos["stop"]:
+            pos["stop"] = new_stop
+            utils.log(f"{symbol} SHORT SL Trailed → {pos['stop']}", tg=True)
 
 
 
@@ -108,24 +102,29 @@ def fetch_multi_timeframe_data(symbol):
     ha_5m = None
     
     try:
-        # Fetch 1m data
+        # Fetch 1m data (already set in utils)
         df_1m = utils.fetch_candles(symbol)
         if df_1m is not None and len(df_1m) >= 50:
             ha_1m = build_indicators(df_1m)
         
-        # Fetch 5m data
+        # Fetch 5m data - temporarily override
         original_tf = utils.timeframe
         utils.timeframe = TIMEFRAME_5M
+        utils.TIMEFRAME = TIMEFRAME_5M
         
         df_5m = utils.fetch_candles(symbol)
         if df_5m is not None and len(df_5m) >= 50:
             ha_5m = build_indicators(df_5m)
         
-        # Restore original timeframe
+        # Restore original timeframe immediately
         utils.timeframe = original_tf
+        utils.TIMEFRAME = original_tf
         
     except Exception as e:
         utils.log(f"Error fetching multi-timeframe data for {symbol}: {e}")
+        # Always restore timeframe even on error
+        utils.timeframe = TIMEFRAME_1M
+        utils.TIMEFRAME = TIMEFRAME_1M
         return None, None
     
     return ha_1m, ha_5m
@@ -142,14 +141,14 @@ def exit_trade(symbol, price, pos, state, candle_time):
     net = pnl - utils.commission(price,pos["qty"],symbol)
 
     utils.save_trade({
-        "entry_time": pos["entry_time"],
-        "exit_time": datetime.now(),
         "symbol": symbol,
         "side": pos["side"],
+        "entry_time": pos["entry_time"],
+        "exit_time": datetime.now(),
         "entry_price": pos["entry"],
         "exit_price": price,
         "qty": pos["qty"],
-        "net_pnl": net
+        "net_pnl": round(net, 6)
     })
 
     utils.log(f"{symbol} EXIT {net}", tg=True)
@@ -211,21 +210,19 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
 
             utils.log(f"{symbol} SHORT {price} (1m & 5m confirmed)", tg=True)
 
-    # EXIT - Only based on 1m trendline (faster timeframe)
+    # EXIT - Check against actual price (fastest response)
     if state["position"]:
 
         pos = state["position"]
 
-        # TRAILING
-        update_trailing_sl(symbol, last_1m.HA_close, pos)
+        # Trail stop loss on current price
+        update_trailing_sl(symbol, price, pos)
 
-        if pos["side"] == "long":
-            if price < pos["stop"]:
-                exit_trade(symbol, price, pos, state, candle_time)
-
-        else:
-            if price > pos["stop"]:
-                exit_trade(symbol, price, pos, state, candle_time)
+        # Exit on SL breach
+        if pos["side"] == "long" and price < pos["stop"]:
+            exit_trade(symbol, price, pos, state, candle_time)
+        elif pos["side"] == "short" and price > pos["stop"]:
+            exit_trade(symbol, price, pos, state, candle_time)
 
 # ================= MAIN =================
 

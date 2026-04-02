@@ -107,6 +107,7 @@ def fetch_multi_timeframe_data(symbol):
         # Store original timeframe
         original_tf = utils.timeframe
         utils.timeframe = TIMEFRAME_1H
+        utils.TIMEFRAME = TIMEFRAME_1H
         
         df_1h = utils.fetch_candles(symbol)
         if df_1h is not None and len(df_1h) >= 100:
@@ -114,6 +115,7 @@ def fetch_multi_timeframe_data(symbol):
         
         # Restore original timeframe
         utils.timeframe = original_tf
+        utils.TIMEFRAME = original_tf
         
     except Exception as e:
         utils.log(f"Error fetching multi-timeframe data for {symbol}: {e}")
@@ -131,7 +133,6 @@ def process_symbol(symbol, ha_15m, ha_1h, price, state):
     last_1h = ha_1h.iloc[-2]
 
     pos = state["position"]
-    now = datetime.now()
 
     adx_ok_15m = last_15m.ADX > ADX_THRESHOLD
     adx_ok_1h = last_1h.ADX > ADX_THRESHOLD
@@ -151,7 +152,7 @@ def process_symbol(symbol, ha_15m, ha_1h, price, state):
                 "stop": last_15m.trendline - STOP_LOSS[symbol],
                 "tp": price + TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now
+                "entry_time": datetime.now()
             }
 
             utils.log(f"🟢 {symbol} LONG ENTRY @ {price} (1h & 15m confirmed)", tg=True)
@@ -169,7 +170,7 @@ def process_symbol(symbol, ha_15m, ha_1h, price, state):
                 "stop": last_15m.trendline + STOP_LOSS[symbol],
                 "tp": price - TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now
+                "entry_time": datetime.now()
             }
 
             utils.log(f"🔴 {symbol} SHORT ENTRY @ {price} (1h & 15m confirmed)", tg=True)
@@ -178,19 +179,18 @@ def process_symbol(symbol, ha_15m, ha_1h, price, state):
     # EXIT - Only based on 15m trendline
     if pos:
 
-        exit_trade = False
+        exit_now = False
+        pnl = 0
 
-        if pos["side"] == "long":
-            if last_15m.HA_close <= last_15m.trendline:
-                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+        if pos["side"] == "long" and last_15m.HA_close <= last_15m.trendline:
+            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_now = True
 
-        else:
-            if last_15m.HA_close >= last_15m.trendline:
-                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+        elif pos["side"] == "short" and last_15m.HA_close >= last_15m.trendline:
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_now = True
 
-        if exit_trade:
+        if exit_now:
 
             fee = utils.commission(price, pos["qty"], symbol)
             net = pnl - fee
@@ -203,7 +203,7 @@ def process_symbol(symbol, ha_15m, ha_1h, price, state):
                 "qty": pos["qty"],
                 "net_pnl": round(net, 6),
                 "entry_time": pos["entry_time"],
-                "exit_time": now
+                "exit_time": datetime.now()
             })
 
             emoji = "🟢" if net > 0 else "🔴"

@@ -17,6 +17,7 @@ class TradingUtils:
         self.CONTRACT_SIZE = contract_size
         self.TAKER_FEE = taker_fee
         self.TIMEFRAME = timeframe
+        self.timeframe = timeframe  # lowercase alias for convenience
         self.DAYS = days
         self.BOT_NAME = bot_name
 
