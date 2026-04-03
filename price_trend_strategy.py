@@ -153,19 +153,20 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    live = ha.iloc[-1]   # LIVE candle (for fast exit)
-    last = ha.iloc[-2]   # CLOSED candle (for entry)
+    live = ha.iloc[-1]
+    last = ha.iloc[-2]
     prev = ha.iloc[-3]
 
-    pos  = state["position"]
+    pos = state["position"]
     now = datetime.now()
 
-    # ================= EXIT (LIVE + SMART RISK MANAGEMENT) =================
+    # ================= EXIT =================
     if pos:
 
         EMERGENCY_SL_POINTS = 400
         TRAIL_TRIGGER = 500
         TRAIL_DISTANCE = 250
+        BUFFER = 0.001
 
         exit_trade = False
         pnl = 0
@@ -173,18 +174,16 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         entry_price = pos["entry"]
         qty = pos["qty"]
 
-        # Initialize best price tracking
         if "best_price" not in pos:
             pos["best_price"] = entry_price
 
-        # ================= UPDATE BEST PRICE =================
+        # Update best price
         if pos["side"] == "long":
             pos["best_price"] = max(pos["best_price"], price)
-
-        elif pos["side"] == "short":
+        else:
             pos["best_price"] = min(pos["best_price"], price)
 
-        # ================= EMERGENCY STOP LOSS =================
+        # Emergency SL
         if pos["side"] == "long" and price <= entry_price - EMERGENCY_SL_POINTS:
             reason = "EMERGENCY SL"
             order = place_market_order(symbol, "sell", qty)
@@ -195,7 +194,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             order = place_market_order(symbol, "buy", qty)
             exit_trade = True
 
-        # ================= TRAILING STOP =================
+        # Trailing SL
         if not exit_trade:
 
             if pos["side"] == "long":
@@ -209,7 +208,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                         order = place_market_order(symbol, "sell", qty)
                         exit_trade = True
 
-            elif pos["side"] == "short":
+            else:
                 profit_move = entry_price - pos["best_price"]
 
                 if profit_move >= TRAIL_TRIGGER:
@@ -220,20 +219,20 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                         order = place_market_order(symbol, "buy", qty)
                         exit_trade = True
 
-        # ================= TRENDLINE EXIT (FAST) =================
+        # Trend exit
         if not exit_trade:
 
-            if pos["side"] == "long" and last.HA_close < last.Trendline:
+            if pos["side"] == "long" and live.HA_close < live.Trendline * (1 - BUFFER):
                 reason = "TREND EXIT"
                 order = place_market_order(symbol, "sell", qty)
                 exit_trade = True
 
-            elif pos["side"] == "short" and last.HA_close > last.Trendline:
+            elif pos["side"] == "short" and live.HA_close > live.Trendline * (1 + BUFFER):
                 reason = "TREND EXIT"
                 order = place_market_order(symbol, "buy", qty)
                 exit_trade = True
 
-        # ================= FINAL EXIT PROCESS =================
+        # Final exit handling
         if exit_trade and order:
 
             if pos["side"] == "long":
@@ -262,16 +261,19 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 tg=True
             )
 
+            # 🔥 FIX HERE
             state["position"] = None
-            state["last_exit_candle"] = df.index[-2]
+            state["last_exit_candle"] = df.index[-1]  # store LIVE candle
 
-            return  # stop further execution
+            return
 
-    # ================= ENTRY (UNCHANGED) =================
+    # ================= ENTRY =================
     if not pos and is_new_candle:
 
-        if state.get("last_exit_candle") == df.index[-2]:
-            return
+        # 🔥 FIX HERE
+        if state.get("last_exit_candle") is not None:
+            if df.index[-2] <= state["last_exit_candle"]:
+                return
 
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
@@ -341,7 +343,7 @@ def run():
 
                 auto_git_push()
 
-            time.sleep(3)  # faster loop for live exit
+            time.sleep(3)
 
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
