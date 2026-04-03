@@ -153,65 +153,124 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-       # LIVE candle (for exit)
+    live = ha.iloc[-1]   # LIVE candle (for fast exit)
     last = ha.iloc[-2]   # CLOSED candle (for entry)
     prev = ha.iloc[-3]
 
     pos  = state["position"]
     now = datetime.now()
 
-    # ================= EXIT (ALWAYS CHECK ON EVERY TICKER) =================
+    # ================= EXIT (LIVE + SMART RISK MANAGEMENT) =================
     if pos:
+
+        EMERGENCY_SL_POINTS = 400
+        TRAIL_TRIGGER = 500
+        TRAIL_DISTANCE = 250
 
         exit_trade = False
         pnl = 0
 
-        # Check against BOTH live (current) and last (closed) trendlines for fastest exit
-        if pos["side"] == "long" and last.HA_close < last.Trendline:
+        entry_price = pos["entry"]
+        qty = pos["qty"]
 
-            order = place_market_order(symbol, "sell", pos["qty"])
+        # Initialize best price tracking
+        if "best_price" not in pos:
+            pos["best_price"] = entry_price
 
-            if order:
-                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+        # ================= UPDATE BEST PRICE =================
+        if pos["side"] == "long":
+            pos["best_price"] = max(pos["best_price"], price)
+
+        elif pos["side"] == "short":
+            pos["best_price"] = min(pos["best_price"], price)
+
+        # ================= EMERGENCY STOP LOSS =================
+        if pos["side"] == "long" and price <= entry_price - EMERGENCY_SL_POINTS:
+            reason = "EMERGENCY SL"
+            order = place_market_order(symbol, "sell", qty)
+            exit_trade = True
+
+        elif pos["side"] == "short" and price >= entry_price + EMERGENCY_SL_POINTS:
+            reason = "EMERGENCY SL"
+            order = place_market_order(symbol, "buy", qty)
+            exit_trade = True
+
+        # ================= TRAILING STOP =================
+        if not exit_trade:
+
+            if pos["side"] == "long":
+                profit_move = pos["best_price"] - entry_price
+
+                if profit_move >= TRAIL_TRIGGER:
+                    trail_sl = pos["best_price"] - TRAIL_DISTANCE
+
+                    if price <= trail_sl:
+                        reason = "TRAIL SL"
+                        order = place_market_order(symbol, "sell", qty)
+                        exit_trade = True
+
+            elif pos["side"] == "short":
+                profit_move = entry_price - pos["best_price"]
+
+                if profit_move >= TRAIL_TRIGGER:
+                    trail_sl = pos["best_price"] + TRAIL_DISTANCE
+
+                    if price >= trail_sl:
+                        reason = "TRAIL SL"
+                        order = place_market_order(symbol, "buy", qty)
+                        exit_trade = True
+
+        # ================= TRENDLINE EXIT (FAST) =================
+        if not exit_trade:
+
+            if pos["side"] == "long" and last.HA_close < last.Trendline:
+                reason = "TREND EXIT"
+                order = place_market_order(symbol, "sell", qty)
                 exit_trade = True
 
-        if pos["side"] == "short" and last.HA_close > last.Trendline:
-
-            order = place_market_order(symbol, "buy", pos["qty"])
-
-            if order:
-                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            elif pos["side"] == "short" and last.HA_close > last.Trendline:
+                reason = "TREND EXIT"
+                order = place_market_order(symbol, "buy", qty)
                 exit_trade = True
 
-        if exit_trade:
+        # ================= FINAL EXIT PROCESS =================
+        if exit_trade and order:
 
-            fee = utils.commission(price, pos["qty"], symbol)
+            if pos["side"] == "long":
+                pnl = (price - entry_price) * CONTRACT_SIZE[symbol] * qty
+            else:
+                pnl = (entry_price - price) * CONTRACT_SIZE[symbol] * qty
+
+            fee = utils.commission(price, qty, symbol)
             net = pnl - fee
 
             utils.save_trade({
                 "symbol": symbol,
                 "side": pos["side"],
-                "entry_price": pos["entry"],
+                "entry_price": entry_price,
                 "exit_price": price,
-                "qty": pos["qty"],
+                "qty": qty,
                 "net_pnl": round(net, 6),
                 "entry_time": pos["entry_time"],
                 "exit_time": now
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+
+            utils.log(
+                f"{emoji} {symbol} EXIT ({reason}) @ {price} | PNL: {round(net,6)}",
+                tg=True
+            )
 
             state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
+            state["last_exit_candle"] = df.index[-2]
 
             return  # stop further execution
 
-    # ================= ENTRY (ONLY NEW CANDLE) =================
+    # ================= ENTRY (UNCHANGED) =================
     if not pos and is_new_candle:
 
-        # prevent re-entry in same candle
-        if state.get("last_exit_candle") == df.index[-1]:
+        if state.get("last_exit_candle") == df.index[-2]:
             return
 
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
