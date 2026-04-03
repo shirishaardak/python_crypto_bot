@@ -160,13 +160,14 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     pos  = state["position"]
     now = datetime.now()
 
-    # ================= EXIT (ALWAYS CHECK) =================
+    # ================= EXIT (ALWAYS CHECK ON EVERY TICKER) =================
     if pos:
 
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and (last.HA_close < last.Trendline or price < last.Trendline - 50):
+        # Check against BOTH live (current) and last (closed) trendlines for fastest exit
+        if pos["side"] == "long" and (last.HA_close < last.Trendline or price < live.Trendline - 150):
 
             order = place_market_order(symbol, "sell", pos["qty"])
 
@@ -174,7 +175,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        if pos["side"] == "short" and (last.HA_close > last.Trendline or price > last.Trendline + 50):
+        if pos["side"] == "short" and( last.HA_close > last.Trendline or price < live.Trendline + 150):
 
             order = place_market_order(symbol, "buy", pos["qty"])
 
