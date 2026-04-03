@@ -28,7 +28,7 @@ TRAIL_STEP = {"BTCUSD":50,"ETHUSD":5}
 TAKER_FEE = 0.0005
 
 TIMEFRAME_1M = "1m"
-TIMEFRAME_5M = "5m"
+TIMEFRAME_5M = "15m"
 DAYS = 3
 
 # ================= INIT UTILS =================
@@ -224,9 +224,9 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
 
         # Exit on SL breach (but not on entry candle)
         if candle_time != pos["entry_candle"]:
-            if pos["side"] == "long" and price < pos["stop"]:
+            if pos["side"] == "long" and last_1m.HA_close < last_1m.Trendline:
                 exit_trade(symbol, price, pos, state, candle_time)
-            elif pos["side"] == "short" and price > pos["stop"]:
+            elif pos["side"] == "short" and last_1m.HA_close > last_1m.Trendline:
                 exit_trade(symbol, price, pos, state, candle_time)
 
 # ================= MAIN =================
