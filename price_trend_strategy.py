@@ -153,7 +153,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    live = ha.iloc[-1]   # LIVE candle (for exit)
+       # LIVE candle (for exit)
     last = ha.iloc[-2]   # CLOSED candle (for entry)
     prev = ha.iloc[-3]
 
@@ -167,7 +167,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         pnl = 0
 
         # Check against BOTH live (current) and last (closed) trendlines for fastest exit
-        if pos["side"] == "long" and (last.HA_close < last.Trendline or price < live.Trendline - 150):
+        if pos["side"] == "long" and (last.HA_close < last.Trendline or price < last.Trendline - 150):
 
             order = place_market_order(symbol, "sell", pos["qty"])
 
@@ -175,7 +175,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        if pos["side"] == "short" and( last.HA_close > last.Trendline or price < live.Trendline + 150):
+        if pos["side"] == "short" and( last.HA_close > last.Trendline or price < last.Trendline + 150):
 
             order = place_market_order(symbol, "buy", pos["qty"])
 
@@ -282,7 +282,7 @@ def run():
 
                 auto_git_push()
 
-            time.sleep(10)  # faster loop for live exit
+            time.sleep(3)  # faster loop for live exit
 
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
