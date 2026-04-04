@@ -21,10 +21,10 @@ SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
-STOPLOSS = {"BTCUSD": 400}
+STOPLOSS = {"BTCUSD": 100}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
+TIMEFRAME = "1h"
 DAYS = 15
 
 last_git_push = time.time()
@@ -159,25 +159,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     pos  = state["position"]
     now = datetime.now()
-
-    # ================= TRAILING SL =================
-    if pos:
-        move = price - pos["entry"] if pos["side"] == "long" else pos["entry"] - price
-
-        steps = int(move // 200)
-
-        if steps > 0:
-            if pos["side"] == "long":
-                new_sl = pos["entry"] - STOPLOSS[symbol] + (steps * 200)
-                if new_sl > pos["sl"]:
-                    pos["sl"] = new_sl
-                    utils.log(f"🔁 {symbol} TRAIL SL → {pos['sl']}")
-            else:
-                new_sl = pos["entry"] + STOPLOSS[symbol] - (steps * 200)
-                if new_sl < pos["sl"]:
-                    pos["sl"] = new_sl
-                    utils.log(f"🔁 {symbol} TRAIL SL → {pos['sl']}")
-
+    
     # ================= EXIT =================
     if pos:
 
@@ -243,10 +225,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": price - STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": last.Trendline - STOPLOSS[symbol]   # ✅ initial SL
                 }
 
-                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
+                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {last.Trendline - STOPLOSS[symbol]}", tg=True)
 
         # SHORT ENTRY
         elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
@@ -259,10 +241,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": price + STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": last.Trendline + STOPLOSS[symbol]   # ✅ initial SL
                 }
 
-                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
+                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {last.Trendline + STOPLOSS[symbol]}", tg=True)
 
 # ================= MAIN =================
 
