@@ -21,6 +21,7 @@ SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
+STOPLOSS = {"BTCUSD": 400}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "15m"
@@ -153,128 +154,85 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    live = ha.iloc[-1]
-    last = ha.iloc[-2]
+    last = ha.iloc[-2]   # CLOSED candle (for entry)
     prev = ha.iloc[-3]
 
-    pos = state["position"]
+    pos  = state["position"]
     now = datetime.now()
+
+    # ================= TRAILING SL =================
+    if pos:
+        move = price - pos["entry"] if pos["side"] == "long" else pos["entry"] - price
+
+        steps = int(move // 200)
+
+        if steps > 0:
+            if pos["side"] == "long":
+                new_sl = pos["entry"] - STOPLOSS[symbol] + (steps * 200)
+                if new_sl > pos["sl"]:
+                    pos["sl"] = new_sl
+                    utils.log(f"🔁 {symbol} TRAIL SL → {pos['sl']}")
+            else:
+                new_sl = pos["entry"] + STOPLOSS[symbol] - (steps * 200)
+                if new_sl < pos["sl"]:
+                    pos["sl"] = new_sl
+                    utils.log(f"🔁 {symbol} TRAIL SL → {pos['sl']}")
 
     # ================= EXIT =================
     if pos:
 
-        EMERGENCY_SL_POINTS = 400
-        TRAIL_TRIGGER = 500
-        TRAIL_DISTANCE = 250
-        BUFFER = 0.001
-
         exit_trade = False
         pnl = 0
 
-        entry_price = pos["entry"]
-        qty = pos["qty"]
+        # LONG EXIT
+        if pos["side"] == "long" and (price <= pos["sl"] or last.HA_close < last.Trendline):
 
-        if "best_price" not in pos:
-            pos["best_price"] = entry_price
+            order = place_market_order(symbol, "sell", pos["qty"])
 
-        # Update best price
-        if pos["side"] == "long":
-            pos["best_price"] = max(pos["best_price"], price)
-        else:
-            pos["best_price"] = min(pos["best_price"], price)
-
-        # Emergency SL
-        if pos["side"] == "long" and price <= entry_price - EMERGENCY_SL_POINTS:
-            reason = "EMERGENCY SL"
-            order = place_market_order(symbol, "sell", qty)
-            exit_trade = True
-
-        elif pos["side"] == "short" and price >= entry_price + EMERGENCY_SL_POINTS:
-            reason = "EMERGENCY SL"
-            order = place_market_order(symbol, "buy", qty)
-            exit_trade = True
-
-        # Trailing SL
-        if not exit_trade:
-
-            if pos["side"] == "long":
-                profit_move = pos["best_price"] - entry_price
-
-                if profit_move >= TRAIL_TRIGGER:
-                    trail_sl = pos["best_price"] - TRAIL_DISTANCE
-
-                    if price <= trail_sl:
-                        reason = "TRAIL SL"
-                        order = place_market_order(symbol, "sell", qty)
-                        exit_trade = True
-
-            else:
-                profit_move = entry_price - pos["best_price"]
-
-                if profit_move >= TRAIL_TRIGGER:
-                    trail_sl = pos["best_price"] + TRAIL_DISTANCE
-
-                    if price >= trail_sl:
-                        reason = "TRAIL SL"
-                        order = place_market_order(symbol, "buy", qty)
-                        exit_trade = True
-
-        # Trend exit
-        if not exit_trade:
-
-            if pos["side"] == "long" and live.HA_close < live.Trendline * (1 - BUFFER):
-                reason = "TREND EXIT"
-                order = place_market_order(symbol, "sell", qty)
+            if order:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-            elif pos["side"] == "short" and live.HA_close > live.Trendline * (1 + BUFFER):
-                reason = "TREND EXIT"
-                order = place_market_order(symbol, "buy", qty)
+        # SHORT EXIT
+        if pos["side"] == "short" and (price >= pos["sl"] or last.HA_close > last.Trendline):
+
+            order = place_market_order(symbol, "buy", pos["qty"])
+
+            if order:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        # Final exit handling
-        if exit_trade and order:
+        if exit_trade:
 
-            if pos["side"] == "long":
-                pnl = (price - entry_price) * CONTRACT_SIZE[symbol] * qty
-            else:
-                pnl = (entry_price - price) * CONTRACT_SIZE[symbol] * qty
-
-            fee = utils.commission(price, qty, symbol)
+            fee = utils.commission(price, pos["qty"], symbol)
             net = pnl - fee
 
             utils.save_trade({
                 "symbol": symbol,
                 "side": pos["side"],
-                "entry_price": entry_price,
+                "entry_price": pos["entry"],
                 "exit_price": price,
-                "qty": qty,
+                "qty": pos["qty"],
                 "net_pnl": round(net, 6),
                 "entry_time": pos["entry_time"],
                 "exit_time": now
             })
 
             emoji = "🟢" if net > 0 else "🔴"
+            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
-            utils.log(
-                f"{emoji} {symbol} EXIT ({reason}) @ {price} | PNL: {round(net,6)}",
-                tg=True
-            )
-
-            # 🔥 FIX HERE
             state["position"] = None
-            state["last_exit_candle"] = df.index[-1]  # store LIVE candle
+            state["last_exit_candle"] = df.index[-2]
 
             return
 
     # ================= ENTRY =================
     if not pos and is_new_candle:
 
-        # 🔥 FIX HERE
-        if state.get("last_exit_candle") is not None:
-            if df.index[-2] <= state["last_exit_candle"]:
-                return
+        if state.get("last_exit_candle") == df.index[-1]:
+            return
 
+        # LONG ENTRY
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
             order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
@@ -284,11 +242,13 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "side": "long",
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now
+                    "entry_time": now,
+                    "sl": price - STOPLOSS[symbol]   # ✅ initial SL
                 }
 
-                utils.log(f"🟢 {symbol} LONG @ {price}", tg=True)
+                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
 
+        # SHORT ENTRY
         elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
             order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
@@ -298,10 +258,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "side": "short",
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now
+                    "entry_time": now,
+                    "sl": price + STOPLOSS[symbol]   # ✅ initial SL
                 }
 
-                utils.log(f"🔴 {symbol} SHORT @ {price}", tg=True)
+                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
 
 # ================= MAIN =================
 
@@ -343,7 +304,7 @@ def run():
 
                 auto_git_push()
 
-            time.sleep(3)
+            time.sleep(3)  # faster loop for live exit
 
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
