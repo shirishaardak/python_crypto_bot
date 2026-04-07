@@ -21,15 +21,19 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME_1H = "1h"
 TIMEFRAME_15M = "15m"
 DAYS = 5
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-STOP_LOSS   = {"BTCUSD": 100, "ETHUSD": 10}
 
-ADX_LENGTH = 9
-ADX_THRESHOLD = 25
+# 🔥 TSL CONFIG
+TSL_CONFIG = {
+    "BTCUSD": {"step": 200, "sl": 400},
+    "ETHUSD": {"step": 10,  "sl": 20}
+}
+
+ATR_LENGTH = 14
+ATR_MA_LENGTH = 20
 
 # ================= INIT UTILS =================
 
@@ -43,31 +47,18 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= OPTIONAL SAVE =================
+# ================= INDICATORS =================
 
-def save_processed_data(df, ha, symbol):
-    path = os.path.join(utils.SAVE_DIR, f"{symbol}_processed.csv")
-
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": ha["HA_open"],
-        "HA_high": ha["HA_high"],
-        "HA_low": ha["HA_low"],
-        "HA_close": ha["HA_close"],
-        "trendline": ha["trendline"],
-    })
-
-    out.to_csv(path, index=False)
-
-# ================= TRENDLINE =================
-
-def calculate_trendline(df):
+def calculate_indicators(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    adx = ta.adx(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=ADX_LENGTH)
-    ha["ADX"] = adx[f"ADX_{ADX_LENGTH}"]
+    # ATR
+    atr = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+    ha["ATR"] = atr
+    ha["ATR_MA"] = ha["ATR"].rolling(ATR_MA_LENGTH).mean()
 
+    # Trendline
     ha["UPPER"] = ha["HA_high"].rolling(21).max()
     ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
@@ -89,104 +80,117 @@ def calculate_trendline(df):
 
     return ha
 
-# ================= MULTI-TIMEFRAME DATA FETCH =================
-
-def fetch_multi_timeframe_data(symbol):
-    """Fetch and calculate trendlines for both 1h and 15m timeframes"""
-    
-    ha_15m = None
-    ha_1h = None
-    
-    try:
-        # Fetch 15m data
-        df_15m = utils.fetch_candles(symbol)
-        if df_15m is not None and len(df_15m) >= 100:
-            ha_15m = calculate_trendline(df_15m)
-        
-        # Fetch 1h data (using utils with 1h timeframe temporarily)
-        # Store original timeframe
-        original_tf = utils.timeframe
-        utils.timeframe = TIMEFRAME_1H
-        utils.TIMEFRAME = TIMEFRAME_1H
-        
-        df_1h = utils.fetch_candles(symbol)
-        if df_1h is not None and len(df_1h) >= 100:
-            ha_1h = calculate_trendline(df_1h)
-        
-        # Restore original timeframe
-        utils.timeframe = original_tf
-        utils.TIMEFRAME = original_tf
-        
-    except Exception as e:
-        utils.log(f"Error fetching multi-timeframe data for {symbol}: {e}")
-        return None, None
-    
-    return ha_15m, ha_1h
-
 # ================= STRATEGY =================
 
-def process_symbol(symbol, ha_15m, ha_1h, price, state):
+def process_symbol(symbol, ha, price, state):
 
-    last_15m = ha_15m.iloc[-2]
-    prev_15m = ha_15m.iloc[-3]
-    
-    last_1h = ha_1h.iloc[-2]
+    last = ha.iloc[-2]
+    prev = ha.iloc[-3]
 
     pos = state["position"]
 
-    adx_ok_15m = last_15m.ADX > ADX_THRESHOLD
-    adx_ok_1h = last_1h.ADX > ADX_THRESHOLD
+    atr_ok = last.ATR > last.ATR_MA
 
-    # ENTRY - Requires alignment between 1h and 15m trendlines
+    # ================= ENTRY =================
     if pos is None:
 
-        # LONG: Both 1h and 15m showing uptrend
-        if (last_15m.HA_close > last_15m.trendline and 
-            last_15m.HA_close > prev_15m.HA_close and 
-            last_15m.HA_close > prev_15m.HA_open and
-            last_1h.HA_close > last_1h.trendline):
+        # LONG
+        if (
+            last.HA_close > last.trendline and
+            last.HA_close > prev.HA_close and
+            last.HA_close > prev.HA_open and
+            atr_ok
+        ):
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": last_15m.trendline - STOP_LOSS[symbol],
+                "stop": price - TSL_CONFIG[symbol]["sl"],
                 "tp": price + TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
+                "entry_time": datetime.now(),
+                "trail_price": price
             }
 
-            utils.log(f"🟢 {symbol} LONG ENTRY @ {price} (1h & 15m confirmed)", tg=True)
+            utils.log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
             return
 
-        # SHORT: Both 1h and 15m showing downtrend
-        if (last_15m.HA_close < last_15m.trendline and 
-            last_15m.HA_close < prev_15m.HA_close and 
-            last_15m.HA_close < prev_15m.HA_open and
-            last_1h.HA_close < last_1h.trendline ):
+        # SHORT
+        if (
+            last.HA_close < last.trendline and
+            last.HA_close < prev.HA_close and
+            last.HA_close < prev.HA_open and
+            atr_ok
+        ):
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": last_15m.trendline + STOP_LOSS[symbol],
+                "stop": price + TSL_CONFIG[symbol]["sl"],
                 "tp": price - TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
+                "entry_time": datetime.now(),
+                "trail_price": price
             }
 
-            utils.log(f"🔴 {symbol} SHORT ENTRY @ {price} (1h & 15m confirmed)", tg=True)
+            utils.log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
             return
 
-    # EXIT - Only based on 15m trendline
+    # ================= POSITION MANAGEMENT =================
     if pos:
 
+        step = TSL_CONFIG[symbol]["step"]
+
+        # ===== TSL UPDATE =====
+        if pos["side"] == "long":
+
+            if price > pos["trail_price"]:
+                pos["trail_price"] = price
+
+            move = pos["trail_price"] - pos["entry"]
+
+            if move >= step:
+                steps_moved = int(move // step)
+                new_sl = pos["entry"] + (steps_moved - 1) * step
+
+                if new_sl > pos["stop"]:
+                    pos["stop"] = new_sl
+                    utils.log(f"🔄 {symbol} TSL moved to {pos['stop']}", tg=True)
+
+        elif pos["side"] == "short":
+
+            if price < pos["trail_price"]:
+                pos["trail_price"] = price
+
+            move = pos["entry"] - pos["trail_price"]
+
+            if move >= step:
+                steps_moved = int(move // step)
+                new_sl = pos["entry"] - (steps_moved - 1) * step
+
+                if new_sl < pos["stop"]:
+                    pos["stop"] = new_sl
+                    utils.log(f"🔄 {symbol} TSL moved to {pos['stop']}", tg=True)
+
+        # ===== EXIT =====
         exit_now = False
         pnl = 0
 
-        if pos["side"] == "long" and last_15m.HA_close <= last_15m.trendline:
+        # SL HIT
+        if pos["side"] == "long" and price <= pos["stop"]:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
-        elif pos["side"] == "short" and last_15m.HA_close >= last_15m.trendline:
+        elif pos["side"] == "short" and price >= pos["stop"]:
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_now = True
+
+        # TP HIT (optional but kept)
+        elif pos["side"] == "long" and price >= pos["tp"]:
+            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_now = True
+
+        elif pos["side"] == "short" and price <= pos["tp"]:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
@@ -217,19 +221,21 @@ def run():
 
     state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
 
-    utils.log("🚀 Trend Following Strategy LIVE (Multi-Timeframe: 1h + 15m)", tg=True)
+    utils.log("🚀 Strategy LIVE (15m + ATR + TSL)", tg=True)
 
     while True:
 
         try:
             for symbol in SYMBOLS:
 
-                ha_15m, ha_1h = fetch_multi_timeframe_data(symbol)
+                df = utils.fetch_candles(symbol)
 
-                if ha_15m is None or ha_1h is None:
+                if df is None or len(df) < 100:
                     continue
 
-                latest_candle_time = ha_15m.index[-1]
+                ha = calculate_indicators(df)
+
+                latest_candle_time = df.index[-1]
 
                 if state[symbol]["last_candle_time"] == latest_candle_time:
                     continue
@@ -241,14 +247,13 @@ def run():
                 if price is None:
                     continue
 
-                process_symbol(symbol, ha_15m, ha_1h, price, state[symbol])
+                process_symbol(symbol, ha, price, state[symbol])
 
             time.sleep(60)
 
         except Exception as e:
             utils.log(f"Runtime error: {e}", tg=True)
             time.sleep(5)
-
 
 if __name__ == "__main__":
     run()
