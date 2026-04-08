@@ -33,9 +33,37 @@ TSL_CONFIG = {
 }
 
 ATR_LENGTH = 14
-ATR_MA_LENGTH = 20
+ATR_MA_LENGTH = 14
 
-# ================= INIT UTILS =================
+SAVE_DIR= 'data/trend_following_strategy'
+
+def save_processed_data(df, symbol):
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+
+    out = pd.DataFrame({
+        "time": df.index,
+        "HA_open": df["HA_open"],
+        "HA_high": df["HA_high"],
+        "HA_low": df["HA_low"],
+        "HA_close": df["HA_close"],
+        "trendline": df["trendline"],
+        "ATR": df["ATR"],
+        "ATR_MA": df["ATR_MA"]
+    })
+
+   
+
+    # ✅ remove NaNs
+    out = out.dropna()
+
+    if out.empty:
+        return
+
+    if os.path.exists(path):
+        out.to_csv(path, mode='a', header=False, index=False)
+    else:
+        out.to_csv(path, index=False)
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
@@ -54,13 +82,13 @@ def calculate_indicators(df):
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
     # ATR
-    atr = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+    atr = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=ATR_LENGTH)
     ha["ATR"] = atr
     ha["ATR_MA"] = ha["ATR"].rolling(ATR_MA_LENGTH).mean()
 
     # Trendline
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
+    ha["UPPER"] = ha["HA_high"].rolling(27).max()
+    ha["LOWER"] = ha["HA_low"].rolling(27).min()
 
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
