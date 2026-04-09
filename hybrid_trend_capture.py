@@ -27,8 +27,8 @@ TRAIL_STEP = {"BTCUSD":50,"ETHUSD":5}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME_1M = "1m"
-TIMEFRAME_5M = "15m"
+TIMEFRAME_1M = "15m"
+TIMEFRAME_5M = "1h"
 DAYS = 3
 
 # ================= INIT UTILS =================
@@ -178,7 +178,7 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
 
         # LONG: 1m crossover + 5m confirmation
         if (last_1m.HA_close > last_1m.Trendline and 
-            prev_1m.HA_close < prev_1m.Trendline and
+            last_1m.HA_close > prev_1m.HA_close and
             last_5m.HA_close > last_5m.Trendline):
 
             state["position"] = {
@@ -197,7 +197,7 @@ def process_symbol(symbol, ha_1m, ha_5m, state):
 
         # SHORT: 1m crossover + 5m confirmation
         elif (last_1m.HA_close < last_1m.Trendline and 
-              prev_1m.HA_close > prev_1m.Trendline and
+              last_1m.HA_close < prev_1m.HA_close and
               last_5m.HA_close < last_5m.Trendline):
 
             state["position"] = {
