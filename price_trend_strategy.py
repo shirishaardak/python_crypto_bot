@@ -21,7 +21,7 @@ SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
-STOPLOSS = {"BTCUSD": 100}
+STOPLOSS = {"BTCUSD": 500}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1h"
@@ -156,6 +156,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     last = ha.iloc[-2]   # CLOSED candle (for entry)
     prev = ha.iloc[-3]
+    current = ha.iloc[-1]
 
     pos  = state["position"]
     now = datetime.now()
@@ -167,7 +168,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         pnl = 0
 
         # LONG EXIT
-        if pos["side"] == "long" and (price <= pos["sl"] or last.HA_close < last.Trendline):
+        if pos["side"] == "long" and  (last.HA_close < last.Trendline or price < pos["sl"]):
 
             order = place_market_order(symbol, "sell", pos["qty"])
 
@@ -176,7 +177,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 exit_trade = True
 
         # SHORT EXIT
-        if pos["side"] == "short" and (price >= pos["sl"] or last.HA_close > last.Trendline):
+        if pos["side"] == "short" and ( last.HA_close > last.Trendline or price > pos["sl"]):
 
             order = place_market_order(symbol, "buy", pos["qty"])
 
@@ -204,7 +205,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
 
             state["position"] = None
-            state["last_exit_candle"] = df.index[-2]
+            state["last_exit_candle"] = df.index[-1]
 
             return
 
@@ -225,7 +226,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": last.Trendline - STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": price - STOPLOSS[symbol]   # ✅ initial SL
                 }
 
                 utils.log(f"🟢 {symbol} LONG @ {price} | SL: {last.Trendline - STOPLOSS[symbol]}", tg=True)
@@ -241,7 +242,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": last.Trendline + STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": price + STOPLOSS[symbol]   # ✅ initial SL
                 }
 
                 utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {last.Trendline + STOPLOSS[symbol]}", tg=True)
@@ -270,7 +271,7 @@ def run():
                 if df is None or len(df) < 100:
                     continue
 
-                latest_candle_time = df.index[-1]
+                latest_candle_time = df.index[-2]
 
                 is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
 
