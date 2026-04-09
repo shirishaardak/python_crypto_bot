@@ -26,16 +26,13 @@ DAYS = 5
 
 TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
 
-# 🔥 TSL CONFIG
-TSL_CONFIG = {
-    "BTCUSD": {"step": 200, "sl": 400},
-    "ETHUSD": {"step": 10,  "sl": 20}
-}
+# Fixed Stop Loss (replaces TSL)
+STOP_LOSS = {"BTCUSD": 400, "ETHUSD": 20}
 
 ATR_LENGTH = 14
 ATR_MA_LENGTH = 14
 
-SAVE_DIR= 'data/trend_following_strategy'
+SAVE_DIR = 'data/trend_following_strategy'
 
 def save_processed_data(df, symbol):
     os.makedirs(SAVE_DIR, exist_ok=True)
@@ -52,9 +49,6 @@ def save_processed_data(df, symbol):
         "ATR_MA": df["ATR_MA"]
     })
 
-   
-
-    # ✅ remove NaNs
     out = out.dropna()
 
     if out.empty:
@@ -87,8 +81,8 @@ def calculate_indicators(df):
     ha["ATR_MA"] = ha["ATR"].rolling(ATR_MA_LENGTH).mean()
 
     # Trendline
-    ha["UPPER"] = ha["HA_high"].rolling(27).max()
-    ha["LOWER"] = ha["HA_low"].rolling(27).min()
+    ha["UPPER"] = ha["HA_high"].rolling(21).max()
+    ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
     trendline = np.zeros(len(ha))
     trend = ha["HA_close"].iloc[0]
@@ -133,11 +127,10 @@ def process_symbol(symbol, ha, price, state):
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price - TSL_CONFIG[symbol]["sl"],
+                "stop": price - STOP_LOSS[symbol],
                 "tp": price + TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now(),
-                "trail_price": price
+                "entry_time": datetime.now()
             }
 
             utils.log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
@@ -154,11 +147,10 @@ def process_symbol(symbol, ha, price, state):
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price + TSL_CONFIG[symbol]["sl"],
+                "stop": price + STOP_LOSS[symbol],
                 "tp": price - TAKE_PROFIT[symbol],
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now(),
-                "trail_price": price
+                "entry_time": datetime.now()
             }
 
             utils.log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
@@ -167,58 +159,24 @@ def process_symbol(symbol, ha, price, state):
     # ================= POSITION MANAGEMENT =================
     if pos:
 
-        step = TSL_CONFIG[symbol]["step"]
-
-        # ===== TSL UPDATE =====
-        if pos["side"] == "long":
-
-            if price > pos["trail_price"]:
-                pos["trail_price"] = price
-
-            move = pos["trail_price"] - pos["entry"]
-
-            if move >= step:
-                steps_moved = int(move // step)
-                new_sl = pos["entry"] + (steps_moved - 1) * step
-
-                if new_sl > pos["stop"]:
-                    pos["stop"] = new_sl
-                    utils.log(f"🔄 {symbol} TSL moved to {pos['stop']}", tg=True)
-
-        elif pos["side"] == "short":
-
-            if price < pos["trail_price"]:
-                pos["trail_price"] = price
-
-            move = pos["entry"] - pos["trail_price"]
-
-            if move >= step:
-                steps_moved = int(move // step)
-                new_sl = pos["entry"] - (steps_moved - 1) * step
-
-                if new_sl < pos["stop"]:
-                    pos["stop"] = new_sl
-                    utils.log(f"🔄 {symbol} TSL moved to {pos['stop']}", tg=True)
-
-        # ===== EXIT =====
         exit_now = False
         pnl = 0
 
         # SL HIT
-        if pos["side"] == "long" and price <= pos["stop"]:
+        if pos["side"] == "long" and last.HA_close <= pos["stop"]:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
-        elif pos["side"] == "short" and price >= pos["stop"]:
+        elif pos["side"] == "short" and last.HA_close >= pos["stop"]:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
-        # TP HIT (optional but kept)
-        elif pos["side"] == "long" and price >= pos["tp"]:
+        # Trendline exit (acts like dynamic TP)
+        elif pos["side"] == "long" and last.HA_close < last.trendline:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
-        elif pos["side"] == "short" and price <= pos["tp"]:
+        elif pos["side"] == "short" and last.HA_close > last.trendline:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_now = True
 
@@ -249,7 +207,7 @@ def run():
 
     state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
 
-    utils.log("🚀 Strategy LIVE (15m + ATR + TSL)", tg=True)
+    utils.log("🚀 Strategy LIVE (15m + ATR, NO TSL)", tg=True)
 
     while True:
 
