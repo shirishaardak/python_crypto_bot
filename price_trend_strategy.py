@@ -27,6 +27,7 @@ TIMEFRAME = "1h"
 DAYS = 15
 
 MIN_BALANCE = 5000
+BALANCE = 800
 
 last_git_push = time.time()
 
@@ -170,7 +171,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         balance = state["balance"]
 
-        if balance < MIN_BALANCE:
+        if balance < BALANCE:
             utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
             return
 
