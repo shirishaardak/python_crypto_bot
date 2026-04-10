@@ -5,7 +5,6 @@ import numpy as np
 from datetime import datetime
 import pandas_ta as ta
 from dotenv import load_dotenv
-from delta_rest_client import DeltaRestClient, OrderType
 import traceback
 import subprocess
 
@@ -26,6 +25,8 @@ TAKER_FEE = 0.0005
 
 TIMEFRAME = "1h"
 DAYS = 15
+
+MIN_BALANCE = 5000
 
 last_git_push = time.time()
 
@@ -70,57 +71,33 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= DELTA API =================
+# ================= BALANCE =================
 
-client = DeltaRestClient(
-    base_url="https://api.india.delta.exchange",
-    api_key=os.getenv("DELTA_API_KEY"),
-    api_secret=os.getenv("DELTA_API_SECRET")
-)
-
-# ================= PRODUCT IDS =================
-
-def get_product_ids(symbols):
+def get_balance():
     try:
-        data = utils.safe_get("https://api.india.delta.exchange/v2/products")
+        data = utils.safe_get("https://api.india.delta.exchange/v2/wallet/balances")
 
-        product_map = {}
-        for p in data["result"]:
-            if p["symbol"] in symbols and p["contract_type"] == "perpetual_futures":
-                product_map[p["symbol"]] = p["id"]
+        for acc in data["result"]:
+            if acc["asset_symbol"] == "USDT":
+                return float(acc["available_balance"])
 
-        return product_map
+        return 0
 
     except Exception as e:
-        utils.log(f"Product ID fetch error: {e}", tg=True)
-        return {}
+        utils.log(f"Balance fetch error: {e}")
+        return 0
 
-PRODUCT_IDS = get_product_ids(SYMBOLS)
-
-if not PRODUCT_IDS:
-    raise Exception("❌ Product IDs not loaded")
-
-# ================= ORDER =================
+# ================= PAPER ORDER =================
 
 def place_market_order(symbol, side, qty):
-    try:
-        order = client.place_order(
-            product_id=PRODUCT_IDS[symbol],
-            order_type=OrderType.MARKET,
-            side=side,
-            size=qty
-        )
+    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
 
-        if not order or ("success" in order and not order["success"]):
-            utils.log(f"❌ {symbol} ORDER FAILED: {order}", tg=True)
-            return None
-
-        utils.log(f"✅ {symbol} ORDER SUCCESS", tg=True)
-        return order
-
-    except Exception as e:
-        utils.log(f"❌ {symbol} Order Exception: {e}", tg=True)
-        return None
+    return {
+        "success": True,
+        "symbol": symbol,
+        "side": side,
+        "qty": qty
+    }
 
 # ================= TRENDLINE =================
 
@@ -154,41 +131,41 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    last = ha.iloc[-2]   # CLOSED candle (for entry)
+    last = ha.iloc[-2]
     prev = ha.iloc[-3]
-    current = ha.iloc[-1]
 
-    pos  = state["position"]
+    pos = state["position"]
     now = datetime.now()
-    
+
     # ================= EXIT =================
     if pos:
 
         exit_trade = False
         pnl = 0
 
-        # LONG EXIT
-        if pos["side"] == "long" and  (last.HA_close < last.Trendline or price < pos["sl"]):
+        if pos["side"] == "long" and last.HA_close < last.Trendline:
 
-            order = place_market_order(symbol, "sell", pos["qty"])
+            # order = place_market_order(symbol, "sell", pos["qty"])
 
-            if order:
+            # if order:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
-        # SHORT EXIT
-        if pos["side"] == "short" and ( last.HA_close > last.Trendline or price > pos["sl"]):
+        elif pos["side"] == "short" and last.HA_close > last.Trendline :
 
-            order = place_market_order(symbol, "buy", pos["qty"])
+            # order = place_market_order(symbol, "buy", pos["qty"])
 
-            if order:
+            # if order:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         if exit_trade:
 
-            fee = utils.commission(price, pos["qty"], symbol)
-            net = pnl - fee
+            entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
+            exit_fee  = utils.commission(price, pos["qty"], symbol)
+
+            total_fee = entry_fee + exit_fee
+            net = pnl - total_fee
 
             utils.save_trade({
                 "symbol": symbol,
@@ -215,37 +192,43 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        # LONG ENTRY
+        balance = get_balance()
+
+        if balance < MIN_BALANCE:
+            utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
+            return
+
+        # LONG
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
-            order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
+            # order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
 
-            if order:
+            # if order:
                 state["position"] = {
                     "side": "long",
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": price - STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": price - STOPLOSS[symbol]
                 }
 
-                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {last.Trendline - STOPLOSS[symbol]}", tg=True)
+                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
 
-        # SHORT ENTRY
+        # SHORT
         elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
-            order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
+            # order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
 
-            if order:
+            # if order:
                 state["position"] = {
                     "side": "short",
                     "entry": price,
                     "qty": DEFAULT_CONTRACTS[symbol],
                     "entry_time": now,
-                    "sl": price + STOPLOSS[symbol]   # ✅ initial SL
+                    "sl": price + STOPLOSS[symbol]
                 }
 
-                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {last.Trendline + STOPLOSS[symbol]}", tg=True)
+                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
 
 # ================= MAIN =================
 
@@ -259,7 +242,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 LIVE BOT STARTED", tg=True)
+    utils.log("🚀 LIVE BOT STARTED (PAPER MODE)", tg=True)
 
     while True:
 
@@ -287,7 +270,7 @@ def run():
 
                 auto_git_push()
 
-            time.sleep(3)  # faster loop for live exit
+            time.sleep(3)
 
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
