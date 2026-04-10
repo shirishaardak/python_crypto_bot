@@ -71,33 +71,11 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= BALANCE =================
-
-def get_balance():
-    try:
-        data = utils.safe_get("https://api.india.delta.exchange/v2/wallet/balances")
-
-        for acc in data["result"]:
-            if acc["asset_symbol"] == "USDT":
-                return float(acc["available_balance"])
-
-        return 0
-
-    except Exception as e:
-        utils.log(f"Balance fetch error: {e}")
-        return 0
-
 # ================= PAPER ORDER =================
 
 def place_market_order(symbol, side, qty):
     utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
-
-    return {
-        "success": True,
-        "symbol": symbol,
-        "side": side,
-        "qty": qty
-    }
+    return {"success": True}
 
 # ================= TRENDLINE =================
 
@@ -145,19 +123,13 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         if pos["side"] == "long" and last.HA_close < last.Trendline:
 
-            # order = place_market_order(symbol, "sell", pos["qty"])
+            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_trade = True
 
-            # if order:
-                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+        elif pos["side"] == "short" and last.HA_close > last.Trendline:
 
-        elif pos["side"] == "short" and last.HA_close > last.Trendline :
-
-            # order = place_market_order(symbol, "buy", pos["qty"])
-
-            # if order:
-                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_trade = True
 
         if exit_trade:
 
@@ -166,6 +138,9 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             total_fee = entry_fee + exit_fee
             net = pnl - total_fee
+
+            # ✅ UPDATE PAPER BALANCE
+            state["balance"] += net
 
             utils.save_trade({
                 "symbol": symbol,
@@ -180,6 +155,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             emoji = "🟢" if net > 0 else "🔴"
             utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+            utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
             state["position"] = None
             state["last_exit_candle"] = df.index[-1]
@@ -192,7 +168,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        balance = get_balance()
+        balance = state["balance"]
 
         if balance < MIN_BALANCE:
             utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
@@ -201,34 +177,32 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # LONG
         if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
-            # order = place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
+            # place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
 
-            # if order:
-                state["position"] = {
-                    "side": "long",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now,
-                    "sl": price - STOPLOSS[symbol]
-                }
+            state["position"] = {
+                "side": "long",
+                "entry": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": now,
+                "sl": price - STOPLOSS[symbol]
+            }
 
-                utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
+            utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
 
         # SHORT
         elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
-            # order = place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
+            # place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
 
-            # if order:
-                state["position"] = {
-                    "side": "short",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now,
-                    "sl": price + STOPLOSS[symbol]
-                }
+            state["position"] = {
+                "side": "short",
+                "entry": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": now,
+                "sl": price + STOPLOSS[symbol]
+            }
 
-                utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
+            utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
 
 # ================= MAIN =================
 
@@ -238,7 +212,8 @@ def run():
         s: {
             "position": None,
             "last_candle_time": None,
-            "last_exit_candle": None
+            "last_exit_candle": None,
+            "balance": 5000   # 💰 PAPER START BALANCE
         } for s in SYMBOLS
     }
 
