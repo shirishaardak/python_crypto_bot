@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 import traceback
+import pandas as pd
 
 from utils import TradingUtils
 
@@ -10,7 +11,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_trading_strategy"
+BOT_NAME = "momentum_trading_strategy_pro"
 
 SYMBOLS = ["BTCUSD","ETHUSD"]
 
@@ -18,7 +19,11 @@ DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
-STEP_PCT = 0.005   # 0.5%
+STEP_PCT = 0.003   # 0.5%
+
+EMA_PERIOD = 50
+CHANGE_FILTER = 0.3
+COOLDOWN_SEC = 30
 
 # ================= INIT =================
 
@@ -45,7 +50,8 @@ def update_trailing_sl(symbol, price, pos):
     move_pct = abs(price - pos["entry"]) / pos["entry"]
     steps = int(move_pct // STEP_PCT)
 
-    if steps <= pos["trail_step"]:
+    # start trailing only after 1 step
+    if steps <= pos["trail_step"] or steps < 1:
         return
 
     pos["trail_step"] = steps
@@ -61,6 +67,8 @@ def update_trailing_sl(symbol, price, pos):
 
 def exit_trade(symbol, price, pos, state):
 
+    now = datetime.now()
+
     pnl = (
         (price - pos["entry"]) if pos["side"] == "long"
         else (pos["entry"] - price)
@@ -68,23 +76,25 @@ def exit_trade(symbol, price, pos, state):
 
     net = pnl - utils.commission(price, pos["qty"], symbol)
 
-    # ✅ YOUR SAVE TRADE ADDED HERE
     utils.save_trade({
         "symbol": symbol,
         "side": pos["side"],
-        "entry_time": pos["entry_time"],
-        "exit_time": datetime.now(),
         "entry_price": pos["entry"],
         "exit_price": price,
         "qty": pos["qty"],
-        "net_pnl": round(net, 6)
+        "net_pnl": round(net, 6),
+        "entry_time": pos["entry_time"],
+        "exit_time": now
     })
 
-    utils.log(f"{symbol} EXIT {net}", tg=True)
+    utils.log(
+        f"{symbol} EXIT | Side: {pos['side']} | Entry: {pos['entry']} | Exit: {price} | PnL: {net}",
+        tg=True
+    )
 
     state["position"] = None
+    state["cooldown"] = time.time() + COOLDOWN_SEC
 
-    # RESET LEVELS AFTER EXIT
     set_levels(state, price)
 
 # ================= CORE LOGIC =================
@@ -95,17 +105,43 @@ def process_symbol(symbol, state):
     if price is None:
         return
 
+    # Fetch OHLC for EMA
+    df = utils.get_ohlc(symbol)
+    if df is None or len(df) < EMA_PERIOD:
+        return
+
+    ema = df["close"].ewm(span=EMA_PERIOD).mean().iloc[-1]
+
+    # Fetch 24h change
+    ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
+    try:
+        change = float(ticker["result"]["ltp_change_24h"])
+    except:
+        change = 0
+
     # FIRST TIME SETUP
     if state["UP"] is None:
         set_levels(state, price)
         state["last_price"] = price
         return
 
+    # COOLDOWN CHECK
+    if time.time() < state["cooldown"]:
+        return
+
     # ================= ENTRY =================
     if state["position"] is None:
 
-        # BUY
-        if state["last_price"] <= state["UP"] and price > state["UP"]:
+        # -------- LONG --------
+        if (
+            state["last_price"] <= state["UP"] and price > state["UP"] and change > CHANGE_FILTER
+        ):
+            if state["confirm"] != "long":
+                state["confirm"] = "long"
+                return
+
+            state["confirm"] = None
+
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -117,8 +153,16 @@ def process_symbol(symbol, state):
 
             utils.log(f"{symbol} BUY {price}", tg=True)
 
-        # SELL
-        elif state["last_price"] >= state["DOWN"] and price < state["DOWN"]:
+        # -------- SHORT --------
+        elif (
+            state["last_price"] >= state["DOWN"] and price < state["DOWN"] and change < -CHANGE_FILTER
+        ):
+            if state["confirm"] != "short":
+                state["confirm"] = "short"
+                return
+
+            state["confirm"] = None
+
             state["position"] = {
                 "side": "short",
                 "entry": price,
@@ -153,12 +197,14 @@ def run():
             "position":None,
             "UP":None,
             "DOWN":None,
-            "last_price":None
+            "last_price":None,
+            "cooldown":0,
+            "confirm":None
         }
         for s in SYMBOLS
     }
 
-    utils.log("🚀 0.5% BREAKOUT BOT STARTED", tg=True)
+    utils.log("🚀 PRO BREAKOUT BOT STARTED", tg=True)
 
     while True:
         try:
