@@ -1,9 +1,6 @@
 import os
 import time
-import pandas as pd
-import numpy as np
 from datetime import datetime
-import pandas_ta as ta
 from dotenv import load_dotenv
 
 from utils import TradingUtils
@@ -12,234 +9,234 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "trend_following_strategy"
+BOT_NAME = "pct_24h_cross_bot_step_sl"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
+
+INITIAL_BALANCE = 5000
 
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME_15M = "15m"
-DAYS = 5
+STEP = 0.25
+COOLDOWN_SEC = 30
 
-TAKE_PROFIT = {"BTCUSD": 300, "ETHUSD": 30}
-
-# Fixed Stop Loss (replaces TSL)
-STOP_LOSS = {"BTCUSD": 400, "ETHUSD": 20}
-
-ATR_LENGTH = 14
-ATR_MA_LENGTH = 14
-
-SAVE_DIR = 'data/trend_following_strategy'
-
-def save_processed_data(df, symbol):
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
-
-    out = pd.DataFrame({
-        "time": df.index,
-        "HA_open": df["HA_open"],
-        "HA_high": df["HA_high"],
-        "HA_low": df["HA_low"],
-        "HA_close": df["HA_close"],
-        "trendline": df["trendline"],
-        "ATR": df["ATR"],
-        "ATR_MA": df["ATR_MA"]
-    })
-
-    out = out.dropna()
-
-    if out.empty:
-        return
-
-    if os.path.exists(path):
-        out.to_csv(path, mode='a', header=False, index=False)
-    else:
-        out.to_csv(path, index=False)
+# ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME_15M,
-    days=DAYS,
-    telegram_token=os.getenv("trend_following_strategy_bot"),
+    timeframe="1h",
+    days=5,
+    telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-# ================= INDICATORS =================
+# ================= HELPERS =================
 
-def calculate_indicators(df):
+def get_24h_change(symbol):
+    try:
+        ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
+        return float(ticker["result"]["ltp_change_24h"])
+    except:
+        return None
 
-    ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    # ATR
-    atr = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=ATR_LENGTH)
-    ha["ATR"] = atr
-    ha["ATR_MA"] = ha["ATR"].rolling(ATR_MA_LENGTH).mean()
+def is_cross_up(prev, curr, level):
+    return prev is not None and prev < level and curr >= level
 
-    # Trendline
-    ha["UPPER"] = ha["HA_high"].rolling(21).max()
-    ha["LOWER"] = ha["HA_low"].rolling(21).min()
 
-    trendline = np.zeros(len(ha))
-    trend = ha["HA_close"].iloc[0]
-    trendline[0] = trend
+def is_cross_down(prev, curr, level):
+    return prev is not None and prev > level and curr <= level
 
-    for i in range(1, len(ha)):
-
-        if ha["HA_high"].iloc[i] == ha["UPPER"].iloc[i]:
-            trend = ha["HA_low"].iloc[i]
-
-        elif ha["HA_low"].iloc[i] == ha["LOWER"].iloc[i]:
-            trend = ha["HA_high"].iloc[i]
-
-        trendline[i] = trend
-
-    ha["trendline"] = trendline
-
-    return ha
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, ha, price, state):
-
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
+def process_symbol(symbol, price, state, account):
 
     pos = state["position"]
+    change = get_24h_change(symbol)
 
-    atr_ok = last.ATR > last.ATR_MA
+    if change is None:
+        return
 
-    # ================= ENTRY =================
-    if pos is None:
+    prev_change = state.get("last_change")
+    contract = CONTRACT_SIZE[symbol]
 
-        # LONG
-        if (
-            last.HA_close > last.trendline and
-            last.HA_close > prev.HA_close and
-            last.HA_close > prev.HA_open and
-            atr_ok
-        ):
-
-            state["position"] = {
-                "side": "long",
-                "entry": price,
-                "stop": price - STOP_LOSS[symbol],
-                "tp": price + TAKE_PROFIT[symbol],
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
-            }
-
-            utils.log(f"🟢 {symbol} LONG ENTRY @ {price}", tg=True)
-            return
-
-        # SHORT
-        if (
-            last.HA_close < last.trendline and
-            last.HA_close < prev.HA_close and
-            last.HA_close < prev.HA_open and
-            atr_ok
-        ):
-
-            state["position"] = {
-                "side": "short",
-                "entry": price,
-                "stop": price + STOP_LOSS[symbol],
-                "tp": price - TAKE_PROFIT[symbol],
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": datetime.now()
-            }
-
-            utils.log(f"🔴 {symbol} SHORT ENTRY @ {price}", tg=True)
-            return
-
-    # ================= POSITION MANAGEMENT =================
+    # ================= EXIT =================
     if pos:
 
-        exit_now = False
+        exit_trade = False
         pnl = 0
 
-        # SL HIT
-        if pos["side"] == "long" and last.HA_close <= pos["stop"]:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_now = True
+        # ===== LONG =====
+        if pos["side"] == "long":
 
-        elif pos["side"] == "short" and last.HA_close >= pos["stop"]:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_now = True
+            if change <= pos["sl"]:
+                pnl = (price - pos["entry"]) * contract * pos["qty"]
+                exit_trade = True
 
-        # Trendline exit (acts like dynamic TP)
-        elif pos["side"] == "long" and last.HA_close < last.trendline:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_now = True
+            # ✅ STEP TRAILING
+            if change >= pos["last_peak"] + STEP:
 
-        elif pos["side"] == "short" and last.HA_close > last.trendline:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_now = True
+                old_sl = pos["sl"]
 
-        if exit_now:
+                steps = int((change - pos["last_peak"]) / STEP)
+                pos["last_peak"] += steps * STEP
 
-            fee = utils.commission(price, pos["qty"], symbol)
-            net = pnl - fee
+                pos["sl"] = pos["last_peak"] - STEP
+
+                utils.log(
+                    f"📈 SL STEP {symbol} LONG | 24h: {round(change,3)} | SL: {round(old_sl,3)} → {round(pos['sl'],3)}",
+                    tg=True
+                )
+
+        # ===== SHORT =====
+        elif pos["side"] == "short":
+
+            if change >= pos["sl"]:
+                pnl = (pos["entry"] - price) * contract * pos["qty"]
+                exit_trade = True
+
+            # ✅ STEP TRAILING
+            if change <= pos["last_peak"] - STEP:
+
+                old_sl = pos["sl"]
+
+                steps = int((pos["last_peak"] - change) / STEP)
+                pos["last_peak"] -= steps * STEP
+
+                pos["sl"] = pos["last_peak"] + STEP
+
+                utils.log(
+                    f"📉 SL STEP {symbol} SHORT | 24h: {round(change,3)} | SL: {round(old_sl,3)} → {round(pos['sl'],3)}",
+                    tg=True
+                )
+
+        if exit_trade:
+
+            entry_fee = pos["entry_fee"]
+            exit_fee = utils.commission(price, pos["qty"], symbol)
+
+            net_pnl = pnl - entry_fee - exit_fee
+            account["balance"] += net_pnl
 
             utils.save_trade({
                 "symbol": symbol,
                 "side": pos["side"],
+                "entry_time": pos["entry_time"],
+                "exit_time": datetime.now(),
                 "entry_price": pos["entry"],
                 "exit_price": price,
                 "qty": pos["qty"],
-                "net_pnl": round(net, 6),
-                "entry_time": pos["entry_time"],
-                "exit_time": datetime.now()
+                "net_pnl": round(net_pnl, 6),
+                "balance": round(account["balance"], 2)
             })
 
-            emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL {round(net,6)}", tg=True)
+            utils.log(
+                f"❌ EXIT {symbol} | PNL: {round(net_pnl,2)} | Balance: {round(account['balance'],2)}",
+                tg=True
+            )
 
             state["position"] = None
+            state["cooldown"] = time.time()
+            return
+
+    # ================= ENTRY =================
+    if not pos and prev_change is not None:
+
+        # ✅ COOLDOWN CHECK
+        if time.time() - state.get("cooldown", 0) < COOLDOWN_SEC:
+            return
+
+        qty = DEFAULT_CONTRACTS[symbol]
+
+        # ===== LONG =====
+        if is_cross_up(prev_change, change, 0.5):
+
+            entry_fee = utils.commission(price, qty, symbol)
+
+            # snap to step grid
+            base = round(change / STEP) * STEP
+
+            state["position"] = {
+                "side": "long",
+                "entry": price,
+                "qty": qty,
+                "entry_time": datetime.now(),
+                "sl": base - STEP,
+                "last_peak": base,
+                "entry_fee": entry_fee
+            }
+
+            utils.log(
+                f"🟢 LONG {symbol} | Price: {price} | 24h: {round(change,3)} | SL: {round(base-STEP,3)}",
+                tg=True
+            )
+
+        # ===== SHORT =====
+        elif is_cross_down(prev_change, change, -0.5):
+
+            entry_fee = utils.commission(price, qty, symbol)
+
+            base = round(change / STEP) * STEP
+
+            state["position"] = {
+                "side": "short",
+                "entry": price,
+                "qty": qty,
+                "entry_time": datetime.now(),
+                "sl": base + STEP,
+                "last_peak": base,
+                "entry_fee": entry_fee
+            }
+
+            utils.log(
+                f"🔴 SHORT {symbol} | Price: {price} | 24h: {round(change,3)} | SL: {round(base+STEP,3)}",
+                tg=True
+            )
+
+    state["last_change"] = change
+
 
 # ================= MAIN =================
 
 def run():
 
-    state = {s: {"position": None, "last_candle_time": None} for s in SYMBOLS}
+    state = {
+        s: {
+            "position": None,
+            "last_change": None,
+            "cooldown": 0
+        } for s in SYMBOLS
+    }
 
-    utils.log("🚀 Strategy LIVE (15m + ATR, NO TSL)", tg=True)
+    account = {"balance": INITIAL_BALANCE}
+
+    utils.log(f"🚀 BOT STARTED | Balance: ${INITIAL_BALANCE}", tg=True)
 
     while True:
-
         try:
             for symbol in SYMBOLS:
-
-                df = utils.fetch_candles(symbol)
-
-                if df is None or len(df) < 100:
-                    continue
-
-                ha = calculate_indicators(df)
-
-                latest_candle_time = df.index[-1]
-
-                if state[symbol]["last_candle_time"] == latest_candle_time:
-                    continue
-
-                state[symbol]["last_candle_time"] = latest_candle_time
 
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, ha, price, state[symbol])
+                process_symbol(symbol, price, state[symbol], account)
 
-            time.sleep(60)
+            time.sleep(3)
 
         except Exception as e:
-            utils.log(f"Runtime error: {e}", tg=True)
+            utils.log(f"ERROR: {e}", tg=True)
             time.sleep(5)
+
+
+# ================= START =================
 
 if __name__ == "__main__":
     run()
