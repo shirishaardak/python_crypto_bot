@@ -106,11 +106,6 @@ def process_symbol(symbol, state):
         return
 
     # Fetch OHLC for EMA
-    df = utils.get_ohlc(symbol)
-    if df is None or len(df) < EMA_PERIOD:
-        return
-
-    ema = df["close"].ewm(span=EMA_PERIOD).mean().iloc[-1]
 
     # Fetch 24h change
     ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
@@ -134,7 +129,8 @@ def process_symbol(symbol, state):
 
         # -------- LONG --------
         if (
-            state["last_price"] <= state["UP"] and price > state["UP"] and change > CHANGE_FILTER
+            state["last_price"] <= state["UP"] and price > state["UP"] and
+            change > CHANGE_FILTER
         ):
             if state["confirm"] != "long":
                 state["confirm"] = "long"
@@ -155,7 +151,8 @@ def process_symbol(symbol, state):
 
         # -------- SHORT --------
         elif (
-            state["last_price"] >= state["DOWN"] and price < state["DOWN"] and change < -CHANGE_FILTER
+            state["last_price"] >= state["DOWN"] and price < state["DOWN"] and
+            change < -CHANGE_FILTER
         ):
             if state["confirm"] != "short":
                 state["confirm"] = "short"
