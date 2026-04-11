@@ -11,7 +11,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_trading_strategy_pro"
+BOT_NAME = "momentum_trading_strategy"
 
 SYMBOLS = ["BTCUSD","ETHUSD"]
 
@@ -19,7 +19,7 @@ DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
 CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
 
 TAKER_FEE = 0.0005
-STEP_PCT = 0.003   # 0.5%
+STEP_PCT = 0.003   # 0.3%
 
 EMA_PERIOD = 50
 CHANGE_FILTER = 0.3
@@ -50,7 +50,6 @@ def update_trailing_sl(symbol, price, pos):
     move_pct = abs(price - pos["entry"]) / pos["entry"]
     steps = int(move_pct // STEP_PCT)
 
-    # start trailing only after 1 step
     if steps <= pos["trail_step"] or steps < 1:
         return
 
@@ -74,21 +73,29 @@ def exit_trade(symbol, price, pos, state):
         else (pos["entry"] - price)
     ) * CONTRACT_SIZE[symbol] * pos["qty"]
 
-    net = pnl - utils.commission(price, pos["qty"], symbol)
+    fee = utils.commission(price, pos["qty"], symbol)
+    net_pnl = pnl - fee
+
+    # ✅ GET ACCOUNT BALANCE (make sure utils has this)
+    try:
+        account = utils.get_balance()
+    except:
+        account = {"balance": 0}
 
     utils.save_trade({
         "symbol": symbol,
         "side": pos["side"],
+        "entry_time": pos["entry_time"],
+        "exit_time": now,
         "entry_price": pos["entry"],
         "exit_price": price,
         "qty": pos["qty"],
-        "net_pnl": round(net, 6),
-        "entry_time": pos["entry_time"],
-        "exit_time": now
+        "net_pnl": round(net_pnl, 6),
+        "balance": round(account.get("balance", 0), 2)
     })
 
     utils.log(
-        f"{symbol} EXIT | Side: {pos['side']} | Entry: {pos['entry']} | Exit: {price} | PnL: {net}",
+        f"{symbol} EXIT | Side: {pos['side']} | Entry: {pos['entry']} | Exit: {price} | PnL: {net_pnl}",
         tg=True
     )
 
@@ -105,9 +112,6 @@ def process_symbol(symbol, state):
     if price is None:
         return
 
-    # Fetch OHLC for EMA
-
-    # Fetch 24h change
     ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
     try:
         change = float(ticker["result"]["ltp_change_24h"])
