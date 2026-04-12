@@ -57,7 +57,7 @@ def auto_git_push():
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1h",   # not used, but kept for compatibility
+    timeframe="1h",
     days=1,
     telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -73,7 +73,7 @@ def process_symbol(symbol, price, state):
 
     step = 200 if symbol == "BTCUSD" else 20
 
-    # ===== LAST PRICE (momentum base) =====
+    # ===== LAST PRICE =====
     last_price = state.get("last_price")
 
     if last_price is None:
@@ -84,13 +84,18 @@ def process_symbol(symbol, price, state):
     momentum_up = price > last_price
     momentum_down = price < last_price
 
-    # ===== SMALL FILTER (avoid noise) =====
+    # ===== SMALL FILTER =====
     min_move = abs(price - last_price) > (step * 0.1)
 
     # ===== DYNAMIC LEVELS =====
     zone = int(np.floor(price / step))
     down_level = zone * step
     up_level = (zone + 1) * step
+
+    # ===== LOG LEVELS (ONLY ON SET / RESET) =====
+    if not state.get("levels_logged"):
+        utils.log(f"📊 SET LEVELS {symbol} | PRICE: {round(price)} | UP: {up_level} | DOWN: {down_level}", tg=True)
+        state["levels_logged"] = True
 
     # ================= EXIT =================
     if pos:
@@ -143,12 +148,13 @@ def process_symbol(symbol, price, state):
 
             state["position"] = None
 
-            # ✅ RESET ZONE AFTER EXIT
+            # ===== RESET LEVELS =====
             state["last_traded_zone"] = None
+            state["levels_logged"] = False
 
-            # update last price
+            utils.log(f"🔄 RESET LEVELS {symbol} @ {price}", tg=True)
+
             state["last_price"] = price
-
             return
 
     # ================= ENTRY =================
@@ -176,7 +182,7 @@ def process_symbol(symbol, price, state):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
+            utils.log(f"🟢 LONG {symbol} @ {price} | SL: {price - step}", tg=True)
 
         # ===== SHORT =====
         elif price <= down_level and momentum_down and min_move:
@@ -191,9 +197,9 @@ def process_symbol(symbol, price, state):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
+            utils.log(f"🔴 SHORT {symbol} @ {price} | SL: {price + step}", tg=True)
 
-    # ✅ ALWAYS UPDATE LAST PRICE
+    # ===== UPDATE LAST PRICE =====
     state["last_price"] = price
 
 
@@ -206,7 +212,8 @@ def run():
             "position": None,
             "balance": 5000,
             "last_traded_zone": None,
-            "last_price": None
+            "last_price": None,
+            "levels_logged": False
         } for s in SYMBOLS
     }
 
@@ -224,7 +231,7 @@ def run():
 
                 process_symbol(symbol, price, state[symbol])
 
-            time.sleep(1)  # faster loop for tick trading
+            time.sleep(1)
 
         except Exception as e:
             utils.log(f"🚨 Error: {e}", tg=True)
