@@ -14,7 +14,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "price_trend_strategy"
+BOT_NAME = "momentum_trading_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -27,7 +27,7 @@ TIMEFRAME = "1h"
 DAYS = 15
 
 MIN_BALANCE = 500
-BALANCE = 800
+BALANCE = 500
 
 last_git_push = time.time()
 
@@ -67,7 +67,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("price_trend_strategy_bot"),
+    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
