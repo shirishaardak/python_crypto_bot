@@ -11,7 +11,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "tick_momentum_bot"
+BOT_NAME = "fixed_level_momentum_bot"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -73,6 +73,22 @@ def process_symbol(symbol, price, state):
 
     step = 200 if symbol == "BTCUSD" else 20
 
+    # ===== BASE PRICE SET =====
+    if state.get("base_price") is None:
+        state["base_price"] = round(price / step) * step
+        state["levels_logged"] = False
+
+    base = state["base_price"]
+
+    # ===== FIXED LEVELS =====
+    up_level = base + step
+    down_level = base - step
+
+    # ===== LOG LEVELS =====
+    if not state.get("levels_logged"):
+        utils.log(f"📊 BASE {symbol}: {base} | UP: {up_level} | DOWN: {down_level}", tg=True)
+        state["levels_logged"] = True
+
     # ===== LAST PRICE =====
     last_price = state.get("last_price")
 
@@ -84,18 +100,8 @@ def process_symbol(symbol, price, state):
     momentum_up = price > last_price
     momentum_down = price < last_price
 
-    # ===== SMALL FILTER =====
+    # ===== FILTER =====
     min_move = abs(price - last_price) > (step * 0.1)
-
-    # ===== DYNAMIC LEVELS =====
-    zone = int(np.floor(price / step))
-    down_level = zone * step
-    up_level = (zone + 1) * step
-
-    # ===== LOG LEVELS (ONLY ON SET / RESET) =====
-    if not state.get("levels_logged"):
-        utils.log(f"📊 SET LEVELS {symbol} | PRICE: {round(price)} | UP: {up_level} | DOWN: {down_level}", tg=True)
-        state["levels_logged"] = True
 
     # ================= EXIT =================
     if pos:
@@ -148,11 +154,13 @@ def process_symbol(symbol, price, state):
 
             state["position"] = None
 
-            # ===== RESET LEVELS =====
-            state["last_traded_zone"] = None
+            # ===== RESET BASE =====
+            new_base = round(price / step) * step
+            state["base_price"] = new_base
             state["levels_logged"] = False
+            state["last_traded_zone"] = None
 
-            utils.log(f"🔄 RESET LEVELS {symbol} @ {price}", tg=True)
+            utils.log(f"🔄 RESET BASE {symbol} → {new_base}", tg=True)
 
             state["last_price"] = price
             return
@@ -161,11 +169,6 @@ def process_symbol(symbol, price, state):
     if not pos:
 
         if state["balance"] < MIN_BALANCE:
-            state["last_price"] = price
-            return
-
-        # Anti-chop
-        if state.get("last_traded_zone") == zone:
             state["last_price"] = price
             return
 
@@ -180,8 +183,6 @@ def process_symbol(symbol, price, state):
                 "sl": price - step
             }
 
-            state["last_traded_zone"] = zone
-
             utils.log(f"🟢 LONG {symbol} @ {price} | SL: {price - step}", tg=True)
 
         # ===== SHORT =====
@@ -194,8 +195,6 @@ def process_symbol(symbol, price, state):
                 "entry_time": now,
                 "sl": price + step
             }
-
-            state["last_traded_zone"] = zone
 
             utils.log(f"🔴 SHORT {symbol} @ {price} | SL: {price + step}", tg=True)
 
@@ -211,13 +210,14 @@ def run():
         s: {
             "position": None,
             "balance": 5000,
-            "last_traded_zone": None,
             "last_price": None,
-            "levels_logged": False
+            "base_price": None,
+            "levels_logged": False,
+            "last_traded_zone": None
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 TICK MOMENTUM BOT STARTED", tg=True)
+    utils.log("🚀 FIXED LEVEL MOMENTUM BOT STARTED", tg=True)
 
     while True:
 
