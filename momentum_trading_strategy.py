@@ -14,7 +14,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "trend_following_strategy"
+BOT_NAME = "price_trend_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -33,6 +33,32 @@ last_git_push = time.time()
 
 # ================= AUTO GIT =================
 
+def auto_git_push():
+    global last_git_push
+
+    if time.time() - last_git_push < 3600:
+        return
+
+    try:
+        subprocess.run("git add -A", shell=True)
+
+        res = subprocess.run(
+            'git diff --cached --quiet || git commit -m "auto update"',
+            shell=True
+        )
+
+        if res.returncode != 0:
+            utils.log("✅ Changes committed")
+
+        res = subprocess.run("git push origin main", shell=True)
+
+        if res.returncode == 0:
+            utils.log("✅ Git Push Done", tg=True)
+
+        last_git_push = time.time()
+
+    except Exception as e:
+        utils.log(f"Git Error: {e}")
 
 # ================= INIT UTILS =================
 
@@ -41,7 +67,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("trend_following_strategy_bot"),
+    telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -65,17 +91,23 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     else:
         step = 20
 
+    # FIRST TIME SET
     if state.get("base_price") is None:
         state["base_price"] = round(price / step) * step
+        state["levels_logged"] = False
 
     base_price = state["base_price"]
 
-    zone = int((price - base_price) / step)
+    # ✅ FIXED ZONE CALCULATION
+    zone = int(np.floor((price - base_price) / step))
 
     up_level = base_price + (zone + 1) * step
     down_level = base_price + zone * step
 
-    utils.log(f"📊 {symbol} LEVELS → UP: {up_level} | DOWN: {down_level}", tg=True)
+    # ✅ LOG ONLY ON SET / RESET
+    if not state.get("levels_logged"):
+        utils.log(f"📊 {symbol} PRICE: {round(price)} | UP: {up_level} | DOWN: {down_level}", tg=True)
+        state["levels_logged"] = True
 
     # ================= EXIT =================
     if pos:
@@ -83,7 +115,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         pnl = 0
         exit_trade = False
 
-        # STOP LOSS HIT
+        # STOP LOSS
         if pos["side"] == "long" and price <= pos["sl"]:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
@@ -133,6 +165,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             # ✅ RESET LEVELS
             state["base_price"] = round(price / step) * step
             state["last_traded_zone"] = None
+            state["levels_logged"] = False
 
             return
 
@@ -190,7 +223,8 @@ def run():
             "last_exit_candle": None,
             "balance": 5000,
             "base_price": None,
-            "last_traded_zone": None
+            "last_traded_zone": None,
+            "levels_logged": False
         } for s in SYMBOLS
     }
 
@@ -219,7 +253,6 @@ def run():
                     continue
 
                 process_symbol(symbol, df, price, state[symbol], is_new_candle)
-                
 
             time.sleep(3)
 
