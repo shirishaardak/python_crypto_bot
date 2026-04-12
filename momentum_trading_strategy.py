@@ -3,9 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import pandas_ta as ta
 from dotenv import load_dotenv
-import traceback
 import subprocess
 
 from utils import TradingUtils
@@ -14,20 +12,18 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_trading_strategy"
+BOT_NAME = "simple_momentum_bot"
 
 SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
-STOPLOSS = {"BTCUSD": 200}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1h"
 DAYS = 15
 
 MIN_BALANCE = 500
-BALANCE = 500
 
 last_git_push = time.time()
 
@@ -60,7 +56,7 @@ def auto_git_push():
     except Exception as e:
         utils.log(f"Git Error: {e}")
 
-# ================= INIT UTILS =================
+# ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
@@ -72,12 +68,6 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= PAPER ORDER =================
-
-def place_market_order(symbol, side, qty):
-    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
-    return {"success": True}
-
 # ================= STRATEGY =================
 
 def process_symbol(symbol, df, price, state, is_new_candle):
@@ -85,35 +75,26 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     pos = state["position"]
     now = datetime.now()
 
-    # ================= LEVEL SETUP =================
-    if symbol == "BTCUSD":
-        step = 200
-    else:
-        step = 20
+    step = 200 if symbol == "BTCUSD" else 20
 
-    # FIRST TIME SET
-    if state.get("base_price") is None:
-        state["base_price"] = round(price / step) * step
-        state["levels_logged"] = False
+    # ===== DYNAMIC LEVELS =====
+    zone = int(np.floor(price / step))
+    down_level = zone * step
+    up_level = (zone + 1) * step
 
-    base_price = state["base_price"]
-
-    # ✅ FIXED ZONE CALCULATION
-    zone = int(np.floor((price - base_price) / step))
-
-    up_level = base_price + (zone + 1) * step
-    down_level = base_price + zone * step
-
-    # ✅ LOG ONLY ON SET / RESET
-    if not state.get("levels_logged"):
+    if is_new_candle:
         utils.log(f"📊 {symbol} PRICE: {round(price)} | UP: {up_level} | DOWN: {down_level}", tg=True)
-        state["levels_logged"] = True
+
+    # ===== SIMPLE MOMENTUM =====
+    prev_close = df["close"].iloc[-2]
+    momentum_up = price > prev_close
+    momentum_down = price < prev_close
 
     # ================= EXIT =================
     if pos:
 
-        pnl = 0
         exit_trade = False
+        pnl = 0
 
         # STOP LOSS
         if pos["side"] == "long" and price <= pos["sl"]:
@@ -140,9 +121,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
             exit_fee  = utils.commission(price, pos["qty"], symbol)
 
-            total_fee = entry_fee + exit_fee
-            net = pnl - total_fee
-
+            net = pnl - (entry_fee + exit_fee)
             state["balance"] += net
 
             utils.save_trade({
@@ -157,33 +136,28 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+            utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
             utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
             state["position"] = None
 
-            # ✅ RESET LEVELS
-            state["base_price"] = round(price / step) * step
+            # ✅ RESET ZONE AFTER EXIT (KEY FIX)
             state["last_traded_zone"] = None
-            state["levels_logged"] = False
 
             return
 
     # ================= ENTRY =================
     if not pos:
 
-        balance = state["balance"]
-
-        if balance < MIN_BALANCE:
-            utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
+        if state["balance"] < MIN_BALANCE:
             return
 
-        # ❌ ANTI-CHOP FILTER
+        # Anti-chop
         if state.get("last_traded_zone") == zone:
             return
 
-        # BUY BREAKOUT
-        if price >= up_level:
+        # ===== LONG =====
+        if price >= up_level and momentum_up:
 
             state["position"] = {
                 "side": "long",
@@ -195,10 +169,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - step}", tg=True)
+            utils.log(f"🟢 LONG {symbol} @ {price} | SL: {price - step}", tg=True)
 
-        # SELL BREAKDOWN
-        elif price <= down_level:
+        # ===== SHORT =====
+        elif price <= down_level and momentum_down:
 
             state["position"] = {
                 "side": "short",
@@ -210,7 +184,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + step}", tg=True)
+            utils.log(f"🔴 SHORT {symbol} @ {price} | SL: {price + step}", tg=True)
 
 # ================= MAIN =================
 
@@ -220,15 +194,12 @@ def run():
         s: {
             "position": None,
             "last_candle_time": None,
-            "last_exit_candle": None,
             "balance": 5000,
-            "base_price": None,
-            "last_traded_zone": None,
-            "levels_logged": False
+            "last_traded_zone": None
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 LIVE BOT STARTED (PAPER MODE)", tg=True)
+    utils.log("🚀 SIMPLE MOMENTUM BOT STARTED", tg=True)
 
     while True:
 
@@ -237,7 +208,7 @@ def run():
 
                 df = utils.fetch_candles(symbol)
 
-                if df is None or len(df) < 100:
+                if df is None or len(df) < 50:
                     continue
 
                 latest_candle_time = df.index[-2]
@@ -257,7 +228,7 @@ def run():
             time.sleep(3)
 
         except Exception as e:
-            utils.log(f"🚨 Runtime error: {e}", tg=True)
+            utils.log(f"🚨 Error: {e}", tg=True)
             time.sleep(5)
 
 # ================= START =================
