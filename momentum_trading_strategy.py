@@ -1,6 +1,5 @@
 import os
 import time
-import pandas as pd
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
@@ -12,16 +11,13 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "simple_momentum_bot"
+BOT_NAME = "tick_momentum_bot"
 
 SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 50}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 TAKER_FEE = 0.0005
-
-TIMEFRAME = "1h"
-DAYS = 15
 
 MIN_BALANCE = 500
 
@@ -61,8 +57,8 @@ def auto_git_push():
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME,
-    days=DAYS,
+    timeframe="1h",   # not used, but kept for compatibility
+    days=1,
     telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
@@ -70,25 +66,31 @@ utils = TradingUtils(
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, price, state, is_new_candle):
+def process_symbol(symbol, price, state):
 
-    pos = state["position"]
     now = datetime.now()
+    pos = state["position"]
 
     step = 200 if symbol == "BTCUSD" else 20
+
+    # ===== LAST PRICE (momentum base) =====
+    last_price = state.get("last_price")
+
+    if last_price is None:
+        state["last_price"] = price
+        return
+
+    # ===== MOMENTUM =====
+    momentum_up = price > last_price
+    momentum_down = price < last_price
+
+    # ===== SMALL FILTER (avoid noise) =====
+    min_move = abs(price - last_price) > (step * 0.1)
 
     # ===== DYNAMIC LEVELS =====
     zone = int(np.floor(price / step))
     down_level = zone * step
     up_level = (zone + 1) * step
-
-    if is_new_candle:
-        utils.log(f"📊 {symbol} PRICE: {round(price)} | UP: {up_level} | DOWN: {down_level}", tg=True)
-
-    # ===== SIMPLE MOMENTUM =====
-    prev_close = df["close"].iloc[-2]
-    momentum_up = price > prev_close
-    momentum_down = price < prev_close
 
     # ================= EXIT =================
     if pos:
@@ -141,8 +143,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             state["position"] = None
 
-            # ✅ RESET ZONE AFTER EXIT (KEY FIX)
+            # ✅ RESET ZONE AFTER EXIT
             state["last_traded_zone"] = None
+
+            # update last price
+            state["last_price"] = price
 
             return
 
@@ -150,14 +155,16 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     if not pos:
 
         if state["balance"] < MIN_BALANCE:
+            state["last_price"] = price
             return
 
         # Anti-chop
         if state.get("last_traded_zone") == zone:
+            state["last_price"] = price
             return
 
         # ===== LONG =====
-        if price >= up_level and momentum_up:
+        if price >= up_level and momentum_up and min_move:
 
             state["position"] = {
                 "side": "long",
@@ -169,10 +176,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🟢 LONG {symbol} @ {price} | SL: {price - step}", tg=True)
+            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
 
         # ===== SHORT =====
-        elif price <= down_level and momentum_down:
+        elif price <= down_level and momentum_down and min_move:
 
             state["position"] = {
                 "side": "short",
@@ -184,7 +191,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             state["last_traded_zone"] = zone
 
-            utils.log(f"🔴 SHORT {symbol} @ {price} | SL: {price + step}", tg=True)
+            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
+
+    # ✅ ALWAYS UPDATE LAST PRICE
+    state["last_price"] = price
+
 
 # ================= MAIN =================
 
@@ -193,43 +204,31 @@ def run():
     state = {
         s: {
             "position": None,
-            "last_candle_time": None,
             "balance": 5000,
-            "last_traded_zone": None
+            "last_traded_zone": None,
+            "last_price": None
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 SIMPLE MOMENTUM BOT STARTED", tg=True)
+    utils.log("🚀 TICK MOMENTUM BOT STARTED", tg=True)
 
     while True:
 
         try:
             for symbol in SYMBOLS:
 
-                df = utils.fetch_candles(symbol)
-
-                if df is None or len(df) < 50:
-                    continue
-
-                latest_candle_time = df.index[-2]
-
-                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
-
-                if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_candle_time
-
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol], is_new_candle)
+                process_symbol(symbol, price, state[symbol])
 
-            time.sleep(3)
+            time.sleep(1)  # faster loop for tick trading
 
         except Exception as e:
             utils.log(f"🚨 Error: {e}", tg=True)
-            time.sleep(5)
+            time.sleep(2)
 
 # ================= START =================
 
