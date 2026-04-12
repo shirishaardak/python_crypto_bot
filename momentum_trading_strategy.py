@@ -1,9 +1,12 @@
 import os
 import time
+import pandas as pd
+import numpy as np
 from datetime import datetime
+import pandas_ta as ta
 from dotenv import load_dotenv
 import traceback
-import pandas as pd
+import subprocess
 
 from utils import TradingUtils
 
@@ -11,215 +14,220 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_trading_strategy"
+BOT_NAME = "trend_following_strategy"
 
-SYMBOLS = ["BTCUSD","ETHUSD"]
+SYMBOLS = ["BTCUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD":100,"ETHUSD":100}
-CONTRACT_SIZE = {"BTCUSD":0.001,"ETHUSD":0.01}
-
+DEFAULT_CONTRACTS = {"BTCUSD": 50}
+CONTRACT_SIZE = {"BTCUSD": 0.001}
+STOPLOSS = {"BTCUSD": 200}
 TAKER_FEE = 0.0005
-STEP_PCT = 0.003   # 0.3%
 
-EMA_PERIOD = 50
-CHANGE_FILTER = 0.3
-COOLDOWN_SEC = 30
+TIMEFRAME = "1h"
+DAYS = 15
 
-# ================= INIT =================
+MIN_BALANCE = 500
+BALANCE = 800
+
+last_git_push = time.time()
+
+# ================= AUTO GIT =================
+
+
+# ================= INIT UTILS =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1m",
-    days=1,
-    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
+    timeframe=TIMEFRAME,
+    days=DAYS,
+    telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-# ================= LEVEL SET =================
+# ================= PAPER ORDER =================
 
-def set_levels(state, price):
-    state["UP"] = price * (1 + STEP_PCT)
-    state["DOWN"] = price * (1 - STEP_PCT)
+def place_market_order(symbol, side, qty):
+    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
+    return {"success": True}
 
-# ================= TRAILING SL =================
+# ================= STRATEGY =================
 
-def update_trailing_sl(symbol, price, pos):
+def process_symbol(symbol, df, price, state, is_new_candle):
 
-    move_pct = abs(price - pos["entry"]) / pos["entry"]
-    steps = int(move_pct // STEP_PCT)
-
-    if steps <= pos["trail_step"] or steps < 1:
-        return
-
-    pos["trail_step"] = steps
-
-    if pos["side"] == "long":
-        pos["stop"] = pos["entry"] * (1 + (steps - 1) * STEP_PCT)
-    else:
-        pos["stop"] = pos["entry"] * (1 - (steps - 1) * STEP_PCT)
-
-    utils.log(f"{symbol} TSL → {pos['stop']}", tg=True)
-
-# ================= EXIT =================
-
-def exit_trade(symbol, price, pos, state):
-
+    pos = state["position"]
     now = datetime.now()
 
-    pnl = (
-        (price - pos["entry"]) if pos["side"] == "long"
-        else (pos["entry"] - price)
-    ) * CONTRACT_SIZE[symbol] * pos["qty"]
+    # ================= LEVEL SETUP =================
+    if symbol == "BTCUSD":
+        step = 200
+    else:
+        step = 20
 
-    fee = utils.commission(price, pos["qty"], symbol)
-    net_pnl = pnl - fee
+    if state.get("base_price") is None:
+        state["base_price"] = round(price / step) * step
 
-    try:
-        account = utils.get_balance()
-    except:
-        account = {"balance": 0}
+    base_price = state["base_price"]
 
-    utils.save_trade({
-        "symbol": symbol,
-        "side": pos["side"],
-        "entry_time": pos["entry_time"],
-        "exit_time": now,
-        "entry_price": pos["entry"],
-        "exit_price": price,
-        "qty": pos["qty"],
-        "net_pnl": round(net_pnl, 6),
-        "balance": round(account.get("balance", 0), 2)
-    })
+    zone = int((price - base_price) / step)
 
-    utils.log(
-        f"{symbol} EXIT | Side: {pos['side']} | Entry: {pos['entry']} | Exit: {price} | PnL: {net_pnl}",
-        tg=True
-    )
+    up_level = base_price + (zone + 1) * step
+    down_level = base_price + zone * step
 
-    # ✅ FIX: FULL RESET AFTER EXIT
-    state["position"] = None
-    state["cooldown"] = time.time() + COOLDOWN_SEC
-    state["confirm"] = None
-    state["last_price"] = price
+    utils.log(f"📊 {symbol} LEVELS → UP: {up_level} | DOWN: {down_level}", tg=True)
 
-    set_levels(state, price)
+    # ================= EXIT =================
+    if pos:
 
-# ================= CORE LOGIC =================
+        pnl = 0
+        exit_trade = False
 
-def process_symbol(symbol, state):
+        # STOP LOSS HIT
+        if pos["side"] == "long" and price <= pos["sl"]:
+            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_trade = True
 
-    price = utils.fetch_price(symbol)
-    if price is None:
-        return
+        elif pos["side"] == "short" and price >= pos["sl"]:
+            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+            exit_trade = True
 
-    ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
-    try:
-        change = float(ticker["result"]["ltp_change_24h"])
-    except:
-        change = 0
+        # TRAILING SL
+        if pos["side"] == "long":
+            move = price - pos["entry"]
+            if move >= step:
+                pos["sl"] = max(pos["sl"], price - step)
 
-    # FIRST TIME SETUP
-    if state["UP"] is None:
-        set_levels(state, price)
-        state["last_price"] = price
-        state["confirm"] = None   # ✅ safety reset
-        return
+        elif pos["side"] == "short":
+            move = pos["entry"] - price
+            if move >= step:
+                pos["sl"] = min(pos["sl"], price + step)
 
-    # COOLDOWN CHECK
-    if time.time() < state["cooldown"]:
-        return
+        if exit_trade:
+
+            entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
+            exit_fee  = utils.commission(price, pos["qty"], symbol)
+
+            total_fee = entry_fee + exit_fee
+            net = pnl - total_fee
+
+            state["balance"] += net
+
+            utils.save_trade({
+                "symbol": symbol,
+                "side": pos["side"],
+                "entry_price": pos["entry"],
+                "exit_price": price,
+                "qty": pos["qty"],
+                "net_pnl": round(net, 6),
+                "entry_time": pos["entry_time"],
+                "exit_time": now
+            })
+
+            emoji = "🟢" if net > 0 else "🔴"
+            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+            utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+
+            state["position"] = None
+
+            # ✅ RESET LEVELS
+            state["base_price"] = round(price / step) * step
+            state["last_traded_zone"] = None
+
+            return
 
     # ================= ENTRY =================
-    if state["position"] is None:
+    if not pos:
 
-        # -------- LONG --------
-        if (
-            state["last_price"] <= state["UP"] and price > state["UP"] and
-            change > CHANGE_FILTER
-        ):
-            if state["confirm"] != "long":
-                state["confirm"] = "long"
-                return
+        balance = state["balance"]
 
-            state["confirm"] = None
+        if balance < MIN_BALANCE:
+            utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
+            return
+
+        # ❌ ANTI-CHOP FILTER
+        if state.get("last_traded_zone") == zone:
+            return
+
+        # BUY BREAKOUT
+        if price >= up_level:
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "stop": price * (1 - STEP_PCT),
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "trail_step": 0,
-                "entry_time": datetime.now()
+                "entry_time": now,
+                "sl": price - step
             }
 
-            utils.log(f"{symbol} BUY {price}", tg=True)
+            state["last_traded_zone"] = zone
 
-        # -------- SHORT --------
-        elif (
-            state["last_price"] >= state["DOWN"] and price < state["DOWN"] and
-            change < -CHANGE_FILTER
-        ):
-            if state["confirm"] != "short":
-                state["confirm"] = "short"
-                return
+            utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - step}", tg=True)
 
-            state["confirm"] = None
+        # SELL BREAKDOWN
+        elif price <= down_level:
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "stop": price * (1 + STEP_PCT),
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "trail_step": 0,
-                "entry_time": datetime.now()
+                "entry_time": now,
+                "sl": price + step
             }
 
-            utils.log(f"{symbol} SELL {price}", tg=True)
+            state["last_traded_zone"] = zone
 
-    # ================= EXIT + TSL =================
-    else:
-        pos = state["position"]
-
-        update_trailing_sl(symbol, price, pos)
-
-        if pos["side"] == "long" and price <= pos["stop"]:
-            exit_trade(symbol, price, pos, state)
-
-        elif pos["side"] == "short" and price >= pos["stop"]:
-            exit_trade(symbol, price, pos, state)
-
-    state["last_price"] = price
+            utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + step}", tg=True)
 
 # ================= MAIN =================
 
 def run():
 
     state = {
-        s:{
-            "position":None,
-            "UP":None,
-            "DOWN":None,
-            "last_price":None,
-            "cooldown":0,
-            "confirm":None
-        }
-        for s in SYMBOLS
+        s: {
+            "position": None,
+            "last_candle_time": None,
+            "last_exit_candle": None,
+            "balance": 5000,
+            "base_price": None,
+            "last_traded_zone": None
+        } for s in SYMBOLS
     }
 
-    utils.log("🚀 PRO BREAKOUT BOT STARTED", tg=True)
+    utils.log("🚀 LIVE BOT STARTED (PAPER MODE)", tg=True)
 
     while True:
+
         try:
             for symbol in SYMBOLS:
-                process_symbol(symbol, state[symbol])
 
-            time.sleep(2)
+                df = utils.fetch_candles(symbol)
 
-        except Exception:
-            utils.log(traceback.format_exc(), tg=True)
+                if df is None or len(df) < 100:
+                    continue
+
+                latest_candle_time = df.index[-2]
+
+                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
+
+                if is_new_candle:
+                    state[symbol]["last_candle_time"] = latest_candle_time
+
+                price = utils.fetch_price(symbol)
+
+                if price is None:
+                    continue
+
+                process_symbol(symbol, df, price, state[symbol], is_new_candle)
+                
+
+            time.sleep(3)
+
+        except Exception as e:
+            utils.log(f"🚨 Runtime error: {e}", tg=True)
             time.sleep(5)
+
+# ================= START =================
 
 if __name__ == "__main__":
     run()
