@@ -76,7 +76,6 @@ def exit_trade(symbol, price, pos, state):
     fee = utils.commission(price, pos["qty"], symbol)
     net_pnl = pnl - fee
 
-    # ✅ GET ACCOUNT BALANCE (make sure utils has this)
     try:
         account = utils.get_balance()
     except:
@@ -99,8 +98,11 @@ def exit_trade(symbol, price, pos, state):
         tg=True
     )
 
+    # ✅ FIX: FULL RESET AFTER EXIT
     state["position"] = None
     state["cooldown"] = time.time() + COOLDOWN_SEC
+    state["confirm"] = None
+    state["last_price"] = price
 
     set_levels(state, price)
 
@@ -122,6 +124,7 @@ def process_symbol(symbol, state):
     if state["UP"] is None:
         set_levels(state, price)
         state["last_price"] = price
+        state["confirm"] = None   # ✅ safety reset
         return
 
     # COOLDOWN CHECK
