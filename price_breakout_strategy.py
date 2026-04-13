@@ -1,6 +1,5 @@
 import os
 import time
-import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -17,9 +16,11 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-BREAKOUT = 0.3      # % breakout
+BREAKOUT = 0.3      # %
 STOP_BUFFER = 0.2   # % initial SL
-TSL = 0.1           # % trailing SL
+
+TRAIL_START = 0.25  # start trailing after 0.25%
+TRAIL_STEP = 0.25   # step every 0.25%
 
 TAKER_FEE = 0.0005
 
@@ -28,14 +29,14 @@ DAYS = 15
 
 MIN_BALANCE = 5000
 
-# ================= INIT UTILS =================
+# ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
+    telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -47,13 +48,13 @@ def get_levels(df):
         return None, None, None
 
     prev_close = df.iloc[-2]["Close"]
-
     breakout_value = prev_close * (BREAKOUT / 100)
 
-    buy_level = prev_close + breakout_value
-    sell_level = prev_close - breakout_value
-
-    return prev_close, buy_level, sell_level
+    return (
+        prev_close,
+        prev_close + breakout_value,
+        prev_close - breakout_value
+    )
 
 # ================= STRATEGY =================
 
@@ -72,20 +73,36 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         print(f"{symbol} | Close: {round(prev_close,2)} | Buy: {round(buy_level,2)} | Sell: {round(sell_level,2)}")
         state["last_prev_close"] = prev_close
 
-    # ================= TRAILING SL =================
+    # ================= STEP TRAILING =================
     if pos:
 
         if pos["side"] == "long":
-            new_sl = price - (price * TSL / 100)
-            if new_sl > pos["sl"]:
-                pos["sl"] = new_sl
-                utils.log(f"🔁 TSL Updated {symbol} SL: {round(pos['sl'],2)}")
+
+            move_pct = ((price - pos["entry"]) / pos["entry"]) * 100
+            next_step = TRAIL_START + (pos["trail_step"] * TRAIL_STEP)
+
+            if move_pct >= next_step:
+
+                new_sl = pos["entry"] + ((next_step - TRAIL_STEP) * pos["entry"] / 100)
+
+                if new_sl > pos["sl"]:
+                    pos["sl"] = new_sl
+                    pos["trail_step"] += 1
+                    utils.log(f"🔁 STEP TSL LONG {symbol} SL: {round(pos['sl'],2)}")
 
         elif pos["side"] == "short":
-            new_sl = price + (price * TSL / 100)
-            if new_sl < pos["sl"]:
-                pos["sl"] = new_sl
-                utils.log(f"🔁 TSL Updated {symbol} SL: {round(pos['sl'],2)}")
+
+            move_pct = ((pos["entry"] - price) / pos["entry"]) * 100
+            next_step = TRAIL_START + (pos["trail_step"] * TRAIL_STEP)
+
+            if move_pct >= next_step:
+
+                new_sl = pos["entry"] - ((next_step - TRAIL_STEP) * pos["entry"] / 100)
+
+                if new_sl < pos["sl"]:
+                    pos["sl"] = new_sl
+                    pos["trail_step"] += 1
+                    utils.log(f"🔁 STEP TSL SHORT {symbol} SL: {round(pos['sl'],2)}")
 
     # ================= EXIT =================
     if pos:
@@ -107,7 +124,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             exit_fee  = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
-
             state["balance"] += net
 
             utils.save_trade({
@@ -137,13 +153,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if state.get("last_trade_day") == today:
             return
 
-        balance = state["balance"]
-
-        if balance < MIN_BALANCE:
-            utils.log(f"⚠️ Balance low: {balance}")
+        if state["balance"] < MIN_BALANCE:
+            utils.log(f"⚠️ Balance low: {state['balance']}")
             return
 
-        # BUY BREAKOUT
+        # BUY
         if price > buy_level:
 
             sl = price - (price * STOP_BUFFER / 100)
@@ -153,12 +167,13 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": sl
+                "sl": sl,
+                "trail_step": 0
             }
 
             utils.log(f"🟢 BUY {symbol} @ {price} | SL: {round(sl,2)}", tg=True)
 
-        # SELL BREAKDOWN
+        # SELL
         elif price < sell_level:
 
             sl = price + (price * STOP_BUFFER / 100)
@@ -168,7 +183,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": sl
+                "sl": sl,
+                "trail_step": 0
             }
 
             utils.log(f"🔴 SELL {symbol} @ {price} | SL: {round(sl,2)}", tg=True)
@@ -187,10 +203,9 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 BOT STARTED (PRO BREAKOUT MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (STEP TRAILING MODE)", tg=True)
 
     while True:
-
         try:
             for symbol in SYMBOLS:
 
