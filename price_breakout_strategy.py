@@ -9,18 +9,14 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "price_breakout_strategy"
+BOT_NAME = "trend_follow_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-BREAKOUT = 0.3      # %
-STOP_BUFFER = 0.2   # % initial SL
-
-TRAIL_START = 0.25  # start trailing after 0.25%
-TRAIL_STEP = 0.25   # step every 0.25%
+REVERSAL = 1.0  # % reversal to exit
 
 TAKER_FEE = 0.0005
 
@@ -41,21 +37,6 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= LEVELS =================
-
-def get_levels(df):
-    if df is None or len(df) < 3:
-        return None, None, None
-
-    prev_close = df.iloc[-2]["Close"]
-    breakout_value = prev_close * (BREAKOUT / 100)
-
-    return (
-        prev_close,
-        prev_close + breakout_value,
-        prev_close - breakout_value
-    )
-
 # ================= STRATEGY =================
 
 def process_symbol(symbol, df, price, state, is_new_candle):
@@ -63,60 +44,47 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     pos = state["position"]
     now = datetime.now()
 
-    prev_close, buy_level, sell_level = get_levels(df)
-
-    if prev_close is None:
+    if df is None or len(df) < 3:
         return
 
-    # Print levels only when changed
+    prev_close = df.iloc[-2]["Close"]
+
+    # Print once per day
     if state.get("last_prev_close") != prev_close:
-        print(f"{symbol} | Close: {round(prev_close,2)} | Buy: {round(buy_level,2)} | Sell: {round(sell_level,2)}")
+        print(f"{symbol} | Prev Close: {round(prev_close,2)}")
         state["last_prev_close"] = prev_close
 
-    # ================= STEP TRAILING =================
-    if pos:
-
-        if pos["side"] == "long":
-
-            move_pct = ((price - pos["entry"]) / pos["entry"]) * 100
-            next_step = TRAIL_START + (pos["trail_step"] * TRAIL_STEP)
-
-            if move_pct >= next_step:
-
-                new_sl = pos["entry"] + ((next_step - TRAIL_STEP) * pos["entry"] / 100)
-
-                if new_sl > pos["sl"]:
-                    pos["sl"] = new_sl
-                    pos["trail_step"] += 1
-                    utils.log(f"🔁 STEP TSL LONG {symbol} SL: {round(pos['sl'],2)}")
-
-        elif pos["side"] == "short":
-
-            move_pct = ((pos["entry"] - price) / pos["entry"]) * 100
-            next_step = TRAIL_START + (pos["trail_step"] * TRAIL_STEP)
-
-            if move_pct >= next_step:
-
-                new_sl = pos["entry"] - ((next_step - TRAIL_STEP) * pos["entry"] / 100)
-
-                if new_sl < pos["sl"]:
-                    pos["sl"] = new_sl
-                    pos["trail_step"] += 1
-                    utils.log(f"🔁 STEP TSL SHORT {symbol} SL: {round(pos['sl'],2)}")
-
-    # ================= EXIT =================
+    # ================= EXIT (TREND REVERSAL) =================
     if pos:
 
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price <= pos["sl"]:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+        if pos["side"] == "long":
 
-        elif pos["side"] == "short" and price >= pos["sl"]:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+            # update highest price
+            if price > pos["highest_price"]:
+                pos["highest_price"] = price
+
+            # calculate drawdown
+            drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
+
+            if drawdown >= REVERSAL:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
+
+        elif pos["side"] == "short":
+
+            # update lowest price
+            if price < pos["lowest_price"]:
+                pos["lowest_price"] = price
+
+            # calculate bounce
+            drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
+
+            if drawup >= REVERSAL:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
         if exit_trade:
 
@@ -145,7 +113,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             state["last_trade_day"] = now.date()
             return
 
-    # ================= ENTRY =================
+    # ================= ENTRY (TREND FOLLOW) =================
     if not pos and is_new_candle:
 
         today = now.date()
@@ -157,37 +125,31 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"⚠️ Balance low: {state['balance']}")
             return
 
-        # BUY
-        if price > buy_level:
-
-            sl = price - (price * STOP_BUFFER / 100)
+        # BUY if price above previous close
+        if price > prev_close:
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": sl,
-                "trail_step": 0
+                "highest_price": price
             }
 
-            utils.log(f"🟢 BUY {symbol} @ {price} | SL: {round(sl,2)}", tg=True)
+            utils.log(f"🟢 BUY {symbol} @ {price}", tg=True)
 
-        # SELL
-        elif price < sell_level:
-
-            sl = price + (price * STOP_BUFFER / 100)
+        # SELL if price below previous close
+        elif price < prev_close:
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": sl,
-                "trail_step": 0
+                "lowest_price": price
             }
 
-            utils.log(f"🔴 SELL {symbol} @ {price} | SL: {round(sl,2)}", tg=True)
+            utils.log(f"🔴 SELL {symbol} @ {price}", tg=True)
 
 # ================= MAIN =================
 
@@ -203,7 +165,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 BOT STARTED (STEP TRAILING MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (TREND FOLLOW MODE)", tg=True)
 
     while True:
         try:
