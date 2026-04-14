@@ -1,6 +1,9 @@
 import os
 import time
+import pandas as pd
+import numpy as np
 from datetime import datetime
+import pandas_ta as ta
 from dotenv import load_dotenv
 import subprocess
 
@@ -10,23 +13,23 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_reversal_dynamic_step"
+BOT_NAME = "scalp_5m_strategy"
 
-SYMBOLS = ["BTCUSD", "ETHUSD"]
+SYMBOLS = ["BTCUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
-CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
+DEFAULT_CONTRACTS = {"BTCUSD": 100}
+CONTRACT_SIZE = {"BTCUSD": 0.001}
+
+STOPLOSS = {"BTCUSD": 80}   # tight SL
 TAKER_FEE = 0.0005
 
-MIN_BALANCE = 500
+TIMEFRAME = "5m"
+DAYS = 3
 
-REVERSAL = 0.5   # % reversal exit
-USE_HARD_SL = True
-
-MIN_STEP = 50    # minimum step to avoid noise
+MIN_BALANCE = 5000
+BALANCE = 800
 
 last_git_push = time.time()
-
 
 
 # ================= INIT =================
@@ -34,105 +37,73 @@ last_git_push = time.time()
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1h",
-    days=1,
+    timeframe=TIMEFRAME,
+    days=DAYS,
     telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
+# ================= PAPER ORDER =================
+
+def place_market_order(symbol, side, qty):
+    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
+    return {"success": True}
+
 # ================= STRATEGY =================
 
-def process_symbol(symbol, price, state):
+def process_symbol(symbol, df, price, state, is_new_candle):
 
-    now = datetime.now()
+    # ===== INDICATORS =====
+    df["ema9"] = ta.ema(df["Close"], length=9)
+    df["ema21"] = ta.ema(df["Close"], length=21)
+    df["rsi"] = ta.rsi(df["Close"], length=7)
+    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+
+    last = df.iloc[-2]
+    prev = df.iloc[-3]
+
     pos = state["position"]
-
-    # ===== DYNAMIC STEP (0.2%) =====
-    step = max(price * 0.002, MIN_STEP)
-    step = round(step, 2)
-
-    buffer = step * 0.2
-
-    # ===== BASE PRICE =====
-    if state.get("base_price") is None:
-        state["base_price"] = round(price / step) * step
-        state["levels_logged"] = False
-
-    base = state["base_price"]
-
-    up_level = base + step
-    down_level = base - step
-
-    if not state.get("levels_logged"):
-        utils.log(f"📊 BASE {symbol}: {base} | UP: {up_level} | DOWN: {down_level}", tg=True)
-        state["levels_logged"] = True
-
-    last_price = state.get("last_price")
-
-    if last_price is None:
-        state["last_price"] = price
-        return
-
-    # ===== MOMENTUM =====
-    momentum_up = price > last_price + (step * 0.1)
-    momentum_down = price < last_price - (step * 0.1)
-
-    min_move = abs(price - last_price) > (step * 0.2)
-
-    # ===== COOLDOWN =====
-    if time.time() - state.get("cooldown", 0) < 300:
-        state["last_price"] = price
-        return
+    now = datetime.now()
 
     # ================= EXIT =================
     if pos:
 
         exit_trade = False
-        pnl = 0
 
-        # ===== HARD SL =====
-        if USE_HARD_SL:
-            if pos["side"] == "long" and price <= pos["sl"]:
-                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+        # SL HIT
+        if pos["side"] == "long" and price <= pos["sl"]:
+            exit_trade = True
 
-            elif pos["side"] == "short" and price >= pos["sl"]:
-                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-                exit_trade = True
+        elif pos["side"] == "short" and price >= pos["sl"]:
+            exit_trade = True
 
-        # ===== REVERSAL EXIT =====
-        if not exit_trade:
+        # QUICK TP
+        elif pos["side"] == "long" and price >= pos["entry"] + 150:
+            exit_trade = True
+
+        elif pos["side"] == "short" and price <= pos["entry"] - 150:
+            exit_trade = True
+
+        # TRAILING SL
+        if pos["side"] == "long" and price > pos["entry"] + 60:
+            pos["sl"] = max(pos["sl"], price - 40)
+
+        elif pos["side"] == "short" and price < pos["entry"] - 60:
+            pos["sl"] = min(pos["sl"], price + 40)
+
+        if exit_trade:
 
             if pos["side"] == "long":
-
-                if price > pos["highest_price"]:
-                    pos["highest_price"] = price
-
-                drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
-
-                if drawdown >= REVERSAL:
-                    pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-                    exit_trade = True
-
-            elif pos["side"] == "short":
-
-                if price < pos["lowest_price"]:
-                    pos["lowest_price"] = price
-
-                drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
-
-                if drawup >= REVERSAL:
-                    pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-                    exit_trade = True
-
-        # ===== EXECUTE EXIT =====
-        if exit_trade:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+            else:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
 
             entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
             exit_fee  = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
+
             state["balance"] += net
 
             utils.save_trade({
@@ -150,51 +121,60 @@ def process_symbol(symbol, price, state):
             utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
             utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
-            # RESET STATE
             state["position"] = None
-            state["base_price"] = round(price / step) * step
-            state["levels_logged"] = False
-            state["cooldown"] = time.time()
+            state["last_exit_candle"] = df.index[-1]
 
             return
 
     # ================= ENTRY =================
-    if not pos:
+    if not pos and is_new_candle:
 
-        if state["balance"] < MIN_BALANCE:
-            state["last_price"] = price
+        if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        # ===== LONG =====
-        if price >= up_level + buffer and momentum_up and min_move:
+        balance = state["balance"]
+
+        if balance < BALANCE:
+            utils.log(f"⚠️ Balance low: {balance}")
+            return
+
+        # ===== LONG SCALP =====
+        if (
+            last["ema9"] > last["ema21"] and
+            last["Close"] > last["vwap"] and
+            prev["Close"] < prev["ema9"] and
+            last["Close"] > last["ema9"] and
+            last["rsi"] > 50
+        ):
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": price - step,
-                "highest_price": price
+                "sl": price - STOPLOSS[symbol]
             }
 
-            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
+            utils.log(f"⚡ LONG {symbol} @ {price}", tg=True)
 
-        # ===== SHORT =====
-        elif price <= down_level - buffer and momentum_down and min_move:
+        # ===== SHORT SCALP =====
+        elif (
+            last["ema9"] < last["ema21"] and
+            last["Close"] < last["vwap"] and
+            prev["Close"] > prev["ema9"] and
+            last["Close"] < last["ema9"] and
+            last["rsi"] < 50
+        ):
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": price + step,
-                "lowest_price": price
+                "sl": price + STOPLOSS[symbol]
             }
 
-            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
-
-    state["last_price"] = price
-
+            utils.log(f"⚡ SHORT {symbol} @ {price}", tg=True)
 
 # ================= MAIN =================
 
@@ -203,34 +183,43 @@ def run():
     state = {
         s: {
             "position": None,
-            "balance": 5000,
-            "last_price": None,
-            "base_price": None,
-            "levels_logged": False,
-            "cooldown": 0
+            "last_candle_time": None,
+            "last_exit_candle": None,
+            "balance": 5000
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 DYNAMIC STEP REVERSAL BOT STARTED", tg=True)
+    utils.log("🚀 SCALPING BOT STARTED (5M)", tg=True)
 
     while True:
 
         try:
             for symbol in SYMBOLS:
 
+                df = utils.fetch_candles(symbol)
+
+                if df is None or len(df) < 50:
+                    continue
+
+                latest_candle_time = df.index[-2]
+
+                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
+
+                if is_new_candle:
+                    state[symbol]["last_candle_time"] = latest_candle_time
+
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, price, state[symbol])
+                process_symbol(symbol, df, price, state[symbol], is_new_candle)
 
-            time.sleep(1)
-
-        except Exception as e:
-            utils.log(f"🚨 Error: {e}", tg=True)
             time.sleep(2)
 
+        except Exception as e:
+            utils.log(f"🚨 Runtime error: {e}", tg=True)
+            time.sleep(5)
 
 # ================= START =================
 
