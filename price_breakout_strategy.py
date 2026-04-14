@@ -58,7 +58,7 @@ def calculate_qty(symbol, price, balance):
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, price, state, is_new_candle):
+def process_symbol(symbol, df, price, state):
 
     sym_state = state["symbols"][symbol]
     pos = sym_state["position"]
@@ -133,10 +133,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
     # ================= ENTRY =================
-    if not pos and is_new_candle:
+    if not pos:
 
         today = now.date()
 
+        # ✅ Only 1 trade per day per symbol
         if sym_state.get("last_trade_day") == today:
             return
 
@@ -144,9 +145,12 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
             return
 
-        # ✅ Breakout filter
         long_level = prev_close * (1 + BUFFER)
         short_level = prev_close * (1 - BUFFER)
+
+        # 🔍 DEBUG (you can remove later)
+        print(f"{symbol} | Price: {price}")
+        print(f"{symbol} | Long Level: {round(long_level,2)} | Short Level: {round(short_level,2)}")
 
         qty = calculate_qty(symbol, price, state["balance"])
 
@@ -184,14 +188,13 @@ def run():
         "symbols": {
             s: {
                 "position": None,
-                "last_candle_time": None,
                 "last_trade_day": None,
                 "last_prev_close": None
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 BOT STARTED (RISK MANAGED MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (FIXED BREAKOUT MODE)", tg=True)
 
     while True:
         try:
@@ -202,21 +205,12 @@ def run():
                 if df is None or len(df) < 10:
                     continue
 
-                sym_state = state["symbols"][symbol]
-
-                latest_candle_time = df.index[-2]
-
-                is_new_candle = sym_state["last_candle_time"] != latest_candle_time
-
-                if is_new_candle:
-                    sym_state["last_candle_time"] = latest_candle_time
-
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state, is_new_candle)
+                process_symbol(symbol, df, price, state)
 
             time.sleep(3)
 
