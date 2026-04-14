@@ -5,7 +5,6 @@ import numpy as np
 from datetime import datetime
 import pandas_ta as ta
 from dotenv import load_dotenv
-import subprocess
 
 from utils import TradingUtils
 
@@ -20,17 +19,13 @@ SYMBOLS = ["BTCUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 
-STOPLOSS = {"BTCUSD": 80}   # tight SL
+STOPLOSS = {"BTCUSD": 80}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "5m"
 DAYS = 3
 
 MIN_BALANCE = 5000
-BALANCE = 800
-
-last_git_push = time.time()
-
 
 # ================= INIT =================
 
@@ -59,6 +54,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     df["ema21"] = ta.ema(df["Close"], length=21)
     df["rsi"] = ta.rsi(df["Close"], length=7)
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["atr"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
 
     last = df.iloc[-2]
     prev = df.iloc[-3]
@@ -71,26 +67,54 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         exit_trade = False
 
-        # SL HIT
+        # ===== PROFIT CALC =====
+        if pos["side"] == "long":
+            profit = price - pos["entry"]
+        else:
+            profit = pos["entry"] - price
+
+        # ===== SMART TRAILING SL =====
+        if pos["side"] == "long":
+
+            if profit > 50:
+                pos["sl"] = max(pos["sl"], pos["entry"] + 10)
+
+            if profit > 100:
+                pos["sl"] = max(pos["sl"], pos["entry"] + 50)
+
+            if profit > 150:
+                pos["sl"] = max(pos["sl"], pos["entry"] + 100)
+
+            if profit > 200:
+                pos["sl"] = max(pos["sl"], price - 40)
+
+        elif pos["side"] == "short":
+
+            if profit > 50:
+                pos["sl"] = min(pos["sl"], pos["entry"] - 10)
+
+            if profit > 100:
+                pos["sl"] = min(pos["sl"], pos["entry"] - 50)
+
+            if profit > 150:
+                pos["sl"] = min(pos["sl"], pos["entry"] - 100)
+
+            if profit > 200:
+                pos["sl"] = min(pos["sl"], price + 40)
+
+        # ===== SL HIT =====
         if pos["side"] == "long" and price <= pos["sl"]:
             exit_trade = True
 
         elif pos["side"] == "short" and price >= pos["sl"]:
             exit_trade = True
 
-        # QUICK TP
-        elif pos["side"] == "long" and price >= pos["entry"] + 150:
+        # ===== OPTIONAL HARD TP =====
+        elif pos["side"] == "long" and price >= pos["entry"] + 300:
             exit_trade = True
 
-        elif pos["side"] == "short" and price <= pos["entry"] - 150:
+        elif pos["side"] == "short" and price <= pos["entry"] - 300:
             exit_trade = True
-
-        # TRAILING SL
-        if pos["side"] == "long" and price > pos["entry"] + 60:
-            pos["sl"] = max(pos["sl"], price - 40)
-
-        elif pos["side"] == "short" and price < pos["entry"] - 60:
-            pos["sl"] = min(pos["sl"], price + 40)
 
         if exit_trade:
 
@@ -134,11 +158,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         balance = state["balance"]
 
-        if balance < BALANCE:
+        if balance < MIN_BALANCE:
             utils.log(f"⚠️ Balance low: {balance}")
             return
 
-        # ===== LONG SCALP =====
+        # ===== LONG =====
         if (
             last["ema9"] > last["ema21"] and
             last["Close"] > last["vwap"] and
@@ -157,7 +181,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             utils.log(f"⚡ LONG {symbol} @ {price}", tg=True)
 
-        # ===== SHORT SCALP =====
+        # ===== SHORT =====
         elif (
             last["ema9"] < last["ema21"] and
             last["Close"] < last["vwap"] and
@@ -189,7 +213,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 SCALPING BOT STARTED (5M)", tg=True)
+    utils.log("🚀 SCALPING BOT STARTED (SMART TSL)", tg=True)
 
     while True:
 
