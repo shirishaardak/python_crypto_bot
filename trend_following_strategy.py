@@ -9,7 +9,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "pct_24h_cross_bot_step_sl"
+BOT_NAME = "trend_following_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 

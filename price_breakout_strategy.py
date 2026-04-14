@@ -9,7 +9,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "trend_follow_strategy"
+BOT_NAME = "price_breakout_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -41,7 +41,8 @@ utils = TradingUtils(
 
 def process_symbol(symbol, df, price, state, is_new_candle):
 
-    pos = state["position"]
+    sym_state = state["symbols"][symbol]
+    pos = sym_state["position"]
     now = datetime.now()
 
     if df is None or len(df) < 3:
@@ -50,11 +51,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     prev_close = df.iloc[-2]["Close"]
 
     # Print once per day
-    if state.get("last_prev_close") != prev_close:
+    if sym_state.get("last_prev_close") != prev_close:
         print(f"{symbol} | Prev Close: {round(prev_close,2)}")
-        state["last_prev_close"] = prev_close
+        sym_state["last_prev_close"] = prev_close
 
-    # ================= EXIT (TREND REVERSAL) =================
+    # ================= EXIT =================
     if pos:
 
         exit_trade = False
@@ -62,11 +63,9 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         if pos["side"] == "long":
 
-            # update highest price
             if price > pos["highest_price"]:
                 pos["highest_price"] = price
 
-            # calculate drawdown
             drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
 
             if drawdown >= REVERSAL:
@@ -75,11 +74,9 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         elif pos["side"] == "short":
 
-            # update lowest price
             if price < pos["lowest_price"]:
                 pos["lowest_price"] = price
 
-            # calculate bounce
             drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
 
             if drawup >= REVERSAL:
@@ -92,6 +89,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             exit_fee  = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
+
+            # ✅ UPDATE GLOBAL BALANCE
             state["balance"] += net
 
             utils.save_trade({
@@ -109,26 +108,26 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
             utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
-            state["position"] = None
-            state["last_trade_day"] = now.date()
+            sym_state["position"] = None
+            sym_state["last_trade_day"] = now.date()
             return
 
-    # ================= ENTRY (TREND FOLLOW) =================
+    # ================= ENTRY =================
     if not pos and is_new_candle:
 
         today = now.date()
 
-        if state.get("last_trade_day") == today:
+        if sym_state.get("last_trade_day") == today:
             return
 
+        # ✅ CHECK GLOBAL BALANCE
         if state["balance"] < MIN_BALANCE:
-            utils.log(f"⚠️ Balance low: {state['balance']}")
+            utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
             return
 
-        # BUY if price above previous close
         if price > prev_close:
 
-            state["position"] = {
+            sym_state["position"] = {
                 "side": "long",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -138,10 +137,9 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             utils.log(f"🟢 BUY {symbol} @ {price}", tg=True)
 
-        # SELL if price below previous close
         elif price < prev_close:
 
-            state["position"] = {
+            sym_state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
@@ -156,13 +154,15 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 def run():
 
     state = {
-        s: {
-            "position": None,
-            "last_candle_time": None,
-            "last_trade_day": None,
-            "last_prev_close": None,
-            "balance": 5000
-        } for s in SYMBOLS
+        "balance": 5000,  # ✅ GLOBAL BALANCE
+        "symbols": {
+            s: {
+                "position": None,
+                "last_candle_time": None,
+                "last_trade_day": None,
+                "last_prev_close": None
+            } for s in SYMBOLS
+        }
     }
 
     utils.log("🚀 BOT STARTED (TREND FOLLOW MODE)", tg=True)
@@ -176,19 +176,21 @@ def run():
                 if df is None or len(df) < 10:
                     continue
 
+                sym_state = state["symbols"][symbol]
+
                 latest_candle_time = df.index[-2]
 
-                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
+                is_new_candle = sym_state["last_candle_time"] != latest_candle_time
 
                 if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_candle_time
+                    sym_state["last_candle_time"] = latest_candle_time
 
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol], is_new_candle)
+                process_symbol(symbol, df, price, state, is_new_candle)
 
             time.sleep(3)
 
