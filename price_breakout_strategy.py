@@ -13,17 +13,23 @@ BOT_NAME = "price_breakout_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-REVERSAL = 1.0  # % reversal to exit
+# ✅ Risk Management
+RISK_PER_TRADE = 0.01  # 1% risk per trade
+
+# ✅ Reversal (trailing stop %)
+REVERSAL = {"BTCUSD": 2.5, "ETHUSD": 3.0}
+
+# ✅ Entry buffer (avoid fake breakout)
+BUFFER = 0.002  # 0.2%
 
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1d"
 DAYS = 15
 
-MIN_BALANCE = 5000
+MIN_BALANCE = 10000
 
 # ================= INIT =================
 
@@ -36,6 +42,19 @@ utils = TradingUtils(
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
+
+# ================= POSITION SIZING =================
+
+def calculate_qty(symbol, price, balance):
+    risk_amount = balance * RISK_PER_TRADE
+    reversal_percent = REVERSAL[symbol]
+
+    stop_distance = price * (reversal_percent / 100)
+
+    qty = risk_amount / (stop_distance * CONTRACT_SIZE[symbol])
+
+    return max(1, int(qty))
+
 
 # ================= STRATEGY =================
 
@@ -55,6 +74,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         print(f"{symbol} | Prev Close: {round(prev_close,2)}")
         sym_state["last_prev_close"] = prev_close
 
+    reversal = REVERSAL[symbol]
+
     # ================= EXIT =================
     if pos:
 
@@ -68,7 +89,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
 
-            if drawdown >= REVERSAL:
+            if drawdown >= reversal:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
@@ -79,7 +100,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
 
-            if drawup >= REVERSAL:
+            if drawup >= reversal:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
@@ -90,7 +111,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             net = pnl - (entry_fee + exit_fee)
 
-            # ✅ UPDATE GLOBAL BALANCE
             state["balance"] += net
 
             utils.save_trade({
@@ -120,41 +140,47 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if sym_state.get("last_trade_day") == today:
             return
 
-        # ✅ CHECK GLOBAL BALANCE
         if state["balance"] < MIN_BALANCE:
             utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
             return
 
-        if price > prev_close:
+        # ✅ Breakout filter
+        long_level = prev_close * (1 + BUFFER)
+        short_level = prev_close * (1 - BUFFER)
+
+        qty = calculate_qty(symbol, price, state["balance"])
+
+        if price > long_level:
 
             sym_state["position"] = {
                 "side": "long",
                 "entry": price,
-                "qty": DEFAULT_CONTRACTS[symbol],
+                "qty": qty,
                 "entry_time": now,
                 "highest_price": price
             }
 
-            utils.log(f"🟢 BUY {symbol} @ {price}", tg=True)
+            utils.log(f"🟢 BUY {symbol} @ {price} | Qty: {qty}", tg=True)
 
-        elif price < prev_close:
+        elif price < short_level:
 
             sym_state["position"] = {
                 "side": "short",
                 "entry": price,
-                "qty": DEFAULT_CONTRACTS[symbol],
+                "qty": qty,
                 "entry_time": now,
                 "lowest_price": price
             }
 
-            utils.log(f"🔴 SELL {symbol} @ {price}", tg=True)
+            utils.log(f"🔴 SELL {symbol} @ {price} | Qty: {qty}", tg=True)
+
 
 # ================= MAIN =================
 
 def run():
 
     state = {
-        "balance": 5000,  # ✅ GLOBAL BALANCE
+        "balance": 5000,
         "symbols": {
             s: {
                 "position": None,
@@ -165,7 +191,7 @@ def run():
         }
     }
 
-    utils.log("🚀 BOT STARTED (TREND FOLLOW MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (RISK MANAGED MODE)", tg=True)
 
     while True:
         try:
@@ -197,6 +223,7 @@ def run():
         except Exception as e:
             utils.log(f"🚨 Runtime error: {e}", tg=True)
             time.sleep(5)
+
 
 # ================= START =================
 
