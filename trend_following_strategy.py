@@ -20,7 +20,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 TAKER_FEE = 0.0005
 
-STEP = 0.30
+STEP = 0.35
 COOLDOWN_SEC = 30
 
 # ================= INIT =================
@@ -46,11 +46,11 @@ def get_24h_change(symbol):
 
 
 def is_cross_up(prev, curr, level):
-    return prev is not None and curr >= level
+    return prev is not None and prev < level and curr >= level
 
 
 def is_cross_down(prev, curr, level):
-    return prev is not None and curr <= level
+    return prev is not None and prev > level and curr <= level
 
 
 # ================= STRATEGY =================
