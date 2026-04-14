@@ -29,7 +29,7 @@ TAKER_FEE = 0.0005
 TIMEFRAME = "1d"
 DAYS = 15
 
-MIN_BALANCE = 10000
+MIN_BALANCE = 1000
 
 # ================= INIT =================
 
@@ -180,7 +180,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 def run():
 
     state = {
-        "balance": 5000,
+        "balance": 10000,
         "symbols": {
             s: {
                 "position": None,
