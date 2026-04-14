@@ -10,46 +10,24 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "momentum_trading_strategy"
+BOT_NAME = "momentum_reversal_dynamic_step"
 
-SYMBOLS = ["BTCUSD"]
+SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 50}
-CONTRACT_SIZE = {"BTCUSD": 0.001}
+DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
 MIN_BALANCE = 500
 
+REVERSAL = 0.5   # % reversal exit
+USE_HARD_SL = True
+
+MIN_STEP = 50    # minimum step to avoid noise
+
 last_git_push = time.time()
 
-# ================= AUTO GIT =================
 
-def auto_git_push():
-    global last_git_push
-
-    if time.time() - last_git_push < 3600:
-        return
-
-    try:
-        subprocess.run("git add -A", shell=True)
-
-        res = subprocess.run(
-            'git diff --cached --quiet || git commit -m "auto update"',
-            shell=True
-        )
-
-        if res.returncode != 0:
-            utils.log("✅ Changes committed")
-
-        res = subprocess.run("git push origin main", shell=True)
-
-        if res.returncode == 0:
-            utils.log("✅ Git Push Done", tg=True)
-
-        last_git_push = time.time()
-
-    except Exception as e:
-        utils.log(f"Git Error: {e}")
 
 # ================= INIT =================
 
@@ -70,21 +48,22 @@ def process_symbol(symbol, price, state):
     now = datetime.now()
     pos = state["position"]
 
-    step = 200 if symbol == "BTCUSD" else 20
+    # ===== DYNAMIC STEP (0.2%) =====
+    step = max(price * 0.002, MIN_STEP)
+    step = round(step, 2)
+
     buffer = step * 0.2
 
-    # ===== BASE PRICE SET =====
+    # ===== BASE PRICE =====
     if state.get("base_price") is None:
         state["base_price"] = round(price / step) * step
         state["levels_logged"] = False
 
     base = state["base_price"]
 
-    # ===== LEVELS =====
     up_level = base + step
     down_level = base - step
 
-    # ===== LOG LEVELS =====
     if not state.get("levels_logged"):
         utils.log(f"📊 BASE {symbol}: {base} | UP: {up_level} | DOWN: {down_level}", tg=True)
         state["levels_logged"] = True
@@ -95,12 +74,11 @@ def process_symbol(symbol, price, state):
         state["last_price"] = price
         return
 
-    # ===== IMPROVED MOMENTUM =====
-    momentum_up = price > last_price + (step * 0.2)
-    momentum_down = price < last_price - (step * 0.2)
+    # ===== MOMENTUM =====
+    momentum_up = price > last_price + (step * 0.1)
+    momentum_down = price < last_price - (step * 0.1)
 
-    # ===== STRONGER MOVE FILTER =====
-    min_move = abs(price - last_price) > (step * 0.3)
+    min_move = abs(price - last_price) > (step * 0.2)
 
     # ===== COOLDOWN =====
     if time.time() - state.get("cooldown", 0) < 300:
@@ -113,35 +91,42 @@ def process_symbol(symbol, price, state):
         exit_trade = False
         pnl = 0
 
-        # STOP LOSS
-        if pos["side"] == "long" and price <= pos["sl"]:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+        # ===== HARD SL =====
+        if USE_HARD_SL:
+            if pos["side"] == "long" and price <= pos["sl"]:
+                pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
-        elif pos["side"] == "short" and price >= pos["sl"]:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+            elif pos["side"] == "short" and price >= pos["sl"]:
+                pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+                exit_trade = True
 
-        # TAKE PROFIT
-        if pos["side"] == "long" and price >= pos["tp"]:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+        # ===== REVERSAL EXIT =====
+        if not exit_trade:
 
-        elif pos["side"] == "short" and price <= pos["tp"]:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
+            if pos["side"] == "long":
 
-        # TRAILING SL (earlier)
-        if pos["side"] == "long":
-            move = price - pos["entry"]
-            if move >= step * 0.5:
-                pos["sl"] = max(pos["sl"], price - step * 0.5)
+                if price > pos["highest_price"]:
+                    pos["highest_price"] = price
 
-        elif pos["side"] == "short":
-            move = pos["entry"] - price
-            if move >= step * 0.5:
-                pos["sl"] = min(pos["sl"], price + step * 0.5)
+                drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
 
+                if drawdown >= REVERSAL:
+                    pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+                    exit_trade = True
+
+            elif pos["side"] == "short":
+
+                if price < pos["lowest_price"]:
+                    pos["lowest_price"] = price
+
+                drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
+
+                if drawup >= REVERSAL:
+                    pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
+                    exit_trade = True
+
+        # ===== EXECUTE EXIT =====
         if exit_trade:
 
             entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
@@ -165,17 +150,12 @@ def process_symbol(symbol, price, state):
             utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
             utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
+            # RESET STATE
             state["position"] = None
-
-            # RESET BASE + COOLDOWN
-            new_base = round(price / step) * step
-            state["base_price"] = new_base
+            state["base_price"] = round(price / step) * step
             state["levels_logged"] = False
             state["cooldown"] = time.time()
 
-            utils.log(f"🔄 RESET BASE {symbol} → {new_base}", tg=True)
-
-            state["last_price"] = price
             return
 
     # ================= ENTRY =================
@@ -194,10 +174,10 @@ def process_symbol(symbol, price, state):
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
                 "sl": price - step,
-                "tp": price + step
+                "highest_price": price
             }
 
-            utils.log(f"🟢 LONG {symbol} @ {price} | SL: {price - step} | TP: {price + step}", tg=True)
+            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
 
         # ===== SHORT =====
         elif price <= down_level - buffer and momentum_down and min_move:
@@ -208,10 +188,10 @@ def process_symbol(symbol, price, state):
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
                 "sl": price + step,
-                "tp": price - step
+                "lowest_price": price
             }
 
-            utils.log(f"🔴 SHORT {symbol} @ {price} | SL: {price + step} | TP: {price - step}", tg=True)
+            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
 
     state["last_price"] = price
 
@@ -231,7 +211,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 IMPROVED MOMENTUM BOT STARTED", tg=True)
+    utils.log("🚀 DYNAMIC STEP REVERSAL BOT STARTED", tg=True)
 
     while True:
 
@@ -245,7 +225,6 @@ def run():
 
                 process_symbol(symbol, price, state[symbol])
 
-            auto_git_push()
             time.sleep(1)
 
         except Exception as e:
