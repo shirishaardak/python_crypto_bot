@@ -15,13 +15,10 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-# ✅ Risk Management
-RISK_PER_TRADE = 0.01  # 1% risk per trade
+RISK_PER_TRADE = 0.01  # 1%
 
-# ✅ Reversal (trailing stop %)
-REVERSAL = {"BTCUSD": 2.5, "ETHUSD": 3.0}
+REVERSAL = {"BTCUSD": 1, "ETHUSD": 2.0}
 
-# ✅ Entry buffer (avoid fake breakout)
 BUFFER = 0.002  # 0.2%
 
 TAKER_FEE = 0.0005
@@ -30,6 +27,9 @@ TIMEFRAME = "1d"
 DAYS = 15
 
 MIN_BALANCE = 1000
+
+# Optional cooldown (in seconds) to avoid rapid re-entry
+COOLDOWN = 60
 
 # ================= INIT =================
 
@@ -129,17 +129,17 @@ def process_symbol(symbol, df, price, state):
             utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
             sym_state["position"] = None
-            sym_state["last_trade_day"] = now.date()
+            sym_state["last_exit_time"] = now  # cooldown tracker
             return
 
     # ================= ENTRY =================
     if not pos:
 
-        today = now.date()
-
-        # ✅ Only 1 trade per day per symbol
-        if sym_state.get("last_trade_day") == today:
-            return
+        # Cooldown check
+        if sym_state.get("last_exit_time"):
+            seconds_since_exit = (now - sym_state["last_exit_time"]).seconds
+            if seconds_since_exit < COOLDOWN:
+                return
 
         if state["balance"] < MIN_BALANCE:
             utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
@@ -148,7 +148,6 @@ def process_symbol(symbol, df, price, state):
         long_level = prev_close * (1 + BUFFER)
         short_level = prev_close * (1 - BUFFER)
 
-        # 🔍 DEBUG (you can remove later)
         print(f"{symbol} | Price: {price}")
         print(f"{symbol} | Long Level: {round(long_level,2)} | Short Level: {round(short_level,2)}")
 
@@ -188,13 +187,13 @@ def run():
         "symbols": {
             s: {
                 "position": None,
-                "last_trade_day": None,
-                "last_prev_close": None
+                "last_prev_close": None,
+                "last_exit_time": None
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 BOT STARTED (FIXED BREAKOUT MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (UNLIMITED MODE)", tg=True)
 
     while True:
         try:
