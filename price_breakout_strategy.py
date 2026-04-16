@@ -19,25 +19,32 @@ RISK_PER_TRADE = 0.01  # 1%
 
 REVERSAL = {"BTCUSD": 0.5, "ETHUSD": 1.0}
 
-BUFFER = 0.005  # 0.2%
+BUFFER = 0.005  # 0.5%
 
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1d"
-DAYS = 15
-
 MIN_BALANCE = 1000
-
-# Optional cooldown (in seconds) to avoid rapid re-entry
 COOLDOWN = 60
 
-# ================= INIT =================
+# ================= UTILS =================
 
+# 1D (levels)
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME,
-    days=DAYS,
+    timeframe="1d",
+    days=15,
+    telegram_token=os.getenv("price_trend_strategy_bot"),
+    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+    bot_name=BOT_NAME
+)
+
+# 15m (confirmation)
+utils_15m = TradingUtils(
+    contract_size=CONTRACT_SIZE,
+    taker_fee=TAKER_FEE,
+    timeframe="15m",
+    days=2,
     telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
@@ -47,36 +54,36 @@ utils = TradingUtils(
 
 def calculate_qty(symbol, price, balance):
     risk_amount = balance * RISK_PER_TRADE
-    reversal_percent = REVERSAL[symbol]
-
-    stop_distance = price * (reversal_percent / 100)
-
+    stop_distance = price * (REVERSAL[symbol] / 100)
     qty = risk_amount / (stop_distance * CONTRACT_SIZE[symbol])
-
     return max(1, int(qty))
-
 
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, price, state):
+def process_symbol(symbol, df_1d, df_15m, price, state):
 
     sym_state = state["symbols"][symbol]
     pos = sym_state["position"]
     now = datetime.now()
 
-    if df is None or len(df) < 3:
+    if df_1d is None or df_15m is None:
         return
 
-    prev_close = df.iloc[-2]["Close"]
+    if len(df_1d) < 3 or len(df_15m) < 3:
+        return
 
-    # Print once per day
-    if sym_state.get("last_prev_close") != prev_close:
-        print(f"{symbol} | Prev Close: {round(prev_close,2)}")
-        sym_state["last_prev_close"] = prev_close
+    prev_close = df_1d.iloc[-2]["Close"]
 
-    reversal = REVERSAL[symbol]
+    prev_15m = df_15m.iloc[-3]["Close"]
+    curr_15m = df_15m.iloc[-2]["Close"]
+
+    # ================= LEVELS =================
+
+    long_level = prev_close * (1 + BUFFER)
+    short_level = prev_close * (1 - BUFFER)
 
     # ================= EXIT =================
+
     if pos:
 
         exit_trade = False
@@ -89,7 +96,7 @@ def process_symbol(symbol, df, price, state):
 
             drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
 
-            if drawdown >= reversal:
+            if drawdown >= REVERSAL[symbol]:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
@@ -100,14 +107,14 @@ def process_symbol(symbol, df, price, state):
 
             drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
 
-            if drawup >= reversal:
+            if drawup >= REVERSAL[symbol]:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         if exit_trade:
 
             entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
-            exit_fee  = utils.commission(price, pos["qty"], symbol)
+            exit_fee = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
 
@@ -124,36 +131,28 @@ def process_symbol(symbol, df, price, state):
                 "exit_time": now
             })
 
-            emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
-            utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
-
             sym_state["position"] = None
-            sym_state["last_exit_time"] = now  # cooldown tracker
+            sym_state["last_exit_time"] = now
+
+            utils.log(f"EXIT {symbol} | PNL: {round(net,6)}", tg=True)
             return
 
     # ================= ENTRY =================
+
     if not pos:
 
-        # Cooldown check
+        # Cooldown
         if sym_state.get("last_exit_time"):
-            seconds_since_exit = (now - sym_state["last_exit_time"]).seconds
-            if seconds_since_exit < COOLDOWN:
+            if (now - sym_state["last_exit_time"]).seconds < COOLDOWN:
                 return
 
         if state["balance"] < MIN_BALANCE:
-            utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
             return
-
-        long_level = prev_close * (1 + BUFFER)
-        short_level = prev_close * (1 - BUFFER)
-
-        print(f"{symbol} | Price: {price}")
-        print(f"{symbol} | Long Level: {round(long_level,2)} | Short Level: {round(short_level,2)}")
 
         qty = calculate_qty(symbol, price, state["balance"])
 
-        if price > long_level:
+        # ✅ LONG → 15m cross ABOVE
+        if prev_15m <= long_level and curr_15m > long_level:
 
             sym_state["position"] = {
                 "side": "long",
@@ -163,9 +162,10 @@ def process_symbol(symbol, df, price, state):
                 "highest_price": price
             }
 
-            utils.log(f"🟢 BUY {symbol} @ {price} | Qty: {qty}", tg=True)
+            utils.log(f"BUY {symbol} @ {price} | Qty: {qty}", tg=True)
 
-        elif price < short_level:
+        # ✅ SHORT → 15m cross BELOW
+        elif prev_15m >= short_level and curr_15m < short_level:
 
             sym_state["position"] = {
                 "side": "short",
@@ -175,8 +175,7 @@ def process_symbol(symbol, df, price, state):
                 "lowest_price": price
             }
 
-            utils.log(f"🔴 SELL {symbol} @ {price} | Qty: {qty}", tg=True)
-
+            utils.log(f"SELL {symbol} @ {price} | Qty: {qty}", tg=True)
 
 # ================= MAIN =================
 
@@ -187,21 +186,21 @@ def run():
         "symbols": {
             s: {
                 "position": None,
-                "last_prev_close": None,
                 "last_exit_time": None
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 BOT STARTED (UNLIMITED MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (1D + 15m CONFIRMATION)", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
-                df = utils.fetch_candles(symbol)
+                df_1d = utils.fetch_candles(symbol)
+                df_15m = utils_15m.fetch_candles(symbol)
 
-                if df is None or len(df) < 10:
+                if df_1d is None or df_15m is None:
                     continue
 
                 price = utils.fetch_price(symbol)
@@ -209,14 +208,13 @@ def run():
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state)
+                process_symbol(symbol, df_1d, df_15m, price, state)
 
             time.sleep(3)
 
         except Exception as e:
-            utils.log(f"🚨 Runtime error: {e}", tg=True)
+            utils.log(f"ERROR: {e}", tg=True)
             time.sleep(5)
-
 
 # ================= START =================
 
