@@ -13,19 +13,13 @@ BOT_NAME = "price_breakout_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-CONTRACT_SIZE = {
-    "BTCUSD": 1,     # FIXED (was 0.001 → caused distortion)
-    "ETHUSD": 1
-}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-RISK_PER_TRADE = 0.01   # 1% portfolio risk (TOTAL, not per symbol)
+RISK_PER_TRADE = 0.01  # 1%
 
-REVERSAL = {
-    "BTCUSD": 0.5,
-    "ETHUSD": 1.0
-}
+REVERSAL = {"BTCUSD": 1, "ETHUSD": 2.0}
 
-BUFFER = 0.005
+BUFFER = 0.002  # 0.2%
 
 TAKER_FEE = 0.0005
 
@@ -34,9 +28,8 @@ DAYS = 15
 
 MIN_BALANCE = 1000
 
+# Optional cooldown (in seconds) to avoid rapid re-entry
 COOLDOWN = 60
-
-MAX_OPEN_POSITIONS = 2   # portfolio cap
 
 # ================= INIT =================
 
@@ -52,27 +45,15 @@ utils = TradingUtils(
 
 # ================= POSITION SIZING =================
 
-def calculate_qty(symbol, price, balance, open_positions):
-    """
-    Portfolio-safe sizing:
-    - Risk is shared across open positions
-    """
-    if open_positions >= MAX_OPEN_POSITIONS:
-        return 0
-
-    risk_amount = (balance * RISK_PER_TRADE) / MAX_OPEN_POSITIONS
+def calculate_qty(symbol, price, balance):
+    risk_amount = balance * RISK_PER_TRADE
     reversal_percent = REVERSAL[symbol]
 
     stop_distance = price * (reversal_percent / 100)
 
-    if stop_distance <= 0:
-        return 0
-
     qty = risk_amount / (stop_distance * CONTRACT_SIZE[symbol])
 
-    qty = int(qty)
-
-    return qty if qty >= 1 else 0
+    return max(1, int(qty))
 
 
 # ================= STRATEGY =================
@@ -88,19 +69,14 @@ def process_symbol(symbol, df, price, state):
 
     prev_close = df.iloc[-2]["Close"]
 
+    # Print once per day
     if sym_state.get("last_prev_close") != prev_close:
-        print(f"{symbol} | Prev Close: {round(prev_close, 2)}")
+        print(f"{symbol} | Prev Close: {round(prev_close,2)}")
         sym_state["last_prev_close"] = prev_close
 
     reversal = REVERSAL[symbol]
 
-    # Count active positions across portfolio
-    open_positions = sum(
-        1 for s in state["symbols"].values() if s["position"]
-    )
-
     # ================= EXIT =================
-
     if pos:
 
         exit_trade = False
@@ -108,7 +84,8 @@ def process_symbol(symbol, df, price, state):
 
         if pos["side"] == "long":
 
-            pos["highest_price"] = max(pos["highest_price"], price)
+            if price > pos["highest_price"]:
+                pos["highest_price"] = price
 
             drawdown = ((pos["highest_price"] - price) / pos["highest_price"]) * 100
 
@@ -118,7 +95,8 @@ def process_symbol(symbol, df, price, state):
 
         elif pos["side"] == "short":
 
-            pos["lowest_price"] = min(pos["lowest_price"], price)
+            if price < pos["lowest_price"]:
+                pos["lowest_price"] = price
 
             drawup = ((price - pos["lowest_price"]) / pos["lowest_price"]) * 100
 
@@ -129,7 +107,7 @@ def process_symbol(symbol, df, price, state):
         if exit_trade:
 
             entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
-            exit_fee = utils.commission(price, pos["qty"], symbol)
+            exit_fee  = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
 
@@ -147,35 +125,33 @@ def process_symbol(symbol, df, price, state):
             })
 
             emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net, 6)}", tg=True)
-            utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
+            utils.log(f"{emoji} EXIT {symbol} @ {price} | PNL: {round(net,6)}", tg=True)
+            utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
             sym_state["position"] = None
-            sym_state["last_exit_time"] = now
+            sym_state["last_exit_time"] = now  # cooldown tracker
             return
 
     # ================= ENTRY =================
-
     if not pos:
 
-        # cooldown
+        # Cooldown check
         if sym_state.get("last_exit_time"):
-            if (now - sym_state["last_exit_time"]).seconds < COOLDOWN:
+            seconds_since_exit = (now - sym_state["last_exit_time"]).seconds
+            if seconds_since_exit < COOLDOWN:
                 return
 
         if state["balance"] < MIN_BALANCE:
-            return
-
-        if open_positions >= MAX_OPEN_POSITIONS:
+            utils.log(f"⚠️ Balance low: {round(state['balance'],2)}")
             return
 
         long_level = prev_close * (1 + BUFFER)
         short_level = prev_close * (1 - BUFFER)
 
-        qty = calculate_qty(symbol, price, state["balance"], open_positions)
+        print(f"{symbol} | Price: {price}")
+        print(f"{symbol} | Long Level: {round(long_level,2)} | Short Level: {round(short_level,2)}")
 
-        if qty == 0:
-            return
+        qty = calculate_qty(symbol, price, state["balance"])
 
         if price > long_level:
 
@@ -217,17 +193,19 @@ def run():
         }
     }
 
-    utils.log("🚀 BOT STARTED (PORTFOLIO SAFE MODE)", tg=True)
+    utils.log("🚀 BOT STARTED (UNLIMITED MODE)", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
                 df = utils.fetch_candles(symbol)
+
                 if df is None or len(df) < 10:
                     continue
 
                 price = utils.fetch_price(symbol)
+
                 if price is None:
                     continue
 
@@ -239,6 +217,8 @@ def run():
             utils.log(f"🚨 Runtime error: {e}", tg=True)
             time.sleep(5)
 
+
+# ================= START =================
 
 if __name__ == "__main__":
     run()
