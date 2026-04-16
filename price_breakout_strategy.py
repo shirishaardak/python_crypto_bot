@@ -17,7 +17,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 RISK_PER_TRADE = 0.01  # 1%
 
-REVERSAL = {"BTCUSD": 0.5, "ETHUSD": 1.0}
+REVERSAL = {"BTCUSD": 1.0, "ETHUSD": 1.0}
 
 BUFFER = 0.005  # 0.5%
 
@@ -152,7 +152,7 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
         qty = calculate_qty(symbol, price, state["balance"])
 
         # ✅ LONG → 15m cross ABOVE
-        if prev_15m <= long_level and curr_15m > long_level:
+        if curr_15m > long_level:
 
             sym_state["position"] = {
                 "side": "long",
@@ -165,7 +165,7 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
             utils.log(f"BUY {symbol} @ {price} | Qty: {qty}", tg=True)
 
         # ✅ SHORT → 15m cross BELOW
-        elif prev_15m >= short_level and curr_15m < short_level:
+        elif curr_15m < short_level:
 
             sym_state["position"] = {
                 "side": "short",
