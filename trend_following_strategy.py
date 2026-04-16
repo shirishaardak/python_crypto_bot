@@ -39,7 +39,9 @@ utils = TradingUtils(
 
 def get_24h_change(symbol):
     try:
-        ticker = utils.safe_get(f"https://api.india.delta.exchange/v2/tickers/{symbol}")
+        ticker = utils.safe_get(
+            f"https://api.india.delta.exchange/v2/tickers/{symbol}"
+        )
         return float(ticker["result"]["ltp_change_24h"])
     except:
         return None
@@ -72,49 +74,21 @@ def process_symbol(symbol, price, state, account):
         exit_trade = False
         pnl = 0
 
-        # ===== LONG =====
+        # ===== LONG EXIT =====
         if pos["side"] == "long":
 
-            if change <= pos["sl"]:
+            # EXIT ONLY: momentum turns negative
+            if change < 0:
                 pnl = (price - pos["entry"]) * contract * pos["qty"]
                 exit_trade = True
 
-            # ✅ STEP TRAILING
-            if change >= pos["last_peak"] + STEP:
-
-                old_sl = pos["sl"]
-
-                steps = int((change - pos["last_peak"]) / STEP)
-                pos["last_peak"] += steps * STEP
-
-                pos["sl"] = pos["last_peak"] - STEP
-
-                utils.log(
-                    f"📈 SL STEP {symbol} LONG | 24h: {round(change,3)} | SL: {round(old_sl,3)} → {round(pos['sl'],3)}",
-                    tg=True
-                )
-
-        # ===== SHORT =====
+        # ===== SHORT EXIT =====
         elif pos["side"] == "short":
 
-            if change >= pos["sl"]:
+            # EXIT ONLY: momentum turns positive
+            if change > 0:
                 pnl = (pos["entry"] - price) * contract * pos["qty"]
                 exit_trade = True
-
-            # ✅ STEP TRAILING
-            if change <= pos["last_peak"] - STEP:
-
-                old_sl = pos["sl"]
-
-                steps = int((pos["last_peak"] - change) / STEP)
-                pos["last_peak"] -= steps * STEP
-
-                pos["sl"] = pos["last_peak"] + STEP
-
-                utils.log(
-                    f"📉 SL STEP {symbol} SHORT | 24h: {round(change,3)} | SL: {round(old_sl,3)} → {round(pos['sl'],3)}",
-                    tg=True
-                )
 
         if exit_trade:
 
@@ -148,54 +122,45 @@ def process_symbol(symbol, price, state, account):
     # ================= ENTRY =================
     if not pos and prev_change is not None:
 
-        # ✅ COOLDOWN CHECK
+        # cooldown check
         if time.time() - state.get("cooldown", 0) < COOLDOWN_SEC:
             return
 
         qty = DEFAULT_CONTRACTS[symbol]
 
-        # ===== LONG =====
+        # ===== LONG ENTRY =====
         if is_cross_up(prev_change, change, 0.5):
 
             entry_fee = utils.commission(price, qty, symbol)
-
-            # snap to step grid
-            base = round(change / STEP) * STEP
 
             state["position"] = {
                 "side": "long",
                 "entry": price,
                 "qty": qty,
                 "entry_time": datetime.now(),
-                "sl": base - STEP,
-                "last_peak": base,
                 "entry_fee": entry_fee
             }
 
             utils.log(
-                f"🟢 LONG {symbol} | Price: {price} | 24h: {round(change,3)} | SL: {round(base-STEP,3)}",
+                f"🟢 LONG {symbol} | Price: {price} | 24h: {round(change,3)}",
                 tg=True
             )
 
-        # ===== SHORT =====
+        # ===== SHORT ENTRY =====
         elif is_cross_down(prev_change, change, -0.5):
 
             entry_fee = utils.commission(price, qty, symbol)
-
-            base = round(change / STEP) * STEP
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": qty,
                 "entry_time": datetime.now(),
-                "sl": base + STEP,
-                "last_peak": base,
                 "entry_fee": entry_fee
             }
 
             utils.log(
-                f"🔴 SHORT {symbol} | Price: {price} | 24h: {round(change,3)} | SL: {round(base+STEP,3)}",
+                f"🔴 SHORT {symbol} | Price: {price} | 24h: {round(change,3)}",
                 tg=True
             )
 
