@@ -9,7 +9,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "grid_strategy_smart_sl"
+BOT_NAME = "grid_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -38,9 +38,9 @@ LOW_VOL_START = 2
 LOW_VOL_END = 13
 
 # ===== SMART RISK SETTINGS =====
-STOP_LOSS_MULTIPLIER = 1.5     # per trade SL
-MAX_DRAWDOWN = 0.05            # 5% account protection
-TREND_BREAK_MULTIPLIER = 4     # trend detection
+STOP_LOSS_MULTIPLIER = 1.5
+MAX_DRAWDOWN = 0.05
+TREND_BREAK_MULTIPLIER = 4
 
 # ================= INIT =================
 
@@ -73,7 +73,7 @@ def process_symbol(symbol, df, price, state):
     prev_close = df.iloc[-2]["Close"]
     current_day = now.date()
 
-    # ================= DAILY RESET =================
+    # ===== DAILY RESET =====
     if sym_state.get("last_base_update_day") != current_day:
         sym_state["base_price"] = prev_close
         sym_state["last_base_update_day"] = current_day
@@ -81,7 +81,6 @@ def process_symbol(symbol, df, price, state):
 
     base = sym_state["base_price"]
 
-    # ================= PRINT BASE =================
     if sym_state.get("last_logged_base") != base:
         print(f"{symbol} Base Price: {round(base,2)}")
         sym_state["last_logged_base"] = base
@@ -90,22 +89,27 @@ def process_symbol(symbol, df, price, state):
     qty = GRID_QTY[symbol]
     positions = sym_state["positions"]
 
-    # ================= TREND BREAKER =================
-    allow_entry = is_low_vol_time()
+    # ===== ENTRY CONTROL ONLY =====
+    allow_entry = True
+
+    # Block entries during low volatility time
+    if is_low_vol_time():
+        allow_entry = False
+
+    # Block entries in strong trend
     if abs(price - base) > grid_gap * TREND_BREAK_MULTIPLIER:
         utils.log(f"⚠️ TREND DETECTED {symbol} - STOP NEW ENTRIES", tg=True)
         allow_entry = False
 
-    # ================= GRID LEVELS =================
+    # ===== GRID LEVELS =====
     buy_levels = [base - i * grid_gap for i in range(1, MAX_GRIDS + 1)]
     sell_levels = [base + i * grid_gap for i in range(1, MAX_GRIDS + 1)]
 
-    # ================= LONG ENTRY =================
+    # ===== LONG ENTRY =====
     if allow_entry:
         for level in buy_levels:
-            already = any(p["entry"] == level and p["side"] == "long" for p in positions)
+            if price <= level and not any(p["entry"] == level and p["side"] == "long" for p in positions):
 
-            if price <= level and not already:
                 positions.append({
                     "side": "long",
                     "entry": level,
@@ -116,12 +120,11 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🟢 BUY {symbol} @ {level}", tg=True)
 
-    # ================= SHORT ENTRY =================
+    # ===== SHORT ENTRY =====
     if allow_entry:
         for level in sell_levels:
-            already = any(p["entry"] == level and p["side"] == "short" for p in positions)
+            if price >= level and not any(p["entry"] == level and p["side"] == "short" for p in positions):
 
-            if price >= level and not already:
                 positions.append({
                     "side": "short",
                     "entry": level,
@@ -132,7 +135,7 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🔴 SHORT {symbol} @ {level}", tg=True)
 
-    # ================= GLOBAL DRAWDOWN =================
+    # ===== GLOBAL DRAWDOWN =====
     floating_pnl = 0
 
     for pos in positions:
@@ -146,15 +149,12 @@ def process_symbol(symbol, df, price, state):
         positions.clear()
         return
 
-    # ================= EXIT LOGIC =================
+    # ===== EXIT LOGIC (ONLY TP / SL — NO TIME EXIT) =====
     for pos in positions[:]:
 
         exit_trade = False
-        target = None
 
-        # ===== LONG =====
         if pos["side"] == "long":
-
             tp = pos["entry"] + grid_gap
 
             if price >= tp:
@@ -168,9 +168,7 @@ def process_symbol(symbol, df, price, state):
                 exit_trade = True
                 utils.log(f"🛑 SL HIT LONG {symbol} @ {target}", tg=True)
 
-        # ===== SHORT =====
-        elif pos["side"] == "short":
-
+        else:  # SHORT
             tp = pos["entry"] - grid_gap
 
             if price <= tp:
@@ -187,12 +185,10 @@ def process_symbol(symbol, df, price, state):
         if not exit_trade:
             continue
 
-        # ===== FEES =====
         entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
         exit_fee = utils.commission(target, pos["qty"], symbol)
 
         net = pnl - (entry_fee + exit_fee)
-
         state["balance"] += net
 
         utils.save_trade({
@@ -211,7 +207,7 @@ def process_symbol(symbol, df, price, state):
 
         positions.remove(pos)
 
-    # ================= HYBRID RESET =================
+    # ===== BASE RESET ONLY WHEN NO POSITIONS =====
     if len(positions) == 0:
         if abs(price - base) > grid_gap:
             sym_state["base_price"] = price
