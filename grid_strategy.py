@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import datetime
+import pytz
 from dotenv import load_dotenv
 
 from utils import TradingUtils
@@ -33,14 +34,27 @@ DAYS = 15
 
 SLEEP_TIME = 3
 
-# ===== LOW VOL TIME WINDOW (IST) =====
-LOW_VOL_START = 2
-LOW_VOL_END = 13
+# ===== TRADING WINDOW (IST) =====
+TRADING_START = 2     # 2 AM IST
+TRADING_END = 13      # 1 PM IST
 
-# ===== SMART RISK SETTINGS =====
+# ===== RISK SETTINGS =====
 STOP_LOSS_MULTIPLIER = 1.5
 MAX_DRAWDOWN = 0.05
 TREND_BREAK_MULTIPLIER = 4
+
+# ================= TIMEZONE =================
+
+IST = pytz.timezone("Asia/Kolkata")
+
+
+def get_ist_hour():
+    return datetime.now(IST).hour
+
+
+def is_trading_time():
+    return TRADING_START <= get_ist_hour() < TRADING_END
+
 
 # ================= INIT =================
 
@@ -54,18 +68,16 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= HELPERS =================
-
-def is_low_vol_time():
-    hour = datetime.now().hour
-    return LOW_VOL_START <= hour < LOW_VOL_END
-
 # ================= STRATEGY =================
 
 def process_symbol(symbol, df, price, state):
 
+    # ❌ HARD STOP OUTSIDE SESSION
+    if not is_trading_time():
+        return
+
     sym_state = state["symbols"][symbol]
-    now = datetime.now()
+    now = datetime.now(IST)
 
     if df is None or len(df) < 3:
         return
@@ -89,14 +101,10 @@ def process_symbol(symbol, df, price, state):
     qty = GRID_QTY[symbol]
     positions = sym_state["positions"]
 
-    # ===== ENTRY CONTROL ONLY =====
+    # ===== ENTRY CONTROL =====
     allow_entry = True
 
-    # Block entries during low volatility time
-    if is_low_vol_time():
-        allow_entry = False
-
-    # Block entries in strong trend
+    # Block in strong trend
     if abs(price - base) > grid_gap * TREND_BREAK_MULTIPLIER:
         utils.log(f"⚠️ TREND DETECTED {symbol} - STOP NEW ENTRIES", tg=True)
         allow_entry = False
@@ -149,7 +157,7 @@ def process_symbol(symbol, df, price, state):
         positions.clear()
         return
 
-    # ===== EXIT LOGIC (ONLY TP / SL — NO TIME EXIT) =====
+    # ===== EXIT LOGIC =====
     for pos in positions[:]:
 
         exit_trade = False
@@ -168,7 +176,7 @@ def process_symbol(symbol, df, price, state):
                 exit_trade = True
                 utils.log(f"🛑 SL HIT LONG {symbol} @ {target}", tg=True)
 
-        else:  # SHORT
+        else:
             tp = pos["entry"] - grid_gap
 
             if price <= tp:
@@ -207,12 +215,13 @@ def process_symbol(symbol, df, price, state):
 
         positions.remove(pos)
 
-    # ===== BASE RESET ONLY WHEN NO POSITIONS =====
+    # ===== BASE RESET =====
     if len(positions) == 0:
         if abs(price - base) > grid_gap:
             sym_state["base_price"] = price
             sym_state["last_logged_base"] = None
-            utils.log(f"🔄 BASE RESET (ALL EXIT) {symbol} -> {round(price,2)}", tg=True)
+            utils.log(f"🔄 BASE RESET {symbol} -> {round(price,2)}", tg=True)
+
 
 # ================= MAIN =================
 
@@ -230,7 +239,7 @@ def run():
         }
     }
 
-    utils.log("🚀 SMART GRID BOT STARTED", tg=True)
+    utils.log("🚀 SMART GRID BOT STARTED (IST SESSION CONTROL ENABLED)", tg=True)
 
     while True:
         try:
@@ -251,6 +260,7 @@ def run():
         except Exception as e:
             utils.log(f"🚨 Error: {e}", tg=True)
             time.sleep(5)
+
 
 # ================= START =================
 
