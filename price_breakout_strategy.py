@@ -148,9 +148,6 @@ def process_symbol(symbol, df, price, state):
         long_level = prev_close * (1 + BUFFER)
         short_level = prev_close * (1 - BUFFER)
 
-        print(f"{symbol} | Price: {price}")
-        print(f"{symbol} | Long Level: {round(long_level,2)} | Short Level: {round(short_level,2)}")
-
         qty = calculate_qty(symbol, price, state["balance"])
 
         if price > long_level:
