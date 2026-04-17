@@ -9,7 +9,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "price_breakout_strategy"
+BOT_NAME = "real_breakout_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -17,34 +17,36 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
 RISK_PER_TRADE = 0.01  # 1%
 
-REVERSAL = {"BTCUSD": 1.0, "ETHUSD": 1.0}
+# Wider stops (important)
+REVERSAL = {"BTCUSD": 2.5, "ETHUSD": 2.5}
 
-BUFFER = 0.005  # 0.5%
+# Real breakout (not noise)
+BUFFER = 0.01  # 1%
 
 TAKER_FEE = 0.0005
 
 MIN_BALANCE = 1000
-COOLDOWN = 60
+COOLDOWN = 300  # 5 min
+
+MAX_QTY = 50  # cap risk
 
 # ================= UTILS =================
 
-# 1D (levels)
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
     timeframe="1d",
-    days=15,
+    days=30,
     telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-# 15m (confirmation)
 utils_15m = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
     timeframe="15m",
-    days=2,
+    days=3,
     telegram_token=os.getenv("price_trend_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
@@ -55,8 +57,22 @@ utils_15m = TradingUtils(
 def calculate_qty(symbol, price, balance):
     risk_amount = balance * RISK_PER_TRADE
     stop_distance = price * (REVERSAL[symbol] / 100)
+
     qty = risk_amount / (stop_distance * CONTRACT_SIZE[symbol])
-    return max(1, int(qty))
+    return max(1, min(int(qty), MAX_QTY))
+
+
+# ================= TREND FILTER =================
+
+def get_trend(df_1d):
+    ma20 = df_1d["Close"].rolling(5).mean()
+
+    if df_1d.iloc[-1]["Close"] > ma20.iloc[-1]:
+        return "bullish"
+    elif df_1d.iloc[-1]["Close"] < ma20.iloc[-1]:
+        return "bearish"
+    return "neutral"
+
 
 # ================= STRATEGY =================
 
@@ -69,13 +85,15 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
     if df_1d is None or df_15m is None:
         return
 
-    if len(df_1d) < 3 or len(df_15m) < 3:
+    if len(df_1d) < 25 or len(df_15m) < 5:
         return
 
     prev_close = df_1d.iloc[-2]["Close"]
 
     prev_15m = df_15m.iloc[-3]["Close"]
     curr_15m = df_15m.iloc[-2]["Close"]
+
+    trend = get_trend(df_1d)
 
     # ================= LEVELS =================
 
@@ -117,7 +135,6 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
             exit_fee = utils.commission(price, pos["qty"], symbol)
 
             net = pnl - (entry_fee + exit_fee)
-
             state["balance"] += net
 
             utils.save_trade({
@@ -151,8 +168,12 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
 
         qty = calculate_qty(symbol, price, state["balance"])
 
-        # ✅ LONG → 15m cross ABOVE
-        if curr_15m > long_level:
+        # ✅ REAL BREAKOUT LONG (with trend + crossover)
+        if (
+            trend == "bullish" and
+            prev_15m <= long_level and
+            curr_15m > long_level
+        ):
 
             sym_state["position"] = {
                 "side": "long",
@@ -164,8 +185,12 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
 
             utils.log(f"BUY {symbol} @ {price} | Qty: {qty}", tg=True)
 
-        # ✅ SHORT → 15m cross BELOW
-        elif curr_15m < short_level:
+        # ✅ REAL BREAKOUT SHORT
+        elif (
+            trend == "bearish" and
+            prev_15m >= short_level and
+            curr_15m < short_level
+        ):
 
             sym_state["position"] = {
                 "side": "short",
@@ -176,6 +201,7 @@ def process_symbol(symbol, df_1d, df_15m, price, state):
             }
 
             utils.log(f"SELL {symbol} @ {price} | Qty: {qty}", tg=True)
+
 
 # ================= MAIN =================
 
@@ -191,7 +217,7 @@ def run():
         }
     }
 
-    utils.log("🚀 BOT STARTED (1D + 15m CONFIRMATION)", tg=True)
+    utils.log("🚀 REAL BREAKOUT BOT STARTED", tg=True)
 
     while True:
         try:
@@ -215,6 +241,7 @@ def run():
         except Exception as e:
             utils.log(f"ERROR: {e}", tg=True)
             time.sleep(5)
+
 
 # ================= START =================
 
