@@ -41,7 +41,7 @@ TRADING_END = 13    # 1 PM
 # ===== RISK =====
 STOP_LOSS_MULTIPLIER = 1.5
 MAX_DRAWDOWN = 0.05
-TREND_BREAK_MULTIPLIER = 4
+TREND_BREAK_MULTIPLIER = 3
 
 # ================= TIMEZONE =================
 
