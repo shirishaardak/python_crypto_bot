@@ -35,8 +35,8 @@ DAYS = 15
 SLEEP_TIME = 2
 
 # ===== TRADING WINDOW (IST) =====
-TRADING_START = 2
-TRADING_END = 13
+TRADING_START = 2   # 2 AM
+TRADING_END = 13    # 1 PM
 
 # ===== RISK =====
 STOP_LOSS_MULTIPLIER = 1.5
@@ -47,11 +47,18 @@ TREND_BREAK_MULTIPLIER = 4
 
 IST = pytz.timezone("Asia/Kolkata")
 
-def get_ist_hour():
-    return datetime.now(IST).hour
+def get_ist_time():
+    return datetime.now(IST)
 
-def is_trading_time():
+def get_ist_hour():
+    return get_ist_time().hour
+
+def can_enter_trade():
     return TRADING_START <= get_ist_hour() < TRADING_END
+
+def can_reset_base(now):
+    # Reset only once between 2:00–2:05 AM
+    return now.hour == TRADING_START and now.minute < 5
 
 # ================= INIT =================
 
@@ -69,11 +76,8 @@ utils = TradingUtils(
 
 def process_symbol(symbol, df, price, state):
 
-    if not is_trading_time():
-        return
-
     sym = state["symbols"][symbol]
-    now = datetime.now(IST)
+    now = get_ist_time()
 
     if df is None or len(df) < 3:
         return
@@ -81,11 +85,15 @@ def process_symbol(symbol, df, price, state):
     prev_close = df.iloc[-2]["Close"]
     today = now.date()
 
-    # ===== DAILY RESET =====
-    if sym["last_day"] != today:
+    # ===== DAILY RESET (STRICT 2 AM) =====
+    if can_reset_base(now) and sym["last_day"] != today:
         sym["base"] = prev_close
         sym["last_day"] = today
         sym["logged"] = False
+        utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
+
+    if sym["base"] is None:
+        return
 
     base = sym["base"]
 
@@ -105,16 +113,14 @@ def process_symbol(symbol, df, price, state):
     buy_levels = [round(base - i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
     sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
 
-    # ================= ENTRY =================
+    # ================= ENTRY (ONLY DURING WINDOW) =================
+    if last_price is not None and allow_entry and can_enter_trade():
 
-    if last_price is not None and allow_entry:
-
-        # ===== LONG (MEAN REVERSION) =====
+        # ===== LONG =====
         for level in buy_levels:
             if last_price > level >= price and not any(
                 p["grid"] == level and p["side"] == "long" for p in positions
             ):
-
                 entry = price
 
                 positions.append({
@@ -133,7 +139,6 @@ def process_symbol(symbol, df, price, state):
             if last_price < level <= price and not any(
                 p["grid"] == level and p["side"] == "short" for p in positions
             ):
-
                 entry = price
 
                 positions.append({
@@ -162,14 +167,13 @@ def process_symbol(symbol, df, price, state):
         positions.clear()
         return
 
-    # ================= EXIT =================
+    # ================= EXIT (ALWAYS ACTIVE) =================
 
     for p in positions[:]:
 
         exit_trade = False
 
         if p["side"] == "long":
-
             tp = p["entry"] + gap
 
             if price >= tp:
@@ -184,7 +188,6 @@ def process_symbol(symbol, df, price, state):
                 utils.log(f"🛑 SL LONG {symbol}", tg=True)
 
         else:
-
             tp = p["entry"] - gap
 
             if price <= tp:
@@ -244,7 +247,7 @@ def run():
         }
     }
 
-    utils.log("🚀 REAL GRID BOT STARTED (NO FAKE FILLS)", tg=True)
+    utils.log("🚀 REAL GRID BOT STARTED (FIXED WINDOW LOGIC)", tg=True)
 
     while True:
         try:
