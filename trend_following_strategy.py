@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import datetime
+import pytz
 from dotenv import load_dotenv
 
 from utils import TradingUtils
@@ -13,158 +14,227 @@ BOT_NAME = "trend_following_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-INITIAL_BALANCE = 5000
-
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
+GRID_SIZE = {
+    "BTCUSD": 200,
+    "ETHUSD": 10
+}
+
+GRID_QTY = {
+    "BTCUSD": 100,
+    "ETHUSD": 100
+}
+
+MAX_GRIDS = 5
 TAKER_FEE = 0.0005
 
-STEP = 0.35
-COOLDOWN_SEC = 30
+TIMEFRAME = "1d"
+DAYS = 15
+
+SLEEP_TIME = 2
+
+# ===== ENTRY WINDOW =====
+TRADING_START = 2    # 2 AM
+TRADING_END = 13     # 1 PM
+
+# ===== RESET TIME =====
+RESET_HOUR = 14      # 2 PM
+
+# ===== RISK =====
+STOP_LOSS_MULTIPLIER = 1.5
+MAX_DRAWDOWN = 0.05
+TREND_BREAK_MULTIPLIER = 4
+
+# ================= TIMEZONE =================
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def get_ist_time():
+    return datetime.now(IST)
+
+def can_enter_trade(now):
+    return TRADING_START <= now.hour < TRADING_END
+
+def should_reset(now, sym, today):
+    # ✅ First run
+    if not sym["initialized"]:
+        sym["initialized"] = True
+        return True
+
+    # ✅ Daily reset at 2 PM (only once)
+    if now.hour == RESET_HOUR and now.minute < 5 and sym["last_day"] != today:
+        return True
+
+    return False
 
 # ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1h",
-    days=5,
+    timeframe=TIMEFRAME,
+    days=DAYS,
     telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-# ================= HELPERS =================
-
-def get_24h_change(symbol):
-    try:
-        ticker = utils.safe_get(
-            f"https://api.india.delta.exchange/v2/tickers/{symbol}"
-        )
-        return float(ticker["result"]["ltp_change_24h"])
-    except:
-        return None
-
-
-def is_cross_up(prev, curr, level):
-    return prev is not None and prev < level and curr >= level
-
-
-def is_cross_down(prev, curr, level):
-    return prev is not None and prev > level and curr <= level
-
-
 # ================= STRATEGY =================
 
-def process_symbol(symbol, price, state, account):
+def process_symbol(symbol, df, price, state):
 
-    pos = state["position"]
-    change = get_24h_change(symbol)
+    sym = state["symbols"][symbol]
+    now = get_ist_time()
 
-    if change is None:
+    if df is None or len(df) < 3:
         return
 
-    prev_change = state.get("last_change")
-    contract = CONTRACT_SIZE[symbol]
+    prev_close = df.iloc[-2]["Close"]
+    today = now.date()
 
-    # ================= EXIT =================
-    if pos:
+    # ===== RESET LOGIC =====
+    if should_reset(now, sym, today):
+        sym["base"] = prev_close
+        sym["last_day"] = today
+        sym["logged"] = False
 
-        exit_trade = False
-        pnl = 0
+        utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
 
-        # ===== LONG EXIT =====
-        if pos["side"] == "long":
+    if sym["base"] is None:
+        return
 
-            # EXIT ONLY: momentum turns negative
-            if change < 0:
-                pnl = (price - pos["entry"]) * contract * pos["qty"]
-                exit_trade = True
+    base = sym["base"]
 
-        # ===== SHORT EXIT =====
-        elif pos["side"] == "short":
+    if not sym["logged"]:
+        print(f"{symbol} Base Price: {round(base,2)}")
+        sym["logged"] = True
 
-            # EXIT ONLY: momentum turns positive
-            if change > 0:
-                pnl = (pos["entry"] - price) * contract * pos["qty"]
-                exit_trade = True
+    gap = GRID_SIZE[symbol]
+    qty = GRID_QTY[symbol]
+    positions = sym["positions"]
+    last_price = sym.get("last_price")
 
-        if exit_trade:
+    # ===== TREND FILTER =====
+    allow_entry = abs(price - base) <= gap * TREND_BREAK_MULTIPLIER
 
-            entry_fee = pos["entry_fee"]
-            exit_fee = utils.commission(price, pos["qty"], symbol)
-
-            net_pnl = pnl - entry_fee - exit_fee
-            account["balance"] += net_pnl
-
-            utils.save_trade({
-                "symbol": symbol,
-                "side": pos["side"],
-                "entry_time": pos["entry_time"],
-                "exit_time": datetime.now(),
-                "entry_price": pos["entry"],
-                "exit_price": price,
-                "qty": pos["qty"],
-                "net_pnl": round(net_pnl, 6),
-                "balance": round(account["balance"], 2)
-            })
-
-            utils.log(
-                f"❌ EXIT {symbol} | PNL: {round(net_pnl,2)} | Balance: {round(account['balance'],2)}",
-                tg=True
-            )
-
-            state["position"] = None
-            state["cooldown"] = time.time()
-            return
+    # ===== LEVELS =====
+    buy_levels = [round(base - i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
+    sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
 
     # ================= ENTRY =================
-    if not pos and prev_change is not None:
+    if last_price is not None and allow_entry:
 
-        # cooldown check
-        if time.time() - state.get("cooldown", 0) < COOLDOWN_SEC:
-            return
+        # ===== LONG =====
+        for level in buy_levels:
+            if last_price > level >= price and not any(
+                p["grid"] == level and p["side"] == "long" for p in positions
+            ):
+                entry = price
 
-        qty = DEFAULT_CONTRACTS[symbol]
+                positions.append({
+                    "side": "long",
+                    "entry": entry,
+                    "grid": level,
+                    "qty": qty,
+                    "sl": entry - gap * STOP_LOSS_MULTIPLIER,
+                    "time": now
+                })
 
-        # ===== LONG ENTRY =====
-        if is_cross_up(prev_change, change, 0.5):
+                utils.log(f"🟢 BUY {symbol} @ {round(entry,2)}", tg=True)
 
-            entry_fee = utils.commission(price, qty, symbol)
+        # ===== SHORT =====
+        for level in sell_levels:
+            if last_price < level <= price and not any(
+                p["grid"] == level and p["side"] == "short" for p in positions
+            ):
+                entry = price
 
-            state["position"] = {
-                "side": "long",
-                "entry": price,
-                "qty": qty,
-                "entry_time": datetime.now(),
-                "entry_fee": entry_fee
-            }
+                positions.append({
+                    "side": "short",
+                    "entry": entry,
+                    "grid": level,
+                    "qty": qty,
+                    "sl": entry + gap * STOP_LOSS_MULTIPLIER,
+                    "time": now
+                })
 
-            utils.log(
-                f"🟢 LONG {symbol} | Price: {price} | 24h: {round(change,3)}",
-                tg=True
-            )
+                utils.log(f"🔴 SHORT {symbol} @ {round(entry,2)}", tg=True)
 
-        # ===== SHORT ENTRY =====
-        elif is_cross_down(prev_change, change, -0.5):
+    # ================= DRAWDOWN =================
+    floating = 0
 
-            entry_fee = utils.commission(price, qty, symbol)
+    for p in positions:
+        if p["side"] == "long":
+            floating += (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+        else:
+            floating += (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
-            state["position"] = {
-                "side": "short",
-                "entry": price,
-                "qty": qty,
-                "entry_time": datetime.now(),
-                "entry_fee": entry_fee
-            }
+    if floating < -state["balance"] * MAX_DRAWDOWN:
+        utils.log(f"🚨 MAX DRAWDOWN {symbol} - CLOSE ALL", tg=True)
+        positions.clear()
+        return
 
-            utils.log(
-                f"🔴 SHORT {symbol} | Price: {price} | 24h: {round(change,3)}",
-                tg=True
-            )
+    # ================= EXIT (ALWAYS) =================
+    for p in positions[:]:
 
-    state["last_change"] = change
+        exit_trade = False
+
+        if p["side"] == "long":
+            tp = p["entry"] + gap
+
+            if price >= tp:
+                exit_price = price
+                pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+
+            elif price <= p["sl"]:
+                exit_price = price
+                pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+                utils.log(f"🛑 SL LONG {symbol}", tg=True)
+
+        else:
+            tp = p["entry"] - gap
+
+            if price <= tp:
+                exit_price = price
+                pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+
+            elif price >= p["sl"]:
+                exit_price = price
+                pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+                utils.log(f"🛑 SL SHORT {symbol}", tg=True)
+
+        if not exit_trade:
+            continue
+
+        fee = utils.commission(p["entry"], p["qty"], symbol) + \
+              utils.commission(exit_price, p["qty"], symbol)
+
+        net = pnl - fee
+        state["balance"] += net
+
+        utils.save_trade({
+            "symbol": symbol,
+            "side": p["side"],
+            "entry_price": p["entry"],
+            "exit_price": exit_price,
+            "qty": p["qty"],
+            "net_pnl": round(net, 6),
+            "entry_time": p["time"],
+            "exit_time": now
+        })
+
+        utils.log(f"💰 EXIT {symbol} {p['side']} PNL: {round(net,6)}", tg=True)
+        utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+
+        positions.remove(p)
+
+    # ===== SAVE PRICE =====
+    sym["last_price"] = price
 
 
 # ================= MAIN =================
@@ -172,32 +242,37 @@ def process_symbol(symbol, price, state, account):
 def run():
 
     state = {
-        s: {
-            "position": None,
-            "last_change": None,
-            "cooldown": 0
-        } for s in SYMBOLS
+        "balance": 10000,
+        "symbols": {
+            s: {
+                "positions": [],
+                "base": None,
+                "last_day": None,
+                "logged": False,
+                "last_price": None,
+                "initialized": False   # ✅ important
+            } for s in SYMBOLS
+        }
     }
 
-    account = {"balance": INITIAL_BALANCE}
-
-    utils.log(f"🚀 BOT STARTED | Balance: ${INITIAL_BALANCE}", tg=True)
+    utils.log("🚀 GRID BOT STARTED (2PM RESET + SAFE WINDOW)", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
+                df = utils.fetch_candles(symbol)
                 price = utils.fetch_price(symbol)
 
-                if price is None:
+                if df is None or price is None:
                     continue
 
-                process_symbol(symbol, price, state[symbol], account)
+                process_symbol(symbol, df, price, state)
 
-            time.sleep(3)
+            time.sleep(SLEEP_TIME)
 
         except Exception as e:
-            utils.log(f"ERROR: {e}", tg=True)
+            utils.log(f"🚨 ERROR: {e}", tg=True)
             time.sleep(5)
 
 
