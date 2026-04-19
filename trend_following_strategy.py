@@ -39,7 +39,7 @@ TRADING_START = 2    # 2 AM
 TRADING_END = 13     # 1 PM
 
 # ===== RESET TIME =====
-RESET_HOUR = 14      # 2 PM
+RESET_HOUR = 2    # 2 PM
 
 # ===== RISK =====
 STOP_LOSS_MULTIPLIER = 1.5
