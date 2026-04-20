@@ -39,7 +39,7 @@ TRADING_START = 2    # 2 AM
 TRADING_END = 13     # 1 PM
 
 # ===== RESET TIME =====
-RESET_HOUR = 2      # 2 PM
+RESET_HOUR = 2       # ✅ 2 AM reset
 
 # ===== RISK =====
 STOP_LOSS_MULTIPLIER = 1.0
@@ -62,7 +62,7 @@ def should_reset(now, sym, today):
         sym["initialized"] = True
         return True
 
-    # ✅ Daily reset at 2 PM (only once)
+    # ✅ Daily reset at 2 AM (only once)
     if now.hour == RESET_HOUR and now.minute < 5 and sym["last_day"] != today:
         return True
 
@@ -90,16 +90,15 @@ def process_symbol(symbol, df, price, state):
     if df is None or len(df) < 3:
         return
 
-    prev_close = df.iloc[-2]["Close"]
     today = now.date()
 
-    # ===== RESET LOGIC =====
+    # ===== RESET LOGIC (FIXED) =====
     if should_reset(now, sym, today):
-        sym["base"] = prev_close
+        sym["base"] = price   # ✅ LIVE PRICE USED
         sym["last_day"] = today
         sym["logged"] = False
 
-        utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
+        utils.log(f"🔄 RESET {symbol} base (LIVE) -> {round(price,2)}", tg=True)
 
     if sym["base"] is None:
         return
@@ -175,7 +174,7 @@ def process_symbol(symbol, df, price, state):
         positions.clear()
         return
 
-    # ================= EXIT (ALWAYS) =================
+    # ================= EXIT =================
     for p in positions[:]:
 
         exit_trade = False
@@ -250,12 +249,12 @@ def run():
                 "last_day": None,
                 "logged": False,
                 "last_price": None,
-                "initialized": False   # ✅ important
+                "initialized": False
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 GRID BOT STARTED (2PM RESET + SAFE WINDOW)", tg=True)
+    utils.log("🚀 GRID BOT STARTED (LIVE BASE + 2AM RESET)", tg=True)
 
     while True:
         try:
