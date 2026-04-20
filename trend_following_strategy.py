@@ -35,12 +35,8 @@ DAYS = 15
 
 SLEEP_TIME = 2
 
-# ===== ENTRY WINDOW =====
-TRADING_START = 2
-TRADING_END = 13
-
 # ===== RESET TIME =====
-RESET_HOUR = 2   # ✅ 2 AM IST
+RESET_HOUR = 2   # 2 AM IST
 
 # ===== RISK =====
 STOP_LOSS_MULTIPLIER = 0.7
@@ -61,19 +57,13 @@ def get_ist_time():
 
 def should_reset(now, sym, today):
 
-    # ✅ FIRST RUN → reset immediately
+    # FIRST RUN → reset immediately
     if not sym["initialized"]:
         sym["initialized"] = True
-
-        # avoid double reset if starting exactly near 2 AM
-        if now.hour == RESET_HOUR:
-            sym["last_day"] = today
-            return False
-
         sym["last_day"] = today
         return True
 
-    # ✅ DAILY RESET at 2 AM (only once)
+    # DAILY RESET at 2 AM
     if (
         now.hour == RESET_HOUR and
         now.minute < 5 and
@@ -124,18 +114,17 @@ def process_symbol(symbol, df, price, state):
 
     df = add_indicators(df)
 
-    prev_close = df.iloc[-2]["Close"]
     today = now.date()
 
     # ===== RESET =====
     if should_reset(now, sym, today):
-        sym["base"] = prev_close
+        sym["base"] = round(price, 2)   # 🔥 LIVE PRICE
         sym["logged"] = False
-        utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
+        utils.log(f"🔄 RESET {symbol} base -> {round(price,2)}", tg=True)
 
-    # Initialize base if still None
+    # Initialize base if None
     if sym["base"] is None:
-        sym["base"] = prev_close
+        sym["base"] = round(price, 2)
 
     base = sym["base"]
 
@@ -167,7 +156,7 @@ def process_symbol(symbol, df, price, state):
     # ================= ENTRY =================
     if last_price is not None and allow_entry and adx_up:
 
-        # ===== BREAKOUT BUY =====
+        # ===== BUY BREAKOUT =====
         if bullish:
             for level in sell_levels:
                 if last_price < level <= price and not any(
@@ -184,9 +173,9 @@ def process_symbol(symbol, df, price, state):
                         "time": now
                     })
 
-                    utils.log(f"🚀 BUY BREAKOUT {symbol} @ {round(entry,2)}", tg=True)
+                    utils.log(f"🚀 BUY {symbol} @ {round(entry,2)}", tg=True)
 
-        # ===== BREAKDOWN SHORT =====
+        # ===== SHORT BREAKDOWN =====
         if bearish:
             for level in buy_levels:
                 if last_price > level >= price and not any(
@@ -203,7 +192,7 @@ def process_symbol(symbol, df, price, state):
                         "time": now
                     })
 
-                    utils.log(f"⚡ SHORT BREAKDOWN {symbol} @ {round(entry,2)}", tg=True)
+                    utils.log(f"⚡ SHORT {symbol} @ {round(entry,2)}", tg=True)
 
     # ================= DRAWDOWN =================
     floating = 0
@@ -226,7 +215,6 @@ def process_symbol(symbol, df, price, state):
 
         if p["side"] == "long":
             tp = p["entry"] + gap
-
             if price >= tp or price <= p["sl"]:
                 exit_price = price
                 pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -234,7 +222,6 @@ def process_symbol(symbol, df, price, state):
 
         else:
             tp = p["entry"] - gap
-
             if price <= tp or price >= p["sl"]:
                 exit_price = price
                 pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -286,7 +273,7 @@ def run():
         }
     }
 
-    utils.log("🚀 TREND GRID BOT STARTED (FIRST RUN + 2AM RESET)", tg=True)
+    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET, LIVE PRICE BASE)", tg=True)
 
     while True:
         try:
