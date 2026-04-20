@@ -2,8 +2,9 @@ import os
 import time
 from datetime import datetime
 import pytz
-from dotenv import load_dotenv
+import ta
 
+from dotenv import load_dotenv
 from utils import TradingUtils
 
 load_dotenv()
@@ -26,7 +27,7 @@ GRID_QTY = {
     "ETHUSD": 100
 }
 
-MAX_GRIDS = 5
+MAX_GRIDS = 3
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1d"
@@ -35,16 +36,19 @@ DAYS = 15
 SLEEP_TIME = 2
 
 # ===== ENTRY WINDOW =====
-TRADING_START = 2    # 2 AM
-TRADING_END = 13     # 1 PM
+TRADING_START = 2
+TRADING_END = 13
 
 # ===== RESET TIME =====
-RESET_HOUR = 2    # 2 PM
+RESET_HOUR = 2   # ✅ 2 AM IST
 
 # ===== RISK =====
-STOP_LOSS_MULTIPLIER = 1.0
+STOP_LOSS_MULTIPLIER = 0.7
 MAX_DRAWDOWN = 0.05
 TREND_BREAK_MULTIPLIER = 4
+
+# ===== ADX =====
+ADX_THRESHOLD = 20
 
 # ================= TIMEZONE =================
 
@@ -56,17 +60,42 @@ def get_ist_time():
 def can_enter_trade(now):
     return TRADING_START <= now.hour < TRADING_END
 
+# ================= RESET LOGIC =================
+
 def should_reset(now, sym, today):
-    # ✅ First run
+
+    # First run (do NOT force reset)
     if not sym["initialized"]:
         sym["initialized"] = True
-        return True
+        sym["last_day"] = today
+        return False
 
-    # ✅ Daily reset at 2 PM (only once)
-    if now.hour == RESET_HOUR and now.minute < 5 and sym["last_day"] != today:
+    # Reset once per day at 2 AM
+    if (
+        now.hour == RESET_HOUR and
+        now.minute < 5 and
+        sym["last_day"] != today
+    ):
+        sym["last_day"] = today
         return True
 
     return False
+
+# ================= INDICATORS =================
+
+def add_indicators(df):
+    adx_indicator = ta.trend.ADXIndicator(
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        window=14
+    )
+
+    df["adx"] = adx_indicator.adx()
+    df["+di"] = adx_indicator.adx_pos()
+    df["-di"] = adx_indicator.adx_neg()
+
+    return df
 
 # ================= INIT =================
 
@@ -87,22 +116,22 @@ def process_symbol(symbol, df, price, state):
     sym = state["symbols"][symbol]
     now = get_ist_time()
 
-    if df is None or len(df) < 3:
+    if df is None or len(df) < 20:
         return
+
+    df = add_indicators(df)
 
     prev_close = df.iloc[-2]["Close"]
     today = now.date()
 
-    # ===== RESET LOGIC =====
+    # ===== RESET =====
     if should_reset(now, sym, today):
         sym["base"] = prev_close
-        sym["last_day"] = today
         sym["logged"] = False
-
         utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
 
     if sym["base"] is None:
-        return
+        sym["base"] = prev_close  # initialize once
 
     base = sym["base"]
 
@@ -115,7 +144,16 @@ def process_symbol(symbol, df, price, state):
     positions = sym["positions"]
     last_price = sym.get("last_price")
 
-    # ===== TREND FILTER =====
+    # ===== ADX FILTER =====
+    adx = df.iloc[-1]["adx"]
+    prev_adx = df.iloc[-2]["adx"]
+    plus_di = df.iloc[-1]["+di"]
+    minus_di = df.iloc[-1]["-di"]
+
+    adx_up = adx > prev_adx and adx > ADX_THRESHOLD
+    bullish = plus_di > minus_di
+    bearish = minus_di > plus_di
+
     allow_entry = abs(price - base) <= gap * TREND_BREAK_MULTIPLIER
 
     # ===== LEVELS =====
@@ -123,43 +161,45 @@ def process_symbol(symbol, df, price, state):
     sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
 
     # ================= ENTRY =================
-    if last_price is not None and allow_entry:
+    if last_price is not None and allow_entry and adx_up:
 
-        # ===== LONG =====
-        for level in buy_levels:
-            if last_price > level >= price and not any(
-                p["grid"] == level and p["side"] == "long" for p in positions
-            ):
-                entry = price
+        # ===== BREAKOUT BUY =====
+        if bullish:
+            for level in sell_levels:
+                if last_price < level <= price and not any(
+                    p["grid"] == level and p["side"] == "long" for p in positions
+                ):
+                    entry = price
 
-                positions.append({
-                    "side": "long",
-                    "entry": entry,
-                    "grid": level,
-                    "qty": qty,
-                    "sl": entry - gap * STOP_LOSS_MULTIPLIER,
-                    "time": now
-                })
+                    positions.append({
+                        "side": "long",
+                        "entry": entry,
+                        "grid": level,
+                        "qty": qty,
+                        "sl": entry - gap * STOP_LOSS_MULTIPLIER,
+                        "time": now
+                    })
 
-                utils.log(f"🟢 BUY {symbol} @ {round(entry,2)}", tg=True)
+                    utils.log(f"🚀 BUY BREAKOUT {symbol} @ {round(entry,2)}", tg=True)
 
-        # ===== SHORT =====
-        for level in sell_levels:
-            if last_price < level <= price and not any(
-                p["grid"] == level and p["side"] == "short" for p in positions
-            ):
-                entry = price
+        # ===== BREAKDOWN SHORT =====
+        if bearish:
+            for level in buy_levels:
+                if last_price > level >= price and not any(
+                    p["grid"] == level and p["side"] == "short" for p in positions
+                ):
+                    entry = price
 
-                positions.append({
-                    "side": "short",
-                    "entry": entry,
-                    "grid": level,
-                    "qty": qty,
-                    "sl": entry + gap * STOP_LOSS_MULTIPLIER,
-                    "time": now
-                })
+                    positions.append({
+                        "side": "short",
+                        "entry": entry,
+                        "grid": level,
+                        "qty": qty,
+                        "sl": entry + gap * STOP_LOSS_MULTIPLIER,
+                        "time": now
+                    })
 
-                utils.log(f"🔴 SHORT {symbol} @ {round(entry,2)}", tg=True)
+                    utils.log(f"⚡ SHORT BREAKDOWN {symbol} @ {round(entry,2)}", tg=True)
 
     # ================= DRAWDOWN =================
     floating = 0
@@ -175,7 +215,7 @@ def process_symbol(symbol, df, price, state):
         positions.clear()
         return
 
-    # ================= EXIT (ALWAYS) =================
+    # ================= EXIT =================
     for p in positions[:]:
 
         exit_trade = False
@@ -183,30 +223,18 @@ def process_symbol(symbol, df, price, state):
         if p["side"] == "long":
             tp = p["entry"] + gap
 
-            if price >= tp:
+            if price >= tp or price <= p["sl"]:
                 exit_price = price
                 pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
-
-            elif price <= p["sl"]:
-                exit_price = price
-                pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-                exit_trade = True
-                utils.log(f"🛑 SL LONG {symbol}", tg=True)
 
         else:
             tp = p["entry"] - gap
 
-            if price <= tp:
+            if price <= tp or price >= p["sl"]:
                 exit_price = price
                 pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
-
-            elif price >= p["sl"]:
-                exit_price = price
-                pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
-                exit_trade = True
-                utils.log(f"🛑 SL SHORT {symbol}", tg=True)
 
         if not exit_trade:
             continue
@@ -233,7 +261,6 @@ def process_symbol(symbol, df, price, state):
 
         positions.remove(p)
 
-    # ===== SAVE PRICE =====
     sym["last_price"] = price
 
 
@@ -250,12 +277,12 @@ def run():
                 "last_day": None,
                 "logged": False,
                 "last_price": None,
-                "initialized": False   # ✅ important
+                "initialized": False
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 GRID BOT STARTED (2PM RESET + SAFE WINDOW)", tg=True)
+    utils.log("🚀 TREND GRID BOT STARTED (2AM RESET)", tg=True)
 
     while True:
         try:
