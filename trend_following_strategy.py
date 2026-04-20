@@ -53,27 +53,6 @@ IST = pytz.timezone("Asia/Kolkata")
 def get_ist_time():
     return datetime.now(IST)
 
-# ================= RESET LOGIC =================
-
-def should_reset(now, sym, today):
-
-    # FIRST RUN → reset immediately
-    if not sym["initialized"]:
-        sym["initialized"] = True
-        sym["last_day"] = today
-        return True
-
-    # DAILY RESET at 2 AM
-    if (
-        now.hour == RESET_HOUR and
-        now.minute < 5 and
-        sym["last_day"] != today
-    ):
-        sym["last_day"] = today
-        return True
-
-    return False
-
 # ================= INDICATORS =================
 
 def add_indicators(df):
@@ -108,23 +87,37 @@ def process_symbol(symbol, df, price, state):
 
     sym = state["symbols"][symbol]
     now = get_ist_time()
+    today = now.date()
 
     if df is None or len(df) < 20:
         return
 
     df = add_indicators(df)
 
-    today = now.date()
+    # ================= RESET LOGIC =================
 
-    # ===== RESET =====
-    if should_reset(now, sym, today):
-        sym["base"] = round(price, 2)   # 🔥 LIVE PRICE
-        sym["logged"] = False
-        utils.log(f"🔄 RESET {symbol} base -> {round(price,2)}", tg=True)
+    # 🟢 FIRST RUN RESET
+    if not sym["initialized"]:
+        sym["initialized"] = True
+        sym["last_day"] = today
 
-    # Initialize base if None
-    if sym["base"] is None:
         sym["base"] = round(price, 2)
+        sym["logged"] = False
+
+        utils.log(f"🟢 FIRST RESET {symbol} base -> {round(price,2)}", tg=True)
+
+    # ⏰ DAILY 2 AM RESET
+    elif (
+        now.hour == RESET_HOUR and
+        now.minute < 5 and
+        sym["last_day"] != today
+    ):
+        sym["last_day"] = today
+
+        sym["base"] = round(price, 2)
+        sym["logged"] = False
+
+        utils.log(f"🔄 2AM RESET {symbol} base -> {round(price,2)}", tg=True)
 
     base = sym["base"]
 
@@ -156,43 +149,37 @@ def process_symbol(symbol, df, price, state):
     # ================= ENTRY =================
     if last_price is not None and allow_entry and adx_up:
 
-        # ===== BUY BREAKOUT =====
+        # BUY
         if bullish:
             for level in sell_levels:
                 if last_price < level <= price and not any(
                     p["grid"] == level and p["side"] == "long" for p in positions
                 ):
-                    entry = price
-
                     positions.append({
                         "side": "long",
-                        "entry": entry,
+                        "entry": price,
                         "grid": level,
                         "qty": qty,
-                        "sl": entry - gap * STOP_LOSS_MULTIPLIER,
+                        "sl": price - gap * STOP_LOSS_MULTIPLIER,
                         "time": now
                     })
+                    utils.log(f"🚀 BUY {symbol} @ {round(price,2)}", tg=True)
 
-                    utils.log(f"🚀 BUY {symbol} @ {round(entry,2)}", tg=True)
-
-        # ===== SHORT BREAKDOWN =====
+        # SHORT
         if bearish:
             for level in buy_levels:
                 if last_price > level >= price and not any(
                     p["grid"] == level and p["side"] == "short" for p in positions
                 ):
-                    entry = price
-
                     positions.append({
                         "side": "short",
-                        "entry": entry,
+                        "entry": price,
                         "grid": level,
                         "qty": qty,
-                        "sl": entry + gap * STOP_LOSS_MULTIPLIER,
+                        "sl": price + gap * STOP_LOSS_MULTIPLIER,
                         "time": now
                     })
-
-                    utils.log(f"⚡ SHORT {symbol} @ {round(entry,2)}", tg=True)
+                    utils.log(f"⚡ SHORT {symbol} @ {round(price,2)}", tg=True)
 
     # ================= DRAWDOWN =================
     floating = 0
@@ -214,24 +201,20 @@ def process_symbol(symbol, df, price, state):
         exit_trade = False
 
         if p["side"] == "long":
-            tp = p["entry"] + gap
-            if price >= tp or price <= p["sl"]:
-                exit_price = price
-                pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+            if price >= p["entry"] + gap or price <= p["sl"]:
+                pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
 
         else:
-            tp = p["entry"] - gap
-            if price <= tp or price >= p["sl"]:
-                exit_price = price
-                pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
+            if price <= p["entry"] - gap or price >= p["sl"]:
+                pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
 
         if not exit_trade:
             continue
 
         fee = utils.commission(p["entry"], p["qty"], symbol) + \
-              utils.commission(exit_price, p["qty"], symbol)
+              utils.commission(price, p["qty"], symbol)
 
         net = pnl - fee
         state["balance"] += net
@@ -240,7 +223,7 @@ def process_symbol(symbol, df, price, state):
             "symbol": symbol,
             "side": p["side"],
             "entry_price": p["entry"],
-            "exit_price": exit_price,
+            "exit_price": price,
             "qty": p["qty"],
             "net_pnl": round(net, 6),
             "entry_time": p["time"],
@@ -273,7 +256,7 @@ def run():
         }
     }
 
-    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET, LIVE PRICE BASE)", tg=True)
+    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET, LIVE PRICE)", tg=True)
 
     while True:
         try:
