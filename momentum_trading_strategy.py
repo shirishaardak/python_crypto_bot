@@ -1,287 +1,263 @@
 import os
 import time
+import requests
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 import pandas_ta as ta
-import traceback
+from scipy.signal import argrelextrema
+from dotenv import load_dotenv
+load_dotenv()
 
-from utils import TradingUtils
-
-# ================= CONFIG =================
-
-BOT_NAME = "momentum_trading_strategy"
-
+# ================= SETTINGS =================
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-CONTRACT_SIZE = {
-    "BTCUSD": 0.001,
-    "ETHUSD": 0.01
-}
-
+DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 TAKER_FEE = 0.0005
 
+TIMEFRAME = "15m"
 DAYS = 5
 
-START_BALANCE = 10000
-MIN_BALANCE = 500
+STOP_LOSS = {"BTCUSD": 200, "ETHUSD": 20}
+TARGET = {"BTCUSD": 100, "ETHUSD": 10}
 
-# 🔥 risk per symbol
-RISK_PER_TRADE = {
-    "BTCUSD": 0.01,
-    "ETHUSD": 0.008
-}
+# ================= TELEGRAM =================
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOK")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_")
 
-MAX_DAILY_LOSS = 0.03
-MAX_TRADES_PER_DAY = 5
-COOLDOWN = 3
+BASE_DIR = os.getcwd()
+SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_following_strategy")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-# ================= UTILS =================
+TRADE_CSV = os.path.join(SAVE_DIR, "live_trades.csv")
 
-utils_5m = TradingUtils(
-    contract_size=CONTRACT_SIZE,
-    taker_fee=TAKER_FEE,
-    timeframe="5",
-    days=DAYS,
-    bot_name=BOT_NAME,
-)
+# ================= UTILITIES =================
+def log(msg):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
-utils_15m = TradingUtils(
-    contract_size=CONTRACT_SIZE,
-    taker_fee=TAKER_FEE,
-    timeframe="15",
-    days=DAYS,
-    bot_name=BOT_NAME
-)
+def send_telegram(msg):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, data={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg,
+            "parse_mode": "HTML"
+        }, timeout=5)
+    except Exception as e:
+        log(f"Telegram error: {e}")
 
-# ================= INDICATORS =================
+def commission(price, qty, symbol):
+    return price * CONTRACT_SIZE[symbol] * qty * TAKER_FEE
 
-def add_indicators(df):
-    df["EMA50"] = ta.ema(df["Close"], length=50)
-    df["EMA200"] = ta.ema(df["Close"], length=200)
-    df["RSI"] = ta.rsi(df["Close"], length=14)
-    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    df["VOL_MA"] = df["Volume"].rolling(20).mean()
-    return df
+def save_trade(trade):
+    trade = trade.copy()
+    for c in ["entry_time", "exit_time"]:
+        trade[c] = trade[c].strftime("%Y-%m-%d %H:%M:%S")
 
-# ================= POSITION SIZE =================
+    pd.DataFrame([trade]).to_csv(
+        TRADE_CSV,
+        mode="a",
+        header=not os.path.exists(TRADE_CSV),
+        index=False
+    )
 
-def calculate_position_size(balance, risk_per_trade, stop_distance, symbol):
-    risk_amount = balance * risk_per_trade
-    qty = risk_amount / (stop_distance * CONTRACT_SIZE[symbol])
-    return max(round(qty, 2), 1)
+def save_processed_data(data, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    out = pd.DataFrame({
+        "time": data.index,
+        "HA_open": data["HA_open"],
+        "HA_high": data["HA_high"],
+        "HA_low": data["HA_low"],
+        "HA_close": data["HA_close"],
+        "trendline": data["trendline"],
+        "ATR": data["ATR_HA"],
+        "ATR_MA": data["ATR_MA_HA"]
+    })
+    out.to_csv(path, index=False)
 
-# ================= RISK CONTROL =================
+# ================= DATA =================
+def fetch_price(symbol):
+    r = requests.get(
+        f"https://api.india.delta.exchange/v2/tickers/{symbol}",
+        timeout=5
+    )
+    return float(r.json()["result"]["mark_price"])
 
-def check_daily_limits(state):
-    today = datetime.now().date()
+def fetch_candles(symbol, resolution=TIMEFRAME, days=DAYS, tz="Asia/Kolkata"):
+    start = int((datetime.now() - timedelta(days=days)).timestamp())
 
-    if state.get("day") != today:
-        state["day"] = today
-        state["start_balance"] = state["balance"]
-        state["trades_today"] = 0
+    r = requests.get(
+        "https://api.india.delta.exchange/v2/history/candles",
+        params={
+            "resolution": resolution,
+            "symbol": symbol,
+            "start": str(start),
+            "end": str(int(time.time()))
+        },
+        timeout=10
+    )
 
-    drawdown = (state["balance"] - state["start_balance"]) / state["start_balance"]
+    df = pd.DataFrame(
+        r.json()["result"],
+        columns=["time", "open", "high", "low", "close", "volume"]
+    )
 
-    if drawdown <= -MAX_DAILY_LOSS:
-        return True
+    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_convert(tz)
+    df.set_index("time", inplace=True)
+    df = df.astype(float)
+    return df.sort_index()
 
-    if state["trades_today"] >= MAX_TRADES_PER_DAY:
-        return True
+# ================= TRENDLINE =================
+def calculate_trendline(df):
+    ha = ta.ha(df["open"], df["high"], df["low"], df["close"]).reset_index(drop=True)
+    data = df.copy().reset_index(drop=True)
 
-    return False
+    data["HA_open"] = ha["HA_open"]
+    data["HA_high"] = ha["HA_high"]
+    data["HA_low"] = ha["HA_low"]
+    data["HA_close"] = ha["HA_close"]
 
-def in_cooldown(state, idx):
-    last = state.get("last_trade_index")
-    if last is None:
-        return False
-    return (idx - last) < COOLDOWN
+    high_vals = data["HA_high"].values
+    low_vals = data["HA_low"].values
 
-# ================= FETCH =================
+    max_idx = argrelextrema(high_vals, np.greater_equal, order=7)[0]
+    min_idx = argrelextrema(low_vals, np.less_equal, order=7)[0]
 
-def fetch_multi_tf(symbol):
+    data["smoothed_high"] = np.nan
+    data["smoothed_low"] = np.nan
 
-    df_5m = utils_5m.fetch_candles(symbol)
-    df_15m = utils_15m.fetch_candles(symbol)
+    data.iloc[max_idx, data.columns.get_loc("smoothed_high")] = data["HA_high"].iloc[max_idx]
+    data.iloc[min_idx, data.columns.get_loc("smoothed_low")] = data["HA_low"].iloc[min_idx]
 
-    if df_5m is None or df_15m is None:
-        return None, None
+    data[["smoothed_high", "smoothed_low"]] = data[["smoothed_high", "smoothed_low"]].ffill()
 
-    if df_5m.empty or df_15m.empty:
-        return None, None
+    data["trendline"] = np.nan
+    trendline = data["HA_close"].iloc[0]
+    data.iloc[0, data.columns.get_loc("trendline")] = trendline
 
-    return df_5m, df_15m
+    for i in range(1, len(data)):
+        if data["HA_high"].iloc[i] > data["smoothed_high"].iloc[i-1]:
+            trendline = data["smoothed_low"].iloc[i]
+        elif data["HA_low"].iloc[i] < data["smoothed_low"].iloc[i -1]:
+            trendline = data["smoothed_high"].iloc[i]
+        data.loc[i, "trendline"] = trendline
+
+    data.index = df.index
+    return data
 
 # ================= STRATEGY =================
+def process_symbol(symbol, df, price, state):
+    data = calculate_trendline(df)
 
-def process_symbol(symbol, df_5m, df_15m, price, state, is_new_candle):
+    data["ATR_HA"] = ta.atr(
+        data["HA_high"], data["HA_low"], data["HA_close"], length=14
+    )
+    data["ATR_MA_HA"] = data["ATR_HA"].rolling(21).mean()
 
-    df_5m = add_indicators(df_5m)
-    df_15m = add_indicators(df_15m)
+    # save_processed_data(data, symbol)
 
-    last_5m = df_5m.iloc[-2]
-    last_15m = df_15m.iloc[-2]
-
-    idx = len(df_5m)
-
-    if check_daily_limits(state):
-        utils_5m.log(f"⛔ {symbol} trading paused (risk limits)")
-        return
-
-    if in_cooldown(state, idx):
-        return
-
+    last = data.iloc[-1]
+    prev = data.iloc[-2]
+    candle_time = data.index[-1]
     pos = state["position"]
-    now = datetime.now()
 
-    # ================= EXIT =================
-    if pos:
+    # ===== CROSS ONLY =====
+    cross_up = last.HA_close < last.trendline and last.HA_close > prev.HA_close
+    cross_down = last.HA_close > last.trendline and last.HA_close < prev.HA_close
 
-        hit_tp = False
-        hit_sl = False
-
-        if pos["side"] == "long":
-            if price >= pos["tp"]:
-                hit_tp = True
-            elif price <= pos["sl"]:
-                hit_sl = True
-        else:
-            if price <= pos["tp"]:
-                hit_tp = True
-            elif price >= pos["sl"]:
-                hit_sl = True
-
-        if hit_tp or hit_sl:
-
-            pnl = (
-                (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-                if pos["side"] == "long"
-                else (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            )
-
-            fee = utils_5m.commission(pos["entry"], pos["qty"], symbol) + \
-                  utils_5m.commission(price, pos["qty"], symbol)
-
-            net = pnl - fee
-
-            state["balance"] += net
-            state["position"] = None
-            state["last_trade_index"] = idx
-            state["trades_today"] += 1
-
-            utils_5m.log(f"{symbol} {'🟢 TP' if hit_tp else '🔴 SL'} | PNL: {round(net,2)} | Bal: {round(state['balance'],2)}")
-            return
-
-    # ================= ENTRY =================
-    if not pos and is_new_candle:
-
-        balance = state["balance"]
-
-        if balance < MIN_BALANCE:
-            return
-
-        atr = last_5m["ATR"]
-
-        rsi_long = 55 if symbol == "ETHUSD" else 50
-        rsi_short = 45 if symbol == "ETHUSD" else 50
-
-        # 🔼 LONG
-        if (
-            last_15m["EMA50"] > last_15m["EMA200"] and
-            last_5m["Close"] > last_5m["EMA50"] and
-            last_5m["RSI"] > rsi_long and
-            last_5m["Volume"] > last_5m["VOL_MA"]
-        ):
-
-            sl = price - atr
-            tp = price + (atr * 1.5)
-
-            qty = calculate_position_size(balance, RISK_PER_TRADE[symbol], atr, symbol)
-
+    # ===== ENTRY =====
+    if pos is None and state["last_candle"] != candle_time:
+        if cross_up:
             state["position"] = {
                 "side": "long",
                 "entry": price,
-                "qty": qty,
-                "sl": sl,
-                "tp": tp,
-                "entry_time": now
+                "stop": last.trendline - STOP_LOSS[symbol],
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now()
             }
+            state["last_candle"] = candle_time
+            send_telegram(f"📈 <b>{symbol} LONG ENTRY</b>\n{price}")
+            return
 
-            utils_5m.log(f"🟢 LONG {symbol} @ {price}")
-
-        # 🔽 SHORT
-        elif (
-            last_15m["EMA50"] < last_15m["EMA200"] and
-            last_5m["Close"] < last_5m["EMA50"] and
-            last_5m["RSI"] < rsi_short and
-            last_5m["Volume"] > last_5m["VOL_MA"]
-        ):
-
-            sl = price + atr
-            tp = price - (atr * 1.5)
-
-            qty = calculate_position_size(balance, RISK_PER_TRADE[symbol], atr, symbol)
-
+        if cross_down:
             state["position"] = {
                 "side": "short",
                 "entry": price,
-                "qty": qty,
-                "sl": sl,
-                "tp": tp,
-                "entry_time": now
+                "stop": last.trendline + STOP_LOSS[symbol],
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": datetime.now()
             }
+            state["last_candle"] = candle_time
+            send_telegram(f"📉 <b>{symbol} SHORT ENTRY</b>\n{price}")
+            return
 
-            utils_5m.log(f"🔴 SHORT {symbol} @ {price}")
+    # ===== EXIT =====
+    if pos:
+        exit_trade = False
+
+        if pos["side"] == "long":
+            pos["stop"] = last.trendline - STOP_LOSS[symbol]
+            if   last.HA_close < last.trendline:
+                exit_trade = True
+
+        if pos["side"] == "short":
+            pos["stop"] = last.trendline + STOP_LOSS[symbol]
+            if  last.HA_close > last.trendline:
+                exit_trade = True
+
+        if exit_trade:
+            pnl = (
+                (price - pos["entry"]) if pos["side"] == "long"
+                else (pos["entry"] - price)
+            ) * CONTRACT_SIZE[symbol] * pos["qty"]
+
+            net = pnl - commission(price, pos["qty"], symbol)
+
+            save_trade({
+                "symbol": symbol,
+                "side": pos["side"],
+                "entry_price": pos["entry"],
+                "exit_price": price,
+                "qty": pos["qty"],
+                "net_pnl": round(net, 6),
+                "entry_time": pos["entry_time"],
+                "exit_time": datetime.now()
+            })
+
+            send_telegram(
+                f"✅ <b>{symbol} {pos['side'].upper()} EXIT</b>\n"
+                f"Net PnL: {round(net, 6)}"
+            )
+            state["position"] = None
 
 # ================= MAIN =================
-
 def run():
+    if not os.path.exists(TRADE_CSV):
+        pd.DataFrame(columns=[
+            "entry_time", "exit_time", "symbol", "side",
+            "entry_price", "exit_price", "qty", "net_pnl"
+        ]).to_csv(TRADE_CSV, index=False)
 
-    state = {
-        s: {
-            "position": None,
-            "last_candle_time": None,
-            "last_trade_index": None,
-            "balance": START_BALANCE,
-            "day": None,
-            "start_balance": START_BALANCE,
-            "trades_today": 0
-        } for s in SYMBOLS
-    }
+    state = {s: {"position": None, "last_candle": None} for s in SYMBOLS}
 
-    print("🚀 MULTI-ASSET PRO BOT STARTED (PAPER MODE)")
+    send_telegram("🚀 <b>Heikin Ashi Bot Started (Processed Data Restored)</b>")
 
     while True:
-
         try:
             for symbol in SYMBOLS:
-
-                df_5m, df_15m = fetch_multi_tf(symbol)
-
-                if df_5m is None or len(df_5m) < 200:
+                df = fetch_candles(symbol)
+                if len(df) < 100:
                     continue
 
-                latest_time = df_5m.index[-2]
+                price = fetch_price(symbol)
+                process_symbol(symbol, df, price, state[symbol])
 
-                is_new_candle = state[symbol]["last_candle_time"] != latest_time
-
-                if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_time
-
-                price = utils_5m.fetch_price(symbol)
-
-                if price is None:
-                    continue
-
-                process_symbol(symbol, df_5m, df_15m, price, state[symbol], is_new_candle)
-
-            time.sleep(2)
+            time.sleep(20)
 
         except Exception as e:
-            print(f"🚨 ERROR: {e}")
-            traceback.print_exc()
+            log(e)
             time.sleep(5)
-
-# ================= START =================
 
 if __name__ == "__main__":
     run()
