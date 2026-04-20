@@ -57,20 +57,23 @@ IST = pytz.timezone("Asia/Kolkata")
 def get_ist_time():
     return datetime.now(IST)
 
-def can_enter_trade(now):
-    return TRADING_START <= now.hour < TRADING_END
-
 # ================= RESET LOGIC =================
 
 def should_reset(now, sym, today):
 
-    # First run (do NOT force reset)
+    # ✅ FIRST RUN → reset immediately
     if not sym["initialized"]:
         sym["initialized"] = True
-        sym["last_day"] = today
-        return False
 
-    # Reset once per day at 2 AM
+        # avoid double reset if starting exactly near 2 AM
+        if now.hour == RESET_HOUR:
+            sym["last_day"] = today
+            return False
+
+        sym["last_day"] = today
+        return True
+
+    # ✅ DAILY RESET at 2 AM (only once)
     if (
         now.hour == RESET_HOUR and
         now.minute < 5 and
@@ -130,8 +133,9 @@ def process_symbol(symbol, df, price, state):
         sym["logged"] = False
         utils.log(f"🔄 RESET {symbol} base -> {round(prev_close,2)}", tg=True)
 
+    # Initialize base if still None
     if sym["base"] is None:
-        sym["base"] = prev_close  # initialize once
+        sym["base"] = prev_close
 
     base = sym["base"]
 
@@ -282,7 +286,7 @@ def run():
         }
     }
 
-    utils.log("🚀 TREND GRID BOT STARTED (2AM RESET)", tg=True)
+    utils.log("🚀 TREND GRID BOT STARTED (FIRST RUN + 2AM RESET)", tg=True)
 
     while True:
         try:
