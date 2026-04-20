@@ -12,21 +12,19 @@ load_dotenv()
 
 BOT_NAME = "grid_strategy_real"
 
-SYMBOLS = ["BTCUSD", "ETHUSD"]
+SYMBOLS = ["BTCUSD"]
 
-CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
+CONTRACT_SIZE = {"BTCUSD": 0.001}
 
 GRID_SIZE = {
-    "BTCUSD": 200,
-    "ETHUSD": 30
+    "BTCUSD": 200
 }
 
 GRID_QTY = {
-    "BTCUSD": 100,
-    "ETHUSD": 100
+    "BTCUSD": 100
 }
 
-MAX_GRIDS = 5
+MAX_GRIDS = 3
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1d"
@@ -42,7 +40,7 @@ TRADING_END = 13     # 1 PM
 RESET_HOUR = 2       # ✅ 2 AM reset
 
 # ===== RISK =====
-STOP_LOSS_MULTIPLIER = 1.0
+STOP_LOSS_MULTIPLIER = 1.5
 MAX_DRAWDOWN = 0.05
 TREND_BREAK_MULTIPLIER = 4
 
