@@ -35,15 +35,12 @@ DAYS = 15
 
 SLEEP_TIME = 2
 
-# ===== RESET TIME =====
 RESET_HOUR = 2   # 2 AM IST
 
-# ===== RISK =====
 STOP_LOSS_MULTIPLIER = 0.7
 MAX_DRAWDOWN = 0.05
 TREND_BREAK_MULTIPLIER = 4
 
-# ===== ADX =====
 ADX_THRESHOLD = 20
 
 # ================= TIMEZONE =================
@@ -89,35 +86,34 @@ def process_symbol(symbol, df, price, state):
     now = get_ist_time()
     today = now.date()
 
-    if df is None or len(df) < 20:
-        return
+    # ================= RESET FIRST (CRITICAL FIX) =================
 
-    df = add_indicators(df)
-
-    # ================= RESET LOGIC =================
-
-    # 🟢 FIRST RUN RESET
+    # 🟢 FIRST RUN RESET (always happens)
     if not sym["initialized"]:
         sym["initialized"] = True
         sym["last_day"] = today
-
         sym["base"] = round(price, 2)
         sym["logged"] = False
 
         utils.log(f"🟢 FIRST RESET {symbol} base -> {round(price,2)}", tg=True)
 
-    # ⏰ DAILY 2 AM RESET
+    # ⏰ DAILY RESET
     elif (
         now.hour == RESET_HOUR and
         now.minute < 5 and
         sym["last_day"] != today
     ):
         sym["last_day"] = today
-
         sym["base"] = round(price, 2)
         sym["logged"] = False
 
         utils.log(f"🔄 2AM RESET {symbol} base -> {round(price,2)}", tg=True)
+
+    # ❗ AFTER RESET → check candle data
+    if df is None or len(df) < 20:
+        return
+
+    df = add_indicators(df)
 
     base = sym["base"]
 
@@ -149,7 +145,6 @@ def process_symbol(symbol, df, price, state):
     # ================= ENTRY =================
     if last_price is not None and allow_entry and adx_up:
 
-        # BUY
         if bullish:
             for level in sell_levels:
                 if last_price < level <= price and not any(
@@ -165,7 +160,6 @@ def process_symbol(symbol, df, price, state):
                     })
                     utils.log(f"🚀 BUY {symbol} @ {round(price,2)}", tg=True)
 
-        # SHORT
         if bearish:
             for level in buy_levels:
                 if last_price > level >= price and not any(
@@ -204,7 +198,6 @@ def process_symbol(symbol, df, price, state):
             if price >= p["entry"] + gap or price <= p["sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
-
         else:
             if price <= p["entry"] - gap or price >= p["sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -256,16 +249,16 @@ def run():
         }
     }
 
-    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET, LIVE PRICE)", tg=True)
+    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET FIXED)", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
+                price = utils.fetch_price(symbol)   # 👈 fetch price FIRST
                 df = utils.fetch_candles(symbol)
-                price = utils.fetch_price(symbol)
 
-                if df is None or price is None:
+                if price is None:
                     continue
 
                 process_symbol(symbol, df, price, state)
