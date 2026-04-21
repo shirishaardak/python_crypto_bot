@@ -23,7 +23,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001}
 STOPLOSS = {"BTCUSD": 500}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "15m"
+TIMEFRAME = "1h"
 DAYS = 5
 
 MIN_BALANCE = 5000
@@ -101,7 +101,7 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    order = 7
+    order = 5
 
     # ✅ make rolling causal (no current candle leakage)
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
@@ -124,16 +124,19 @@ def calculate_trendline(df):
         upper = ha.loc[i, "UPPER"]
         lower = ha.loc[i, "LOWER"]
 
+        prev_upper = ha.loc[i-1, "UPPER"]
+        prev_lower = ha.loc[i-1, "LOWER"]
+
         # skip until enough data exists
         if np.isnan(upper) or np.isnan(lower):
             ha.loc[i, "Trendline"] = prev_trend
             continue
 
         # trend switch logic
-        if prev_high < ha.loc[i, "HA_high"] and current_close > prev_trend:
+        if ha.loc[i, "HA_high"] > prev_upper and current_close > prev_trend:
             trend = lower
 
-        elif prev_low > ha.loc[i, "HA_low"] and current_close < prev_trend:
+        elif ha.loc[i, "HA_low"] < prev_lower and current_close < prev_trend:
             trend = upper
 
         else:
@@ -148,7 +151,7 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
-    # save_processed_data(ha, symbol)
+    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
@@ -162,12 +165,12 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and last.HA_close < last.Trendline:
+        if pos["side"] == "long" and price < last.Trendline:
 
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
-        elif pos["side"] == "short" and last.HA_close > last.Trendline:
+        elif pos["side"] == "short" and price > last.Trendline:
 
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
