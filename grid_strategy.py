@@ -2,7 +2,6 @@ import os
 import time
 from datetime import datetime
 import pytz
-import pandas as pd
 from dotenv import load_dotenv
 
 from utils import TradingUtils
@@ -11,20 +10,25 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "grid_strategy"
+BOT_NAME = "grid_strategy_real"
 
 SYMBOLS = ["BTCUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 
-GRID_QTY = {"BTCUSD": 100}
+GRID_SIZE = {
+    "BTCUSD": 200
+}
+
+GRID_QTY = {
+    "BTCUSD": 100
+}
 
 MAX_GRIDS = 3
-
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1d"
-DAYS = 20
+DAYS = 15
 
 SLEEP_TIME = 2
 
@@ -33,14 +37,12 @@ TRADING_END = 13
 
 RESET_HOUR = 2
 
-MAX_DRAWDOWN = 0.04
-
-ATR_PERIOD = 14
+STOP_LOSS_MULTIPLIER = 1.5
+MAX_DRAWDOWN = 0.05
+TREND_BREAK_MULTIPLIER = 4
 
 IST = pytz.timezone("Asia/Kolkata")
 
-
-# ================= UTILS =================
 
 def get_ist_time():
     return datetime.now(IST)
@@ -50,30 +52,16 @@ def can_enter_trade(now):
     return TRADING_START <= now.hour < TRADING_END
 
 
-def calculate_atr(df, period=ATR_PERIOD):
-    df = df.copy()
-
-    df["tr"] = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - df["close"].shift()).abs(),
-        (df["low"] - df["close"].shift()).abs()
-    ], axis=1).max(axis=1)
-
-    return df["tr"].rolling(period).mean().iloc[-1]
-
-
 def should_reset(now, sym, today):
     if not sym["initialized"]:
         sym["initialized"] = True
         return True
 
-    if now.hour == RESET_HOUR and sym["last_day"] != today:
+    if now.hour == RESET_HOUR and now.minute < 5 and sym["last_day"] != today:
         return True
 
     return False
 
-
-# ================= TRADING ENGINE =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
@@ -86,126 +74,163 @@ utils = TradingUtils(
 )
 
 
+# ================= STRATEGY =================
+
 def process_symbol(symbol, df, price, state):
 
     sym = state["symbols"][symbol]
     now = get_ist_time()
 
-    if df is None or len(df) < 20:
+    if df is None or len(df) < 3:
         return
 
     today = now.date()
 
-    # ================= RESET =================
+    # ===== RESET =====
     if should_reset(now, sym, today):
         sym["base"] = price
-        sym["positions"] = []
         sym["last_day"] = today
+        sym["logged"] = False
         utils.log(f"🔄 RESET {symbol} base -> {round(price,2)}", tg=True)
 
     if sym["base"] is None:
         return
 
     base = sym["base"]
+
+    if not sym["logged"]:
+        print(f"{symbol} Base Price: {round(base,2)}")
+        sym["logged"] = True
+
+    gap = GRID_SIZE[symbol]
+    qty = GRID_QTY[symbol]
     positions = sym["positions"]
     last_price = sym.get("last_price")
 
-    # ================= ATR DYNAMIC SETTINGS =================
-    atr = calculate_atr(df)
+    allow_entry = abs(price - base) <= gap * TREND_BREAK_MULTIPLIER
 
-    grid_size = atr * 0.8
-    sl_distance = atr * 1.2
-    tp_distance = atr * 1.0
-
-    qty = GRID_QTY[symbol]
-
-    # ================= GRID LEVELS =================
-    buy_levels = [base - i * grid_size for i in range(1, MAX_GRIDS + 1)]
-    sell_levels = [base + i * grid_size for i in range(1, MAX_GRIDS + 1)]
+    buy_levels = [round(base - i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
+    sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
 
     # ================= ENTRY =================
-    if last_price and can_enter_trade(now):
+    if (
+        last_price is not None
+        and allow_entry
+        and can_enter_trade(now)
+        and len(positions) < MAX_GRIDS
+    ):
 
-        # LONG GRID
+        # LONG
         for level in buy_levels:
-            if last_price > level >= price:
-                if not any(p["grid"] == level and p["side"] == "long" for p in positions):
+            if last_price > level >= price and not any(
+                p["grid"] == level and p["side"] == "long" for p in positions
+            ):
+                entry = price
 
-                    positions.append({
-                        "side": "long",
-                        "entry": price,
-                        "grid": level,
-                        "qty": qty,
-                        "sl": price - sl_distance,
-                        "tp": price + tp_distance,
-                        "time": now
-                    })
+                positions.append({
+                    "side": "long",
+                    "entry": entry,
+                    "grid": level,
+                    "grid_index": buy_levels.index(level) + 1,
+                    "qty": qty,
+                    "sl": entry - gap * STOP_LOSS_MULTIPLIER,
+                    "time": now
+                })
 
-                    utils.log(f"🟢 LONG {symbol} @ {round(price,2)}", tg=True)
+                utils.log(f"🟢 BUY {symbol} @ {round(entry,2)}", tg=True)
 
-        # SHORT GRID
+        # SHORT
         for level in sell_levels:
-            if last_price < level <= price:
-                if not any(p["grid"] == level and p["side"] == "short" for p in positions):
+            if last_price < level <= price and not any(
+                p["grid"] == level and p["side"] == "short" for p in positions
+            ):
+                entry = price
 
-                    positions.append({
-                        "side": "short",
-                        "entry": price,
-                        "grid": level,
-                        "qty": qty,
-                        "sl": price + sl_distance,
-                        "tp": price - tp_distance,
-                        "time": now
-                    })
+                positions.append({
+                    "side": "short",
+                    "entry": entry,
+                    "grid": level,
+                    "grid_index": sell_levels.index(level) + 1,
+                    "qty": qty,
+                    "sl": entry + gap * STOP_LOSS_MULTIPLIER,
+                    "time": now
+                })
 
-                    utils.log(f"🔴 SHORT {symbol} @ {round(price,2)}", tg=True)
+                utils.log(f"🔴 SHORT {symbol} @ {round(entry,2)}", tg=True)
 
-    # ================= TRAILING STOP (SMART) =================
+    # ================= TRAILING SL =================
     for p in positions:
 
-        if p["side"] == "long":
-            profit = price - p["entry"]
+        entry_grid = p["grid_index"]
 
-            if profit > atr:
-                new_sl = price - atr * 0.6
+        if p["side"] == "long":
+
+            current_grid = int((price - base) // gap)
+            move = current_grid + entry_grid
+
+            if move >= 2:
+                new_sl = base + (move - 1 - entry_grid) * gap
+
                 if new_sl > p["sl"]:
+                    new_sl = min(new_sl, price - 1e-6)
                     p["sl"] = new_sl
+                    utils.log(
+                        f"🔼 TSL LONG {symbol} (G{entry_grid}) -> {round(new_sl,2)}",
+                        tg=True
+                    )
 
         else:
-            profit = p["entry"] - price
 
-            if profit > atr:
-                new_sl = price + atr * 0.6
+            current_grid = int((base - price) // gap)
+            move = current_grid + entry_grid
+
+            if move >= 2:
+                new_sl = base - (move - 1 - entry_grid) * gap
+
                 if new_sl < p["sl"]:
+                    new_sl = max(new_sl, price + 1e-6)
                     p["sl"] = new_sl
+                    utils.log(
+                        f"🔽 TSL SHORT {symbol} (G{entry_grid}) -> {round(new_sl,2)}",
+                        tg=True
+                    )
 
-    # ================= EXIT LOGIC =================
+    # ================= TAKE PROFIT LEVEL 4 =================
+    tp_distance = GRID_SIZE[symbol] * 4
+
+    if abs(price - base) >= tp_distance:
+        utils.log(f"🎯 TP LEVEL 4 HIT {symbol} - CLOSE ALL", tg=True)
+        positions.clear()
+        sym["last_price"] = price
+        return
+
+    # ================= DRAWDOWN =================
+    floating = 0
+
+    for p in positions:
+        if p["side"] == "long":
+            floating += (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+        else:
+            floating += (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
+
+    if floating < -state["balance"] * MAX_DRAWDOWN:
+        utils.log(f"🚨 MAX DRAWDOWN {symbol} - CLOSE ALL", tg=True)
+        positions.clear()
+        return
+
+    # ================= EXIT (ONLY SL) =================
     for p in positions[:]:
 
-        exit_price = None
-
-        # TAKE PROFIT
-        if p["side"] == "long" and price >= p["tp"]:
-            exit_price = p["tp"]
-
-        elif p["side"] == "short" and price <= p["tp"]:
-            exit_price = p["tp"]
-
-        # STOP LOSS
-        elif p["side"] == "long" and price <= p["sl"]:
-            exit_price = p["sl"]
+        if p["side"] == "long" and price <= p["sl"]:
+            exit_price = price
+            pnl = (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
 
         elif p["side"] == "short" and price >= p["sl"]:
-            exit_price = p["sl"]
+            exit_price = price
+            pnl = (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
 
-        if exit_price is None:
+        else:
             continue
-
-        pnl = (
-            (exit_price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-            if p["side"] == "long"
-            else (p["entry"] - exit_price) * CONTRACT_SIZE[symbol] * p["qty"]
-        )
 
         fee = utils.commission(p["entry"], p["qty"], symbol) + \
               utils.commission(exit_price, p["qty"], symbol)
@@ -229,22 +254,10 @@ def process_symbol(symbol, df, price, state):
 
         positions.remove(p)
 
-    # ================= DRAWDOWN CONTROL =================
-    floating = sum(
-        (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-        if p["side"] == "long"
-        else (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
-        for p in positions
-    )
-
-    if floating < -state["balance"] * MAX_DRAWDOWN:
-        utils.log(f"🚨 MAX DRAWDOWN HIT {symbol} - CLEAR POSITIONS", tg=True)
-        positions.clear()
-
     sym["last_price"] = price
 
 
-# ================= MAIN LOOP =================
+# ================= MAIN =================
 
 def run():
 
@@ -255,13 +268,14 @@ def run():
                 "positions": [],
                 "base": None,
                 "last_day": None,
-                "initialized": False,
-                "last_price": None
+                "logged": False,
+                "last_price": None,
+                "initialized": False
             } for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 ADAPTIVE HEDGED GRID BOT STARTED", tg=True)
+    utils.log("🚀 GRID BOT STARTED (TSL + TP LEVEL 4 MODE)", tg=True)
 
     while True:
         try:
