@@ -18,17 +18,17 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 RISK_PER_TRADE = 0.01  # 1%
 
 # Wider stops (important)
-REVERSAL = {"BTCUSD": 2.5, "ETHUSD": 2.5}
+REVERSAL = {"BTCUSD": 1, "ETHUSD": 1}
 
 # Real breakout (not noise)
-BUFFER = 0.01  # 1%
+BUFFER = 0.003  # 1%
 
 TAKER_FEE = 0.0005
 
 MIN_BALANCE = 1000
 COOLDOWN = 300  # 5 min
 
-MAX_QTY = 50  # cap risk
+MAX_QTY = 100  # cap risk
 
 # ================= UTILS =================
 
@@ -37,7 +37,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe="1d",
     days=30,
-    telegram_token=os.getenv("price_trend_strategy_bot"),
+    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -47,7 +47,7 @@ utils_15m = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe="15m",
     days=3,
-    telegram_token=os.getenv("price_trend_strategy_bot"),
+    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
