@@ -133,8 +133,8 @@ def process_symbol(symbol, df, price, state):
     minus_di = df.iloc[-1]["-di"]
 
     adx_up = adx > prev_adx and adx > ADX_THRESHOLD
-    bullish = plus_di > minus_di
-    bearish = minus_di > plus_di
+    bullish = True
+    bearish = True
 
     allow_entry = abs(price - base) <= gap * TREND_BREAK_MULTIPLIER
 
@@ -143,7 +143,7 @@ def process_symbol(symbol, df, price, state):
     sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
 
     # ================= ENTRY =================
-    if last_price is not None and allow_entry and adx_up:
+    if last_price is not None and allow_entry:
 
         if bullish:
             for level in sell_levels:
