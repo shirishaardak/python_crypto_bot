@@ -116,7 +116,6 @@ def process_symbol(symbol, df, price, state):
     if (
         last_price is not None
         and allow_entry
-        and can_enter_trade(now)
         and len(positions) < MAX_GRIDS
     ):
 
