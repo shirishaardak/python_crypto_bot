@@ -23,7 +23,7 @@ CONTRACT_SIZE = {"BTCUSD": 0.001}
 STOPLOSS = {"BTCUSD": 500}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 5
 
 MIN_BALANCE = 5000
@@ -60,6 +60,23 @@ def auto_git_push():
     except Exception as e:
         utils.log(f"Git Error: {e}")
 
+BASE_DIR = os.getcwd()
+SAVE_DIR = os.path.join(BASE_DIR, "data", "momentum_trading_strategy")
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+def save_processed_data(data, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+
+    out = pd.DataFrame({
+        "time": data.index,
+        "HA_open": data["HA_open"],
+        "HA_high": data["HA_high"],
+        "HA_low": data["HA_low"],
+        "HA_close": data["HA_close"],
+        "trendline": data["Trendline"], 
+    })
+
+    out.to_csv(path, index=False)
 # ================= INIT UTILS =================
 
 utils = TradingUtils(
@@ -84,21 +101,43 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    order = 9
+    order = 7
+
+    # ✅ make rolling causal (no current candle leakage)
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
     ha["LOWER"] = ha["HA_low"].rolling(order).min()
 
     ha["Trendline"] = np.nan
+
+    # safe initialization
     trend = ha.loc[0, "HA_close"]
     ha.loc[0, "Trendline"] = trend
 
     for i in range(1, len(ha)):
 
-        if ha.loc[i, "HA_high"] > ha.loc[i, "UPPER"]:
-            trend = ha.loc[i, "LOWER"]
+        prev_high = ha.loc[i - 1, "HA_high"]
+        prev_low = ha.loc[i - 1, "HA_low"]
+        prev_trend = ha.loc[i - 1, "Trendline"]
 
-        elif ha.loc[i, "HA_low"] < ha.loc[i, "LOWER"]:
-            trend = ha.loc[i, "UPPER"]
+        current_close = ha.loc[i, "HA_close"]
+
+        upper = ha.loc[i, "UPPER"]
+        lower = ha.loc[i, "LOWER"]
+
+        # skip until enough data exists
+        if np.isnan(upper) or np.isnan(lower):
+            ha.loc[i, "Trendline"] = prev_trend
+            continue
+
+        # trend switch logic
+        if prev_high < ha.loc[i, "HA_high"] and current_close > prev_trend:
+            trend = lower
+
+        elif prev_low > ha.loc[i, "HA_low"] and current_close < prev_trend:
+            trend = upper
+
+        else:
+            trend = prev_trend
 
         ha.loc[i, "Trendline"] = trend
 
@@ -109,6 +148,7 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
+    # save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
