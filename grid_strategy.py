@@ -16,15 +16,10 @@ SYMBOLS = ["BTCUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 
-GRID_SIZE = {
-    "BTCUSD": 200
-}
+GRID_SIZE = {"BTCUSD": 100}
+GRID_QTY = {"BTCUSD": 100}
 
-GRID_QTY = {
-    "BTCUSD": 100
-}
-
-MAX_GRIDS = 3
+MAX_GRIDS = 10
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "1d"
@@ -34,7 +29,6 @@ SLEEP_TIME = 2
 
 TRADING_START = 2
 TRADING_END = 13
-
 RESET_HOUR = 2
 
 STOP_LOSS_MULTIPLIER = 1.5
@@ -43,6 +37,8 @@ TREND_BREAK_MULTIPLIER = 4
 
 IST = pytz.timezone("Asia/Kolkata")
 
+
+# ================= TIME =================
 
 def get_ist_time():
     return datetime.now(IST)
@@ -62,6 +58,8 @@ def should_reset(now, sym, today):
 
     return False
 
+
+# ================= UTILS =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
@@ -117,9 +115,10 @@ def process_symbol(symbol, df, price, state):
         last_price is not None
         and allow_entry
         and len(positions) < MAX_GRIDS
+        and can_enter_trade(now)
     ):
 
-        # LONG
+        # BUY → LONG
         for level in buy_levels:
             if last_price > level >= price and not any(
                 p["grid"] == level and p["side"] == "long" for p in positions
@@ -136,9 +135,9 @@ def process_symbol(symbol, df, price, state):
                     "time": now
                 })
 
-                utils.log(f"🟢 BUY {symbol} @ {round(entry,2)}", tg=True)
+                utils.log(f"🟢 LONG {symbol} @ {round(entry,2)}", tg=True)
 
-        # SHORT
+        # SELL → SHORT
         for level in sell_levels:
             if last_price < level <= price and not any(
                 p["grid"] == level and p["side"] == "short" for p in positions
@@ -173,10 +172,7 @@ def process_symbol(symbol, df, price, state):
                 if new_sl > p["sl"]:
                     new_sl = min(new_sl, price - 1e-6)
                     p["sl"] = new_sl
-                    utils.log(
-                        f"🔼 TSL LONG {symbol} (G{entry_grid}) -> {round(new_sl,2)}",
-                        tg=True
-                    )
+                    utils.log(f"🔼 TSL LONG {symbol} -> {round(new_sl,2)}", tg=True)
 
         else:
 
@@ -189,16 +185,13 @@ def process_symbol(symbol, df, price, state):
                 if new_sl < p["sl"]:
                     new_sl = max(new_sl, price + 1e-6)
                     p["sl"] = new_sl
-                    utils.log(
-                        f"🔽 TSL SHORT {symbol} (G{entry_grid}) -> {round(new_sl,2)}",
-                        tg=True
-                    )
+                    utils.log(f"🔽 TSL SHORT {symbol} -> {round(new_sl,2)}", tg=True)
 
-    # ================= TAKE PROFIT LEVEL 4 =================
-    tp_distance = GRID_SIZE[symbol] * 4
+    # ================= TP LEVEL 4 =================
+    tp_distance = gap * 4
 
     if abs(price - base) >= tp_distance:
-        utils.log(f"🎯 TP LEVEL 4 HIT {symbol} - CLOSE ALL", tg=True)
+        utils.log(f"🎯 TP HIT {symbol} - CLOSE ALL", tg=True)
         positions.clear()
         sym["last_price"] = price
         return
@@ -213,11 +206,11 @@ def process_symbol(symbol, df, price, state):
             floating += (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
     if floating < -state["balance"] * MAX_DRAWDOWN:
-        utils.log(f"🚨 MAX DRAWDOWN {symbol} - CLOSE ALL", tg=True)
+        utils.log(f"🚨 MAX DD {symbol} - CLOSE ALL", tg=True)
         positions.clear()
         return
 
-    # ================= EXIT (ONLY SL) =================
+    # ================= EXIT =================
     for p in positions[:]:
 
         if p["side"] == "long" and price <= p["sl"]:
@@ -274,7 +267,7 @@ def run():
         }
     }
 
-    utils.log("🚀 GRID BOT STARTED (TSL + TP LEVEL 4 MODE)", tg=True)
+    utils.log("🚀 GRID BOT STARTED (FIXED VERSION)", tg=True)
 
     while True:
         try:
