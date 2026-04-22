@@ -169,16 +169,17 @@ def process_symbol(symbol, df_5m, df_15m, price, state):
     trend_15m = df_15m.iloc[-1]["trend"]
 
     ema_5m = df_5m.iloc[-1]["ema"]
-    price_5m = df_5m.iloc[-1]["HA_Close"]
+    close_5m = df_5m.iloc[-1]["HA_Close"]
+    prev_close_5m = df_5m.iloc[-2]["HA_Close"]
 
     atr = df_5m.iloc[-1]["atr"]
 
     buy_signal = (
-        curr_5m == 1 and trend_15m == 1
+       close_5m > prev_close_5m and  curr_5m == 1 and trend_15m == 1
     )
 
     sell_signal = (
-         curr_5m == -1 and trend_15m == -1
+         close_5m < prev_close_5m and curr_5m == -1 and trend_15m == -1
     )
 
     # ================= ENTRY =================
@@ -214,14 +215,14 @@ def process_symbol(symbol, df_5m, df_15m, price, state):
         if p["side"] == "long":
             p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
 
-            if price <= p["trail_sl"] or sell_signal:
+            if curr_5m == -1:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
 
         else:
             p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
 
-            if price >= p["trail_sl"] or buy_signal:
+            if curr_5m == 1:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
 
