@@ -174,11 +174,11 @@ def process_symbol(symbol, df_5m, df_15m, price, state):
     atr = df_5m.iloc[-1]["atr"]
 
     buy_signal = (
-        prev_5m == -1 and curr_5m == 1 and trend_15m == 1
+        curr_5m == 1 and trend_15m == 1
     )
 
     sell_signal = (
-        prev_5m == 1 and curr_5m == -1 and trend_15m == -1
+         curr_5m == -1 and trend_15m == -1
     )
 
     # ================= ENTRY =================
