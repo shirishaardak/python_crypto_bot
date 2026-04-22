@@ -7,6 +7,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
+
 class TradingUtils:
 
     def __init__(self, contract_size, taker_fee,
@@ -17,7 +18,7 @@ class TradingUtils:
         self.CONTRACT_SIZE = contract_size
         self.TAKER_FEE = taker_fee
         self.TIMEFRAME = timeframe
-        self.timeframe = timeframe  # lowercase alias for convenience
+        self.timeframe = timeframe
         self.DAYS = days
         self.BOT_NAME = bot_name
 
@@ -39,6 +40,46 @@ class TradingUtils:
                       status_forcelist=[429, 500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("https://", adapter)
+
+    # ================= FIXED MULTI-TIMEFRAME CANDLES =================
+
+    def fetch_candles(self, symbol, timeframe=None):
+
+        # default = original timeframe
+        tf = timeframe if timeframe is not None else self.TIMEFRAME
+
+        start = int((datetime.now() - timedelta(days=self.DAYS)).timestamp())
+
+        data = self.safe_get(
+            "https://api.india.delta.exchange/v2/history/candles",
+            params={
+                "resolution": tf,
+                "symbol": symbol,
+                "start": str(start),
+                "end": str(int(time.time()))
+            }
+        )
+
+        if not data or "result" not in data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(
+            data["result"],
+            columns=["time", "open", "high", "low", "close", "volume"]
+        )
+
+        if df.empty:
+            return df
+
+        df.rename(columns=str.title, inplace=True)
+
+        df["Time"] = pd.to_datetime(df["Time"], unit="s")
+        df.set_index("Time", inplace=True)
+        df.sort_index(inplace=True)
+
+        return df.astype(float)
+
+    # ================= REST SAME =================
 
     def log(self, msg, tg=False, key=None):
         text = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
@@ -82,38 +123,6 @@ class TradingUtils:
         except:
             return None
 
-    def fetch_candles(self, symbol):
-        start = int((datetime.now() - timedelta(days=self.DAYS)).timestamp())
-
-        data = self.safe_get(
-            "https://api.india.delta.exchange/v2/history/candles",
-            params={
-                "resolution": self.TIMEFRAME,
-                "symbol": symbol,
-                "start": str(start),
-                "end": str(int(time.time()))
-            }
-        )
-
-        if not data or "result" not in data:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(
-            data["result"],
-            columns=["time", "open", "high", "low", "close", "volume"]
-        )
-
-        if df.empty:
-            return df
-
-        df.rename(columns=str.title, inplace=True)
-
-        df["Time"] = pd.to_datetime(df["Time"], unit="s")
-        df.set_index("Time", inplace=True)
-        df.sort_index(inplace=True)
-
-        return df.astype(float)
-
     def commission(self, price, qty, symbol):
         return price * self.CONTRACT_SIZE[symbol] * qty * self.TAKER_FEE
 
@@ -123,7 +132,7 @@ class TradingUtils:
         for k in ["entry_time", "exit_time"]:
             t[k] = t[k].strftime("%Y-%m-%d %H:%M:%S")
 
-        pd.DataFrame([t])[[
+        pd.DataFrame([t])[[ 
             "entry_time","exit_time","symbol","side",
             "entry_price","exit_price","qty","net_pnl"
         ]].to_csv(

@@ -1,8 +1,10 @@
 import os
 import time
-from datetime import datetime
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 import pytz
-import ta
 
 from dotenv import load_dotenv
 from utils import TradingUtils
@@ -11,195 +13,215 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "trend_following_strategy"
+BOT_NAME = "supertrend_trend_bot"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 
-GRID_SIZE = {
-    "BTCUSD": 200,
-    "ETHUSD": 30
-}
+QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
-GRID_QTY = {
-    "BTCUSD": 100,
-    "ETHUSD": 100
-}
-
-MAX_GRIDS = 15
 TAKER_FEE = 0.0005
-
-TIMEFRAME = "1d"
-DAYS = 15
-
 SLEEP_TIME = 2
 
-RESET_HOUR = 2   # 2 AM IST
-
-STOP_LOSS_MULTIPLIER = 1.5
-MAX_DRAWDOWN = 0.05
-TREND_BREAK_MULTIPLIER = 4
-
-ADX_THRESHOLD = 20
-
-# ================= TIMEZONE =================
+BUFFER_MULT = 0.2   # ATR buffer
 
 IST = pytz.timezone("Asia/Kolkata")
+
+
+# ================= TIME =================
 
 def get_ist_time():
     return datetime.now(IST)
 
-# ================= INDICATORS =================
 
-def add_indicators(df):
-    adx_indicator = ta.trend.ADXIndicator(
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        window=14
-    )
+# ================= HEIKIN ASHI =================
 
-    df["adx"] = adx_indicator.adx()
-    df["+di"] = adx_indicator.adx_pos()
-    df["-di"] = adx_indicator.adx_neg()
+def add_heikin_ashi(df):
+    df = df.copy()
+
+    ha_close = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4
+
+    ha_open = [df["Open"].iloc[0]]
+    for i in range(1, len(df)):
+        ha_open.append((ha_open[i - 1] + ha_close.iloc[i - 1]) / 2)
+
+    ha_open = pd.Series(ha_open, index=df.index)
+
+    ha_high = pd.concat([df["High"], ha_open, ha_close], axis=1).max(axis=1)
+    ha_low = pd.concat([df["Low"], ha_open, ha_close], axis=1).min(axis=1)
+
+    df["HA_Open"] = ha_open
+    df["HA_High"] = ha_high
+    df["HA_Low"] = ha_low
+    df["HA_Close"] = ha_close
 
     return df
+
+
+# ================= EMA FILTER =================
+
+def add_ema_filter(df, period=50):
+    df = df.copy()
+    df["ema"] = df["HA_Close"].ewm(span=period).mean()
+    return df
+
+
+# ================= SUPER TREND (ON HA) =================
+
+def add_supertrend(df, period=10, multiplier=3):
+    df = df.copy()
+
+    high = df["HA_High"]
+    low = df["HA_Low"]
+    close = df["HA_Close"]
+
+    df["tr"] = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    df["atr"] = df["tr"].rolling(period).mean()
+
+    df["hl2"] = (high + low) / 2
+
+    df["upperband"] = df["hl2"] + (multiplier + BUFFER_MULT) * df["atr"]
+    df["lowerband"] = df["hl2"] - (multiplier + BUFFER_MULT) * df["atr"]
+
+    df["trend"] = 1
+    df["supertrend"] = 0.0
+
+    for i in range(1, len(df)):
+        prev = i - 1
+
+        if close.iloc[i] > df["upperband"].iloc[prev]:
+            df.at[df.index[i], "trend"] = 1
+
+        elif close.iloc[i] < df["lowerband"].iloc[prev]:
+            df.at[df.index[i], "trend"] = -1
+
+        else:
+            df.at[df.index[i], "trend"] = df["trend"].iloc[prev]
+
+            if df["trend"].iloc[i] == 1:
+                df.at[df.index[i], "lowerband"] = max(
+                    df["lowerband"].iloc[i],
+                    df["lowerband"].iloc[prev]
+                )
+            else:
+                df.at[df.index[i], "upperband"] = min(
+                    df["upperband"].iloc[i],
+                    df["upperband"].iloc[prev]
+                )
+
+        df.at[df.index[i], "supertrend"] = (
+            df["lowerband"].iloc[i]
+            if df["trend"].iloc[i] == 1
+            else df["upperband"].iloc[i]
+        )
+
+    return df
+
 
 # ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME,
-    days=DAYS,
+    timeframe="5m",
+    days=2,
     telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
+
 # ================= STRATEGY =================
 
-def process_symbol(symbol, df, price, state):
+def process_symbol(symbol, df_5m, df_15m, price, state):
 
     sym = state["symbols"][symbol]
+    positions = sym["positions"]
     now = get_ist_time()
-    today = now.date()
+    qty = QTY[symbol]
 
-    # ================= RESET FIRST (CRITICAL FIX) =================
-
-    # 🟢 FIRST RUN RESET (always happens)
-    if not sym["initialized"]:
-        sym["initialized"] = True
-        sym["last_day"] = today
-        sym["base"] = round(price, 2)
-        sym["logged"] = False
-
-        utils.log(f"🟢 FIRST RESET {symbol} base -> {round(price,2)}", tg=True)
-
-    # ⏰ DAILY RESET
-    elif (
-        now.hour == RESET_HOUR and
-        now.minute < 5 and
-        sym["last_day"] != today
-    ):
-        sym["last_day"] = today
-        sym["base"] = round(price, 2)
-        sym["logged"] = False
-
-        utils.log(f"🔄 2AM RESET {symbol} base -> {round(price,2)}", tg=True)
-
-    # ❗ AFTER RESET → check candle data
-    if df is None or len(df) < 20:
+    if df_5m is None or df_15m is None:
         return
 
-    df = add_indicators(df)
+    if len(df_5m) < 60 or len(df_15m) < 60:
+        return
 
-    base = sym["base"]
+    # ================= FEATURES =================
+    df_5m = add_heikin_ashi(df_5m)
+    df_15m = add_heikin_ashi(df_15m)
 
-    if not sym["logged"]:
-        print(f"{symbol} Base Price: {round(base,2)}")
-        sym["logged"] = True
+    df_5m = add_ema_filter(df_5m)
+    df_15m = add_ema_filter(df_15m)
 
-    gap = GRID_SIZE[symbol]
-    qty = GRID_QTY[symbol]
-    positions = sym["positions"]
-    last_price = sym.get("last_price")
+    df_5m = add_supertrend(df_5m)
+    df_15m = add_supertrend(df_15m)
 
-    # ===== ADX FILTER =====
-    adx = df.iloc[-1]["adx"]
-    prev_adx = df.iloc[-2]["adx"]
-    plus_di = df.iloc[-1]["+di"]
-    minus_di = df.iloc[-1]["-di"]
+    # ================= SIGNALS =================
 
-    adx_up = adx > prev_adx and adx > ADX_THRESHOLD
-    bullish = True
-    bearish = True
+    prev_5m = df_5m.iloc[-2]["trend"]
+    curr_5m = df_5m.iloc[-1]["trend"]
+    trend_15m = df_15m.iloc[-1]["trend"]
 
-    allow_entry = abs(price - base) <= gap * TREND_BREAK_MULTIPLIER
+    ema_5m = df_5m.iloc[-1]["ema"]
+    price_5m = df_5m.iloc[-1]["HA_Close"]
 
-    # ===== LEVELS =====
-    buy_levels = [round(base - i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
-    sell_levels = [round(base + i * gap, 2) for i in range(1, MAX_GRIDS + 1)]
+    atr = df_5m.iloc[-1]["atr"]
+
+    buy_signal = (
+        prev_5m == -1 and curr_5m == 1 and trend_15m == 1
+    )
+
+    sell_signal = (
+        prev_5m == 1 and curr_5m == -1 and trend_15m == -1
+    )
 
     # ================= ENTRY =================
-    if last_price is not None and allow_entry:
 
-        if bullish:
-            for level in sell_levels:
-                if last_price < level <= price and not any(
-                    p["grid"] == level and p["side"] == "long" for p in positions
-                ):
-                    positions.append({
-                        "side": "long",
-                        "entry": price,
-                        "grid": level,
-                        "qty": qty,
-                        "sl": price - gap * STOP_LOSS_MULTIPLIER,
-                        "time": now
-                    })
-                    utils.log(f"🚀 BUY {symbol} @ {round(price,2)}", tg=True)
+    if buy_signal and not any(p["side"] == "long" for p in positions):
+        positions.append({
+            "side": "long",
+            "entry": price,
+            "qty": qty,
+            "sl": price - atr * 2,
+            "trail_sl": price - atr * 2,
+            "time": now
+        })
+        utils.log(f"🚀 BUY {symbol} @ {price}", tg=True)
 
-        if bearish:
-            for level in buy_levels:
-                if last_price > level >= price and not any(
-                    p["grid"] == level and p["side"] == "short" for p in positions
-                ):
-                    positions.append({
-                        "side": "short",
-                        "entry": price,
-                        "grid": level,
-                        "qty": qty,
-                        "sl": price + gap * STOP_LOSS_MULTIPLIER,
-                        "time": now
-                    })
-                    utils.log(f"⚡ SHORT {symbol} @ {round(price,2)}", tg=True)
-
-    # ================= DRAWDOWN =================
-    floating = 0
-
-    for p in positions:
-        if p["side"] == "long":
-            floating += (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-        else:
-            floating += (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
-
-    if floating < -state["balance"] * MAX_DRAWDOWN:
-        utils.log(f"🚨 MAX DRAWDOWN {symbol} - CLOSE ALL", tg=True)
-        positions.clear()
-        return
+    elif sell_signal and not any(p["side"] == "short" for p in positions):
+        positions.append({
+            "side": "short",
+            "entry": price,
+            "qty": qty,
+            "sl": price + atr * 2,
+            "trail_sl": price + atr * 2,
+            "time": now
+        })
+        utils.log(f"⚡ SHORT {symbol} @ {price}", tg=True)
 
     # ================= EXIT =================
+
     for p in positions[:]:
 
         exit_trade = False
 
         if p["side"] == "long":
-            if price >= p["entry"] + gap or price <= p["sl"]:
+            p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
+
+            if price <= p["trail_sl"] or sell_signal:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
+
         else:
-            if price <= p["entry"] - gap or price >= p["sl"]:
+            p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
+
+            if price >= p["trail_sl"] or buy_signal:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
                 exit_trade = True
 
@@ -224,11 +246,9 @@ def process_symbol(symbol, df, price, state):
         })
 
         utils.log(f"💰 EXIT {symbol} {p['side']} PNL: {round(net,6)}", tg=True)
-        utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+        utils.log(f"💰 BALANCE: {round(state['balance'],2)}", tg=True)
 
         positions.remove(p)
-
-    sym["last_price"] = price
 
 
 # ================= MAIN =================
@@ -237,31 +257,24 @@ def run():
 
     state = {
         "balance": 10000,
-        "symbols": {
-            s: {
-                "positions": [],
-                "base": None,
-                "last_day": None,
-                "logged": False,
-                "last_price": None,
-                "initialized": False
-            } for s in SYMBOLS
-        }
+        "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    utils.log("🚀 BOT STARTED (FIRST RUN + 2AM RESET FIXED)", tg=True)
+    utils.log("🚀 HA + SUPER TREND BOT STARTED", tg=True)
 
     while True:
         try:
             for symbol in SYMBOLS:
 
-                price = utils.fetch_price(symbol)   # 👈 fetch price FIRST
-                df = utils.fetch_candles(symbol)
+                price = utils.fetch_price(symbol)
 
-                if price is None:
+                df_5m = utils.fetch_candles(symbol, timeframe="5m")
+                df_15m = utils.fetch_candles(symbol, timeframe="15m")
+
+                if price is None or df_5m.empty or df_15m.empty:
                     continue
 
-                process_symbol(symbol, df, price, state)
+                process_symbol(symbol, df_5m, df_15m, price, state)
 
             time.sleep(SLEEP_TIME)
 
