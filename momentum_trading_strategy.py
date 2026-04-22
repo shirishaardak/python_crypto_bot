@@ -103,7 +103,7 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    order = 14
+    order = 21
 
     # ✅ make rolling causal (no current candle leakage)
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
@@ -135,10 +135,10 @@ def calculate_trendline(df):
             continue
 
         # trend switch logic
-        if ha.loc[i, "HA_close"] > prev_upper and current_close > prev_trend:
+        if ha.loc[i, "HA_high"] > prev_upper and current_close > prev_trend:
             trend = lower
 
-        elif ha.loc[i, "HA_close"] < prev_lower and current_close < prev_trend:
+        elif ha.loc[i, "HA_low"] < prev_lower and current_close < prev_trend:
             trend = upper
 
         else:
