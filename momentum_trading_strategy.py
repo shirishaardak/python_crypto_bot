@@ -16,14 +16,16 @@ load_dotenv()
 
 BOT_NAME = "momentum_trading_strategy"
 
-SYMBOLS = ["BTCUSD"]
+SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 100}
-CONTRACT_SIZE = {"BTCUSD": 0.001}
-STOPLOSS = {"BTCUSD": 500}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
+
+DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
+
+STOPLOSS = {"BTCUSD": 500, "ETHUSD": 50}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "1h"
+TIMEFRAME = "5m"
 DAYS = 5
 
 MIN_BALANCE = 5000
@@ -101,7 +103,7 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    order = 5
+    order = 14
 
     # ✅ make rolling causal (no current candle leakage)
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
@@ -133,10 +135,10 @@ def calculate_trendline(df):
             continue
 
         # trend switch logic
-        if ha.loc[i, "HA_high"] > prev_upper and current_close > prev_trend:
+        if ha.loc[i, "HA_close"] > prev_upper and current_close > prev_trend:
             trend = lower
 
-        elif ha.loc[i, "HA_low"] < prev_lower and current_close < prev_trend:
+        elif ha.loc[i, "HA_close"] < prev_lower and current_close < prev_trend:
             trend = upper
 
         else:
