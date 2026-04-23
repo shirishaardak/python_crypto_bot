@@ -188,7 +188,7 @@ def process_symbol(symbol, df, price, state):
                 "side": "long",
                 "entry": price,
                 "qty": qty,
-                "trail_sl": price - atr * 1.5
+                "trail_sl": price - atr * 2
             })
             utils.log(f"🚀 {symbol} BUY @ {price}", tg=True)
             level["high"] = None
@@ -199,7 +199,7 @@ def process_symbol(symbol, df, price, state):
                 "side": "short",
                 "entry": price,
                 "qty": qty,
-                "trail_sl": price + atr * 1.5
+                "trail_sl": price + atr * 2
             })
             utils.log(f"🔻 {symbol} SELL @ {price}", tg=True)
             level["low"] = None
@@ -207,11 +207,11 @@ def process_symbol(symbol, df, price, state):
     # Exit (Trailing)
     for p in positions[:]:
 
-        trail_step = atr * 0.5
+        trail_step = atr * 1
 
         if p["side"] == "long":
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 1.5)
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
 
             if price <= p["trail_sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -220,7 +220,7 @@ def process_symbol(symbol, df, price, state):
 
         else:
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 1.5)
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
 
             if price >= p["trail_sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
