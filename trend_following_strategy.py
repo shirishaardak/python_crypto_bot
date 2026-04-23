@@ -13,7 +13,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "supertrend_ha_trailing"
+BOT_NAME = "supertrend_ha_fast"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -21,9 +21,9 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
 TAKER_FEE = 0.0005
-SLEEP_TIME = 10
+SLEEP_TIME = 5
 
-SAVE_DIR = "data/supertrend_ha_trailing"
+SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -32,6 +32,23 @@ IST = pytz.timezone("Asia/Kolkata")
 
 def get_ist_time():
     return datetime.now(IST)
+
+# ================= NEW CANDLE =================
+
+last_candle_time = {}
+
+def is_new_candle(symbol, df):
+    t = df.index[-1]
+
+    if symbol not in last_candle_time:
+        last_candle_time[symbol] = t
+        return True
+
+    if t != last_candle_time[symbol]:
+        last_candle_time[symbol] = t
+        return True
+
+    return False
 
 # ================= SAFE FETCH =================
 
@@ -48,17 +65,16 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
 
 # ================= SAVE =================
 
-def save_processed_data(data, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+def save_processed_data(df, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}.csv")
 
     out = pd.DataFrame({
-        "time": data.index,
-        "ha_open": data["HA_open"],
-        "ha_high": data["HA_high"],
-        "ha_low": data["HA_low"],
-        "ha_close": data["HA_close"],
-        "trendline": data["supertrend"],
-        "atr": data["atr"]
+        "time": df.index,
+        "ha_open": df["HA_open"],
+        "ha_high": df["HA_high"],
+        "ha_low": df["HA_low"],
+        "ha_close": df["HA_close"],
+        "supertrend": df["supertrend"]
     })
 
     out.to_csv(path, index=False)
@@ -86,6 +102,7 @@ def add_heikin_ashi(df):
 
 def add_indicators(df):
 
+    df = df.tail(200)  # 🔥 speed optimization
     df = add_heikin_ashi(df)
 
     ha_high = df["HA_high"]
@@ -100,19 +117,16 @@ def add_indicators(df):
         multiplier=3
     )
 
-    df["supertrend"] = st["SUPERT_10_3.0"]
-    df["trend"] = st["SUPERTd_10_3.0"]
+    # 🔥 dynamic column fix
+    supertrend_col = [c for c in st.columns if "SUPERT_" in c and not c.endswith("d")][0]
+    trend_col = [c for c in st.columns if "SUPERTd_" in c][0]
 
-    df["atr"] = ta.atr(
-        high=ha_high,
-        low=ha_low,
-        close=ha_close,
-        length=10
-    )
+    df["supertrend"] = st[supertrend_col]
+    df["trend"] = st[trend_col]
 
+    df["atr"] = ta.atr(high=ha_high, low=ha_low, close=ha_close, length=10)
     df["atr_ma"] = df["atr"].rolling(20).mean()
 
-    # Distance from trend (sideways filter)
     df["trend_strength"] = abs(ha_close - df["supertrend"]) / df["atr"]
 
     df = df.dropna()
@@ -132,7 +146,7 @@ def process_symbol(symbol, df, price, state):
     if len(df) < 30:
         return
 
-    save_processed_data(df, symbol)
+    # save_processed_data(df, symbol)
 
     curr = df.iloc[-1]
     prev = df.iloc[-2]
@@ -146,19 +160,17 @@ def process_symbol(symbol, df, price, state):
     atr = curr["atr"]
     atr_ma = curr["atr_ma"]
 
-    # ===== SIDEWAYS FILTER =====
     momentum_ok = atr > atr_ma
     trend_strong = curr["trend_strength"] > 0.8
 
     trade_allowed = momentum_ok and trend_strong
-
-    # ===== STRUCTURE =====
 
     if "level" not in sym:
         sym["level"] = {"high": None, "low": None}
 
     level = sym["level"]
 
+    # Trend flip
     if prev_close <= prev_st and close > st:
         level["high"] = curr["HA_high"]
         level["low"] = None
@@ -169,51 +181,35 @@ def process_symbol(symbol, df, price, state):
         level["high"] = None
         utils.log(f"🔻 {symbol} Trend DOWN → HA Low: {round(level['low'],2)}", tg=True)
 
-    # ===== SIGNALS =====
+    # Entry
+    if level["high"] and close > level["high"] and trade_allowed:
+        if not any(p["side"] == "long" for p in positions):
+            positions.append({
+                "side": "long",
+                "entry": price,
+                "qty": qty,
+                "trail_sl": price - atr * 1.5
+            })
+            utils.log(f"🚀 {symbol} BUY @ {price}", tg=True)
+            level["high"] = None
 
-    buy_signal = (
-        level["high"] is not None and
-        close > level["high"] and
-        trade_allowed
-    )
+    elif level["low"] and close < level["low"] and trade_allowed:
+        if not any(p["side"] == "short" for p in positions):
+            positions.append({
+                "side": "short",
+                "entry": price,
+                "qty": qty,
+                "trail_sl": price + atr * 1.5
+            })
+            utils.log(f"🔻 {symbol} SELL @ {price}", tg=True)
+            level["low"] = None
 
-    sell_signal = (
-        level["low"] is not None and
-        close < level["low"] and
-        trade_allowed
-    )
-
-    # ===== ENTRY =====
-
-    if buy_signal and not any(p["side"] == "long" for p in positions):
-        positions.append({
-            "side": "long",
-            "entry": price,
-            "qty": qty,
-            "trail_sl": price - atr * 1.5,
-        })
-        utils.log(f"🚀 {symbol} BUY @ {price}", tg=True)
-        level["high"] = None
-
-    elif sell_signal and not any(p["side"] == "short" for p in positions):
-        positions.append({
-            "side": "short",
-            "entry": price,
-            "qty": qty,
-            "trail_sl": price + atr * 1.5,
-        })
-        utils.log(f"🔻 {symbol} SELL @ {price}", tg=True)
-        level["low"] = None
-
-    # ===== TRAILING EXIT =====
-
+    # Exit (Trailing)
     for p in positions[:]:
 
         trail_step = atr * 0.5
 
         if p["side"] == "long":
-
-            # move trailing SL
             if price - p["entry"] > trail_step:
                 p["trail_sl"] = max(p["trail_sl"], price - atr * 1.5)
 
@@ -223,7 +219,6 @@ def process_symbol(symbol, df, price, state):
                 continue
 
         else:
-
             if p["entry"] - price > trail_step:
                 p["trail_sl"] = min(p["trail_sl"], price + atr * 1.5)
 
@@ -239,7 +234,6 @@ def process_symbol(symbol, df, price, state):
         state["balance"] += net
 
         emoji = "🟢" if net > 0 else "🔴"
-
         utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
         utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
@@ -272,6 +266,9 @@ def run():
 
                 df = safe_fetch(utils.fetch_candles, symbol, "5m")
                 if df is None or df.empty:
+                    continue
+
+                if not is_new_candle(symbol, df):
                     continue
 
                 price = safe_fetch(utils.fetch_price, symbol)
