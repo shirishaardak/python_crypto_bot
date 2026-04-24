@@ -203,7 +203,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 2,
+                    "trail_sl": price - atr * 3,
                     "entry_time": get_ist_time()
                 })
 
@@ -219,7 +219,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 2,
+                    "trail_sl": price + atr * 3,
                     "entry_time": get_ist_time()
                 })
 
@@ -249,9 +249,9 @@ def process_symbol(symbol, df, price, state):
         if p["side"] == "long":
 
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 3)
 
-            if price <= p["trail_sl"]:
+            if price <= p["trail_sl"] or price < st:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
@@ -260,9 +260,9 @@ def process_symbol(symbol, df, price, state):
         else:
 
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 3)
 
-            if price >= p["trail_sl"]:
+            if price >= p["trail_sl"] or price > st:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
