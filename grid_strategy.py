@@ -5,7 +5,6 @@ import numpy as np
 from datetime import datetime
 import pandas_ta as ta
 from dotenv import load_dotenv
-import traceback
 import subprocess
 
 from utils import TradingUtils
@@ -24,11 +23,11 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 STOPLOSS = {"BTCUSD": 500, "ETHUSD": 50}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "1m"
 DAYS = 5
 
-MIN_BALANCE = 5000
-BALANCE = 500
+BALANCE = 5000
+MIN_BALANCE = 500
 
 last_git_push = time.time()
 
@@ -61,11 +60,13 @@ def auto_git_push():
     except Exception as e:
         utils.log(f"Git Error: {e}")
 
+# ================= PATH =================
+
 BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(BASE_DIR, "data", "grid_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# ================= ✅ UPGRADED LOGGER =================
+# ================= LOGGER =================
 
 def save_processed_data(data, symbol):
     path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
@@ -74,37 +75,21 @@ def save_processed_data(data, symbol):
 
     out = pd.DataFrame({
         "time": df.index,
-        "HA_open": df.get("HA_open"),
-        "HA_high": df.get("HA_high"),
-        "HA_low": df.get("HA_low"),
-        "HA_close": df.get("HA_close"),
-        "trendline": df.get("Trendline"),
-        "structure": df.get("Structure", None),
-        "swing_high": df.get("SWING_HIGH", None),
-        "swing_low": df.get("SWING_LOW", None),
+        "HA_open": df["HA_open"],
+        "HA_high": df["HA_high"],
+        "HA_low": df["HA_low"],
+        "HA_close": df["HA_close"],
+        "Trendline": df["Trendline"],
+        "Structure": df["Structure"],
+        "Trend": df["Trend"],
+        "BOS": df["BOS"],
+        "CHoCH": df["CHoCH"],
     })
-
-    # Trend direction
-    out["trend"] = np.where(
-        out["HA_close"] > out["trendline"], "UP",
-        np.where(out["HA_close"] < out["trendline"], "DOWN", "SIDE")
-    )
-
-    # Signals (for analysis only)
-    out["long_signal"] = (
-        (out["HA_close"] > out["trendline"]) &
-        (out["HA_close"] > out["HA_open"])
-    )
-
-    out["short_signal"] = (
-        (out["HA_close"] < out["trendline"]) &
-        (out["HA_close"] < out["HA_open"])
-    )
 
     out.fillna("", inplace=True)
     out.to_csv(path, index=False)
 
-# ================= INIT UTILS =================
+# ================= INIT =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
@@ -116,91 +101,78 @@ utils = TradingUtils(
     bot_name=BOT_NAME
 )
 
-# ================= PAPER ORDER =================
+# ================= STRUCTURE =================
 
-def place_market_order(symbol, side, qty):
-    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
-    return {"success": True}
-
-# ================= TRENDLINE =================
-
-def calculate_structure_trendline(df):
+def calculate_structure_trendline(df, order=7):
 
     df = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
-    
-    order = 7
 
-    df["SWING_HIGH"] = df["HA_high"][
-        df["HA_high"] == df["HA_high"].rolling(window=2 * order + 1, center=True).max()
-    ]
-
-    df["SWING_LOW"] = df["HA_low"][
-        df["HA_low"] == df["HA_low"].rolling(window=2 * order + 1, center=True).min()
-    ]
+    df["pivot_high"] = False
+    df["pivot_low"] = False
 
     df["Structure"] = ""
+    df["Trend"] = None
     df["Trendline"] = np.nan
+    df["BOS"] = ""
+    df["CHoCH"] = ""
 
-    last_HH = None
-    last_LL = None
-    last_HL = None
-    last_LH = None
-
+    last_high = None
+    last_low = None
     trend = None
-
     trendline = df.loc[0, "HA_close"]
-    df.loc[0, "Trendline"] = trendline
 
+    # pivots
+    for i in range(order, len(df)):
+        if df["HA_high"].iloc[i] == df["HA_high"].iloc[i-order:i+1].max():
+            df.loc[i, "pivot_high"] = True
+
+        if df["HA_low"].iloc[i] == df["HA_low"].iloc[i-order:i+1].min():
+            df.loc[i, "pivot_low"] = True
+
+    # structure
     for i in range(len(df)):
 
-        if not np.isnan(df.loc[i, "SWING_HIGH"]):
+        structure = ""
 
-            current_high = df.loc[i, "SWING_HIGH"]
+        if df.loc[i, "pivot_high"]:
+            h = df.loc[i, "HA_high"]
 
-            if last_HH is None:
-                last_HH = current_high
-                df.loc[i, "Structure"] = "H"
-
+            if last_high is None:
+                structure = "H"
             else:
-                if current_high > last_HH:
-                    df.loc[i, "Structure"] = "HH"
+                if h > last_high:
+                    structure = "HH"
+                    df.loc[i, "BOS"] = "UP" if trend != "DOWN" else ""
+                    df.loc[i, "CHoCH"] = "UP" if trend == "DOWN" else ""
                     trend = "UP"
-
-                    if last_HL is not None:
-                        trendline = last_HL
-
-                    last_HH = current_high
-
                 else:
-                    df.loc[i, "Structure"] = "LH"
-                    last_LH = current_high
+                    structure = "LH"
 
-        elif not np.isnan(df.loc[i, "SWING_LOW"]):
+            last_high = h
 
-            current_low = df.loc[i, "SWING_LOW"]
+        elif df.loc[i, "pivot_low"]:
+            l = df.loc[i, "HA_low"]
 
-            if last_LL is None:
-                last_LL = current_low
-                df.loc[i, "Structure"] = "L"
-
+            if last_low is None:
+                structure = "L"
             else:
-                if current_low < last_LL:
-                    df.loc[i, "Structure"] = "LL"
+                if l < last_low:
+                    structure = "LL"
+                    df.loc[i, "BOS"] = "DOWN" if trend != "UP" else ""
+                    df.loc[i, "CHoCH"] = "DOWN" if trend == "UP" else ""
                     trend = "DOWN"
-
-                    if last_LH is not None:
-                        trendline = last_LH
-
-                    last_LL = current_low
-
                 else:
-                    df.loc[i, "Structure"] = "HL"
-                    last_HL = current_low
+                    structure = "HL"
 
-        if trend == "UP" and last_HL is not None:
-            trendline = last_HL
-        elif trend == "DOWN" and last_LH is not None:
-            trendline = last_LH
+            last_low = l
+
+        df.loc[i, "Structure"] = structure
+        df.loc[i, "Trend"] = trend
+
+        if trend == "UP" and last_low is not None:
+            trendline = last_low
+        elif trend == "DOWN" and last_high is not None:
+            trendline = last_high
 
         df.loc[i, "Trendline"] = trendline
 
@@ -212,9 +184,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_structure_trendline(df)
 
-    # # ✅ Save only on new candle
-    # if is_new_candle:
-    #     save_processed_data(ha, symbol)
+    if is_new_candle:
+        save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
@@ -222,32 +193,30 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     pos = state["position"]
     now = datetime.now()
 
-    # ================= EXIT =================
+    # ===== EXIT =====
     if pos:
 
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price < last.Trendline:
-
+        if pos["side"] == "long" and last.HA_close < last.Trendline:
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
-        elif pos["side"] == "short" and price > last.Trendline:
-
+        elif pos["side"] == "short" and last.HA_close > last.Trendline:
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
         if exit_trade:
+            fee = utils.commission(pos["entry"], pos["qty"], symbol) + \
+                  utils.commission(price, pos["qty"], symbol)
 
-            entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
-            exit_fee  = utils.commission(price, pos["qty"], symbol)
-
-            total_fee = entry_fee + exit_fee
-            net = pnl - total_fee
-
+            net = pnl - fee
             state["balance"] += net
 
+            utils.log(f"EXIT {symbol} | PNL: {round(net, 4)}", tg=True)
+
+            # ✅ SAVE TRADE
             utils.save_trade({
                 "symbol": symbol,
                 "side": pos["side"],
@@ -259,50 +228,37 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 "exit_time": now
             })
 
-            emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
-            utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
-
             state["position"] = None
             state["last_exit_candle"] = df.index[-1]
-
             return
 
-    # ================= ENTRY =================
+    # ===== ENTRY =====
     if not pos and is_new_candle:
 
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        balance = state["balance"]
-
-        if balance < BALANCE:
-            utils.log(f"⚠️ Balance low: {balance}, required: {MIN_BALANCE}")
+        if state["balance"] < MIN_BALANCE:
+            utils.log("⚠️ Low balance", tg=True)
             return
 
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
-
+        if last.BOS == "UP" and last.Trend == "UP":
             state["position"] = {
                 "side": "long",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now,
-                "sl": price - STOPLOSS[symbol]
+                "entry_time": now
             }
+            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
 
-            utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
-
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
-
+        elif last.BOS == "DOWN" and last.Trend == "DOWN":
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now,
-                "sl": price + STOPLOSS[symbol]
+                "entry_time": now
             }
-
-            utils.log(f"🔴 {symbol} SHORT @ {price} | SL: {price + STOPLOSS[symbol]}", tg=True)
+            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
 
 # ================= MAIN =================
 
@@ -317,7 +273,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 LIVE BOT STARTED (PAPER MODE)", tg=True)
+    utils.log("🚀 NON-REPAINT BOT STARTED", tg=True)
 
     while True:
 
@@ -329,24 +285,22 @@ def run():
                 if df is None or len(df) < 100:
                     continue
 
-                latest_candle_time = df.index[-2]
+                latest = df.index[-2]
+                is_new = state[symbol]["last_candle_time"] != latest
 
-                is_new_candle = state[symbol]["last_candle_time"] != latest_candle_time
-
-                if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_candle_time
+                if is_new:
+                    state[symbol]["last_candle_time"] = latest
 
                 price = utils.fetch_price(symbol)
-
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol], is_new_candle)
+                process_symbol(symbol, df, price, state[symbol], is_new)
 
             time.sleep(3)
 
         except Exception as e:
-            utils.log(f"🚨 Runtime error: {e}", tg=True)
+            utils.log(f"ERROR: {e}", tg=True)
             time.sleep(5)
 
 # ================= START =================

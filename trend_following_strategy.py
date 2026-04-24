@@ -102,36 +102,29 @@ def add_heikin_ashi(df):
 
 def add_indicators(df):
 
-    df = df.tail(200)  # 🔥 speed optimization
+    df = df.tail(200)
     df = add_heikin_ashi(df)
 
-    ha_high = df["HA_high"]
-    ha_low = df["HA_low"]
-    ha_close = df["HA_close"]
-
     st = ta.supertrend(
-        high=ha_high,
-        low=ha_low,
-        close=ha_close,
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
         length=10,
         multiplier=3
     )
 
-    # 🔥 dynamic column fix
     supertrend_col = [c for c in st.columns if "SUPERT_" in c and not c.endswith("d")][0]
     trend_col = [c for c in st.columns if "SUPERTd_" in c][0]
 
     df["supertrend"] = st[supertrend_col]
     df["trend"] = st[trend_col]
 
-    df["atr"] = ta.atr(high=ha_high, low=ha_low, close=ha_close, length=10)
+    df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
     df["atr_ma"] = df["atr"].rolling(20).mean()
 
-    df["trend_strength"] = abs(ha_close - df["supertrend"]) / df["atr"]
+    df["trend_strength"] = abs(df["HA_close"] - df["supertrend"]) / df["atr"]
 
-    df = df.dropna()
-
-    return df
+    return df.dropna()
 
 # ================= STRATEGY =================
 
@@ -145,8 +138,6 @@ def process_symbol(symbol, df, price, state):
 
     if len(df) < 30:
         return
-
-    # save_processed_data(df, symbol)
 
     curr = df.iloc[-1]
     prev = df.iloc[-2]
@@ -174,12 +165,10 @@ def process_symbol(symbol, df, price, state):
     if prev_close <= prev_st and close > st:
         level["high"] = curr["HA_high"]
         level["low"] = None
-        utils.log(f"🚀 {symbol} Trend UP → HA High: {round(level['high'],2)}", tg=True)
 
     elif prev_close >= prev_st and close < st:
         level["low"] = curr["HA_low"]
         level["high"] = None
-        utils.log(f"🔻 {symbol} Trend DOWN → HA Low: {round(level['low'],2)}", tg=True)
 
     # Entry
     if level["high"] and close > level["high"] and trade_allowed:
@@ -188,9 +177,9 @@ def process_symbol(symbol, df, price, state):
                 "side": "long",
                 "entry": price,
                 "qty": qty,
-                "trail_sl": price - atr * 2
+                "trail_sl": price - atr * 2,
+                "entry_time": get_ist_time()
             })
-            utils.log(f"🚀 {symbol} BUY @ {price}", tg=True)
             level["high"] = None
 
     elif level["low"] and close < level["low"] and trade_allowed:
@@ -199,31 +188,38 @@ def process_symbol(symbol, df, price, state):
                 "side": "short",
                 "entry": price,
                 "qty": qty,
-                "trail_sl": price + atr * 2
+                "trail_sl": price + atr * 2,
+                "entry_time": get_ist_time()
             })
-            utils.log(f"🔻 {symbol} SELL @ {price}", tg=True)
             level["low"] = None
 
-    # Exit (Trailing)
+    # ================= EXIT (UPDATED WITH SAVE TRADE) =================
+
     for p in positions[:]:
 
         trail_step = atr * 1
+        exit_trade = False
+        pnl = 0
 
         if p["side"] == "long":
+
             if price - p["entry"] > trail_step:
                 p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
 
             if price <= p["trail_sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
             else:
                 continue
 
         else:
+
             if p["entry"] - price > trail_step:
                 p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
 
             if price >= p["trail_sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
             else:
                 continue
 
@@ -233,9 +229,23 @@ def process_symbol(symbol, df, price, state):
         net = pnl - fee
         state["balance"] += net
 
+        now = get_ist_time()
+
         emoji = "🟢" if net > 0 else "🔴"
         utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
         utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+
+        # ✅ SAVE TRADE ADDED HERE
+        utils.save_trade({
+            "symbol": symbol,
+            "side": p["side"],
+            "entry_price": p["entry"],
+            "exit_price": price,
+            "qty": p["qty"],
+            "net_pnl": round(net, 6),
+            "entry_time": p.get("entry_time"),
+            "exit_time": now
+        })
 
         positions.remove(p)
 
@@ -244,8 +254,8 @@ def process_symbol(symbol, df, price, state):
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="5m",
-    days=2,
+    timeframe="15m",
+    days=5,
     telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
