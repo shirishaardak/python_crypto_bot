@@ -13,7 +13,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "supertrend_ha_fast"
+BOT_NAME = "grid_strategy"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -23,7 +23,7 @@ QTY = {"BTCUSD": 100, "ETHUSD": 100}
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
 
-SAVE_DIR = "data/supertrend_ha_fast"
+SAVE_DIR = "data/grid_strategy"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -153,53 +153,98 @@ def process_symbol(symbol, df, price, state):
 
     momentum_ok = atr > atr_ma
     trend_strong = curr["trend_strength"] > 0.8
+    trade_allowed = momentum_ok
 
-    trade_allowed = momentum_ok and trend_strong
+    # ================= LEVEL INIT =================
 
     if "level" not in sym:
-        sym["level"] = {"high": None, "low": None}
+        sym["level"] = {
+            "high": None,
+            "low": None,
+            "locked": False,
+            "side": None,
+            "attempted": False
+        }
 
     level = sym["level"]
 
-    # Trend flip
+    # ================= TREND FLIP =================
+
     if prev_close <= prev_st and close > st:
-        level["high"] = curr["HA_high"]
-        level["low"] = None
+        level.update({
+            "high": curr["HA_high"],
+            "low": None,
+            "locked": True,
+            "side": "long",
+            "attempted": False
+        })
+
+        utils.log(f"📈 {symbol} LONG LEVEL SET @ {round(level['high'], 2)}", tg=True)
 
     elif prev_close >= prev_st and close < st:
-        level["low"] = curr["HA_low"]
-        level["high"] = None
+        level.update({
+            "low": curr["HA_low"],
+            "high": None,
+            "locked": True,
+            "side": "short",
+            "attempted": False
+        })
 
-    # Entry
-    if level["high"] and close > level["high"] and trade_allowed:
-        if not any(p["side"] == "long" for p in positions):
-            positions.append({
-                "side": "long",
-                "entry": price,
-                "qty": qty,
-                "trail_sl": price - atr * 2,
-                "entry_time": get_ist_time()
-            })
-            level["high"] = None
+        utils.log(f"📉 {symbol} SHORT LEVEL SET @ {round(level['low'], 2)}", tg=True)
 
-    elif level["low"] and close < level["low"] and trade_allowed:
-        if not any(p["side"] == "short" for p in positions):
-            positions.append({
-                "side": "short",
-                "entry": price,
-                "qty": qty,
-                "trail_sl": price + atr * 2,
-                "entry_time": get_ist_time()
-            })
-            level["low"] = None
+    # ================= ENTRY =================
 
-    # ================= EXIT (UPDATED WITH SAVE TRADE) =================
+    if level["locked"] and not level["attempted"]:
+
+        if level["side"] == "long" and close > level["high"] and trade_allowed:
+            if not any(p["side"] == "long" for p in positions):
+
+                positions.append({
+                    "side": "long",
+                    "entry": price,
+                    "qty": qty,
+                    "trail_sl": price - atr * 2,
+                    "entry_time": get_ist_time()
+                })
+
+                level["attempted"] = True
+                level["locked"] = False
+
+                utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
+
+        elif level["side"] == "short" and close < level["low"] and trade_allowed:
+            if not any(p["side"] == "short" for p in positions):
+
+                positions.append({
+                    "side": "short",
+                    "entry": price,
+                    "qty": qty,
+                    "trail_sl": price + atr * 2,
+                    "entry_time": get_ist_time()
+                })
+
+                level["attempted"] = True
+                level["locked"] = False
+
+                utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
+
+    # ================= ENTRY FAIL =================
+
+    if level["locked"] and not level["attempted"]:
+
+        if level["side"] == "long" and close < st:
+            utils.log(f"❌ {symbol} LONG FAILED", tg=True)
+            level.update({"high": None, "locked": False, "side": None})
+
+        elif level["side"] == "short" and close > st:
+            utils.log(f"❌ {symbol} SHORT FAILED", tg=True)
+            level.update({"low": None, "locked": False, "side": None})
+
+    # ================= EXIT =================
 
     for p in positions[:]:
 
-        trail_step = atr * 1
-        exit_trade = False
-        pnl = 0
+        trail_step = atr
 
         if p["side"] == "long":
 
@@ -208,7 +253,7 @@ def process_symbol(symbol, df, price, state):
 
             if price <= p["trail_sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-                exit_trade = True
+
             else:
                 continue
 
@@ -219,7 +264,7 @@ def process_symbol(symbol, df, price, state):
 
             if price >= p["trail_sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
-                exit_trade = True
+
             else:
                 continue
 
@@ -235,7 +280,6 @@ def process_symbol(symbol, df, price, state):
         utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
         utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
 
-        # ✅ SAVE TRADE ADDED HERE
         utils.save_trade({
             "symbol": symbol,
             "side": p["side"],
@@ -256,7 +300,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe="1m",
     days=5,
-    telegram_token=os.getenv("trend_following_strategy_bot"),
+    telegram_token=os.getenv("TELEGRAM_BOT_TOKEN"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
