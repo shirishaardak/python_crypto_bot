@@ -66,8 +66,7 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
 # ================= SAVE =================
 
 def save_processed_data(df, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}.csv")
-
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
     out = pd.DataFrame({
         "time": df.index,
         "ha_open": df["HA_open"],
@@ -135,6 +134,7 @@ def process_symbol(symbol, df, price, state):
     qty = QTY[symbol]
 
     df = add_indicators(df)
+    # save_processed_data(df, symbol)
 
     if len(df) < 30:
         return
@@ -170,7 +170,7 @@ def process_symbol(symbol, df, price, state):
 
     # ================= TREND FLIP =================
 
-    if prev_close <= prev_st and close > st:
+    if prev_close < prev_st and close > st:
         level.update({
             "high": curr["HA_high"],
             "low": None,
@@ -181,7 +181,7 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📈 {symbol} LONG LEVEL SET @ {round(level['high'], 2)}", tg=True)
 
-    elif prev_close >= prev_st and close < st:
+    elif prev_close > prev_st and close < st:
         level.update({
             "low": curr["HA_low"],
             "high": None,
@@ -287,7 +287,7 @@ def process_symbol(symbol, df, price, state):
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1m",
+    timeframe="5m",
     days=5,
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
