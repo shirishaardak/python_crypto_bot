@@ -170,7 +170,7 @@ def process_symbol(symbol, df, price, state):
 
     # ================= TREND FLIP =================
 
-    if close > st:
+    if prev_close <= prev_st and close > st:
         level.update({
             "high": curr["HA_high"],
             "low": None,
@@ -181,7 +181,7 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📈 {symbol} LONG LEVEL SET @ {round(level['high'], 2)}", tg=True)
 
-    elif  close < st:
+    elif prev_close >= prev_st and close < st:
         level.update({
             "low": curr["HA_low"],
             "high": None,
