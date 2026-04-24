@@ -25,7 +25,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 STOPLOSS = {"BTCUSD": 500, "ETHUSD": 50}
 TAKER_FEE = 0.0005
 
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 5
 
 MIN_BALANCE = 5000
@@ -103,7 +103,10 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    order = 21
+    df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
+    df["atr_ma"] = df["atr"].rolling(20).mean()
+
+    order = 5
 
     # ✅ make rolling causal (no current candle leakage)
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
@@ -221,7 +224,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         # LONG
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.atr > last.atr_ma:
 
             # place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
 
@@ -236,7 +239,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
 
         # SHORT
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
+        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.atr > last.atr_ma:
 
             # place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
 
