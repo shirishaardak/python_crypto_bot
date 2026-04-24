@@ -170,7 +170,7 @@ def process_symbol(symbol, df, price, state):
 
     # ================= TREND FLIP =================
 
-    if prev_close <= prev_st and close > st:
+    if close > st:
         level.update({
             "high": curr["HA_high"],
             "low": None,
@@ -181,7 +181,7 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📈 {symbol} LONG LEVEL SET @ {round(level['high'], 2)}", tg=True)
 
-    elif prev_close >= prev_st and close < st:
+    elif  close < st:
         level.update({
             "low": curr["HA_low"],
             "high": None,
@@ -228,17 +228,6 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
 
-    # ================= ENTRY FAIL =================
-
-    if level["locked"] and not level["attempted"]:
-
-        if level["side"] == "long" and close < st:
-            utils.log(f"❌ {symbol} LONG FAILED", tg=True)
-            level.update({"high": None, "locked": False, "side": None})
-
-        elif level["side"] == "short" and close > st:
-            utils.log(f"❌ {symbol} SHORT FAILED", tg=True)
-            level.update({"low": None, "locked": False, "side": None})
 
     # ================= EXIT =================
 
@@ -312,7 +301,7 @@ def run():
         "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    print("BOT STARTED")
+    utils.log("🤖 BOT STARTED", tg=True)
 
     while True:
         try:
