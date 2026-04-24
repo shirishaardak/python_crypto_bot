@@ -184,8 +184,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_structure_trendline(df)
 
-    if is_new_candle:
-        save_processed_data(ha, symbol)
+    # if is_new_candle:
+    #     save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
