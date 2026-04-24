@@ -103,8 +103,8 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
-    df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
-    df["atr_ma"] = df["atr"].rolling(20).mean()
+    ha["atr"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=10)
+    ha["atr_ma"] = ha["atr"].rolling(20).mean()
 
     order = 5
 
