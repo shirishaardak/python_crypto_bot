@@ -3,307 +3,295 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import pytz
 import pandas_ta as ta
-from dotenv import load_dotenv
-import subprocess
 
+from dotenv import load_dotenv
 from utils import TradingUtils
 
 load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "grid_strategy"
+BOT_NAME = "supertrend_ha_fast"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
+QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
-STOPLOSS = {"BTCUSD": 500, "ETHUSD": 50}
 TAKER_FEE = 0.0005
+SLEEP_TIME = 5
 
-TIMEFRAME = "1m"
-DAYS = 5
-
-BALANCE = 5000
-MIN_BALANCE = 500
-
-last_git_push = time.time()
-
-# ================= AUTO GIT =================
-
-def auto_git_push():
-    global last_git_push
-
-    if time.time() - last_git_push < 3600:
-        return
-
-    try:
-        subprocess.run("git add -A", shell=True)
-
-        res = subprocess.run(
-            'git diff --cached --quiet || git commit -m "auto update"',
-            shell=True
-        )
-
-        if res.returncode != 0:
-            utils.log("✅ Changes committed")
-
-        res = subprocess.run("git push origin main", shell=True)
-
-        if res.returncode == 0:
-            utils.log("✅ Git Push Done", tg=True)
-
-        last_git_push = time.time()
-
-    except Exception as e:
-        utils.log(f"Git Error: {e}")
-
-# ================= PATH =================
-
-BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "grid_strategy")
+SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# ================= LOGGER =================
+IST = pytz.timezone("Asia/Kolkata")
 
-def save_processed_data(data, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+# ================= TIME =================
 
-    df = data.copy()
+def get_ist_time():
+    return datetime.now(IST)
+
+# ================= NEW CANDLE =================
+
+last_candle_time = {}
+
+def is_new_candle(symbol, df):
+    t = df.index[-1]
+
+    if symbol not in last_candle_time:
+        last_candle_time[symbol] = t
+        return True
+
+    if t != last_candle_time[symbol]:
+        last_candle_time[symbol] = t
+        return True
+
+    return False
+
+# ================= SAFE FETCH =================
+
+def safe_fetch(fetch_func, *args, retries=3, delay=1):
+    for _ in range(retries):
+        try:
+            result = fetch_func(*args)
+            if result is not None:
+                return result
+        except Exception as e:
+            print("Fetch error:", e)
+        time.sleep(delay)
+    return None
+
+# ================= SAVE =================
+
+def save_processed_data(df, symbol):
+    path = os.path.join(SAVE_DIR, f"{symbol}.csv")
 
     out = pd.DataFrame({
         "time": df.index,
-        "HA_open": df["HA_open"],
-        "HA_high": df["HA_high"],
-        "HA_low": df["HA_low"],
-        "HA_close": df["HA_close"],
-        "Trendline": df["Trendline"],
-        "Structure": df["Structure"],
-        "Trend": df["Trend"],
-        "BOS": df["BOS"],
-        "CHoCH": df["CHoCH"],
+        "ha_open": df["HA_open"],
+        "ha_high": df["HA_high"],
+        "ha_low": df["HA_low"],
+        "ha_close": df["HA_close"],
+        "supertrend": df["supertrend"]
     })
 
-    out.fillna("", inplace=True)
     out.to_csv(path, index=False)
 
-# ================= INIT =================
+# ================= HEIKIN ASHI =================
+
+def add_heikin_ashi(df):
+
+    ha_close = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4
+
+    ha_open = np.zeros(len(df))
+    ha_open[0] = df["Open"].iloc[0]
+
+    for i in range(1, len(df)):
+        ha_open[i] = (ha_open[i-1] + ha_close.iloc[i-1]) / 2
+
+    df["HA_open"] = ha_open
+    df["HA_high"] = np.maximum.reduce([df["High"], ha_open, ha_close])
+    df["HA_low"] = np.minimum.reduce([df["Low"], ha_open, ha_close])
+    df["HA_close"] = ha_close
+
+    return df
+
+# ================= INDICATORS =================
+
+def add_indicators(df):
+
+    df = df.tail(200)
+    df = add_heikin_ashi(df)
+
+    st = ta.supertrend(
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
+        length=10,
+        multiplier=3
+    )
+
+    supertrend_col = [c for c in st.columns if "SUPERT_" in c and not c.endswith("d")][0]
+    trend_col = [c for c in st.columns if "SUPERTd_" in c][0]
+
+    df["supertrend"] = st[supertrend_col]
+    df["trend"] = st[trend_col]
+
+    df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
+    df["atr_ma"] = df["atr"].rolling(20).mean()
+
+    df["trend_strength"] = abs(df["HA_close"] - df["supertrend"]) / df["atr"]
+
+    return df.dropna()
+
+# ================= STRATEGY =================
+
+def process_symbol(symbol, df, price, state):
+
+    sym = state["symbols"][symbol]
+    positions = sym["positions"]
+    qty = QTY[symbol]
+
+    df = add_indicators(df)
+
+    if len(df) < 30:
+        return
+
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    close = curr["HA_close"]
+    prev_close = prev["HA_close"]
+
+    st = curr["supertrend"]
+    prev_st = prev["supertrend"]
+
+    atr = curr["atr"]
+    atr_ma = curr["atr_ma"]
+
+    momentum_ok = atr > atr_ma
+    trend_strong = curr["trend_strength"] > 0.8
+
+    trade_allowed = momentum_ok and trend_strong
+
+    if "level" not in sym:
+        sym["level"] = {"high": None, "low": None}
+
+    level = sym["level"]
+
+    # Trend flip
+    if prev_close <= prev_st and close > st:
+        level["high"] = curr["HA_high"]
+        level["low"] = None
+
+    elif prev_close >= prev_st and close < st:
+        level["low"] = curr["HA_low"]
+        level["high"] = None
+
+    # Entry
+    if level["high"] and close > level["high"] and trade_allowed:
+        if not any(p["side"] == "long" for p in positions):
+            positions.append({
+                "side": "long",
+                "entry": price,
+                "qty": qty,
+                "trail_sl": price - atr * 2,
+                "entry_time": get_ist_time()
+            })
+            level["high"] = None
+
+    elif level["low"] and close < level["low"] and trade_allowed:
+        if not any(p["side"] == "short" for p in positions):
+            positions.append({
+                "side": "short",
+                "entry": price,
+                "qty": qty,
+                "trail_sl": price + atr * 2,
+                "entry_time": get_ist_time()
+            })
+            level["low"] = None
+
+    # ================= EXIT (UPDATED WITH SAVE TRADE) =================
+
+    for p in positions[:]:
+
+        trail_step = atr * 1
+        exit_trade = False
+        pnl = 0
+
+        if p["side"] == "long":
+
+            if price - p["entry"] > trail_step:
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
+
+            if price <= p["trail_sl"]:
+                pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+            else:
+                continue
+
+        else:
+
+            if p["entry"] - price > trail_step:
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
+
+            if price >= p["trail_sl"]:
+                pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
+                exit_trade = True
+            else:
+                continue
+
+        fee = utils.commission(p["entry"], p["qty"], symbol) + \
+              utils.commission(price, p["qty"], symbol)
+
+        net = pnl - fee
+        state["balance"] += net
+
+        now = get_ist_time()
+
+        emoji = "🟢" if net > 0 else "🔴"
+        utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
+        utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+
+        # ✅ SAVE TRADE ADDED HERE
+        utils.save_trade({
+            "symbol": symbol,
+            "side": p["side"],
+            "entry_price": p["entry"],
+            "exit_price": price,
+            "qty": p["qty"],
+            "net_pnl": round(net, 6),
+            "entry_time": p.get("entry_time"),
+            "exit_time": now
+        })
+
+        positions.remove(p)
+
+# ================= MAIN =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe=TIMEFRAME,
-    days=DAYS,
-    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
+    timeframe="1m",
+    days=5,
+    telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-# ================= STRUCTURE =================
-
-def calculate_structure_trendline(df, order=7):
-
-    df = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
-
-    df["pivot_high"] = False
-    df["pivot_low"] = False
-
-    df["Structure"] = ""
-    df["Trend"] = None
-    df["Trendline"] = np.nan
-    df["BOS"] = ""
-    df["CHoCH"] = ""
-
-    last_high = None
-    last_low = None
-    trend = None
-    trendline = df.loc[0, "HA_close"]
-
-    # pivots
-    for i in range(order, len(df)):
-        if df["HA_high"].iloc[i] == df["HA_high"].iloc[i-order:i+1].max():
-            df.loc[i, "pivot_high"] = True
-
-        if df["HA_low"].iloc[i] == df["HA_low"].iloc[i-order:i+1].min():
-            df.loc[i, "pivot_low"] = True
-
-    # structure
-    for i in range(len(df)):
-
-        structure = ""
-
-        if df.loc[i, "pivot_high"]:
-            h = df.loc[i, "HA_high"]
-
-            if last_high is None:
-                structure = "H"
-            else:
-                if h > last_high:
-                    structure = "HH"
-                    df.loc[i, "BOS"] = "UP" if trend != "DOWN" else ""
-                    df.loc[i, "CHoCH"] = "UP" if trend == "DOWN" else ""
-                    trend = "UP"
-                else:
-                    structure = "LH"
-
-            last_high = h
-
-        elif df.loc[i, "pivot_low"]:
-            l = df.loc[i, "HA_low"]
-
-            if last_low is None:
-                structure = "L"
-            else:
-                if l < last_low:
-                    structure = "LL"
-                    df.loc[i, "BOS"] = "DOWN" if trend != "UP" else ""
-                    df.loc[i, "CHoCH"] = "DOWN" if trend == "UP" else ""
-                    trend = "DOWN"
-                else:
-                    structure = "HL"
-
-            last_low = l
-
-        df.loc[i, "Structure"] = structure
-        df.loc[i, "Trend"] = trend
-
-        if trend == "UP" and last_low is not None:
-            trendline = last_low
-        elif trend == "DOWN" and last_high is not None:
-            trendline = last_high
-
-        df.loc[i, "Trendline"] = trendline
-
-    return df
-
-# ================= STRATEGY =================
-
-def process_symbol(symbol, df, price, state, is_new_candle):
-
-    ha = calculate_structure_trendline(df)
-
-    # if is_new_candle:
-    #     save_processed_data(ha, symbol)
-
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
-
-    pos = state["position"]
-    now = datetime.now()
-
-    # ===== EXIT =====
-    if pos:
-
-        exit_trade = False
-        pnl = 0
-
-        if pos["side"] == "long" and last.HA_close < last.Trendline:
-            pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
-
-        elif pos["side"] == "short" and last.HA_close > last.Trendline:
-            pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
-            exit_trade = True
-
-        if exit_trade:
-            fee = utils.commission(pos["entry"], pos["qty"], symbol) + \
-                  utils.commission(price, pos["qty"], symbol)
-
-            net = pnl - fee
-            state["balance"] += net
-
-            utils.log(f"EXIT {symbol} | PNL: {round(net, 4)}", tg=True)
-
-            # ✅ SAVE TRADE
-            utils.save_trade({
-                "symbol": symbol,
-                "side": pos["side"],
-                "entry_price": pos["entry"],
-                "exit_price": price,
-                "qty": pos["qty"],
-                "net_pnl": round(net, 6),
-                "entry_time": pos["entry_time"],
-                "exit_time": now
-            })
-
-            state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
-            return
-
-    # ===== ENTRY =====
-    if not pos and is_new_candle:
-
-        if state.get("last_exit_candle") == df.index[-1]:
-            return
-
-        if state["balance"] < MIN_BALANCE:
-            utils.log("⚠️ Low balance", tg=True)
-            return
-
-        if last.BOS == "UP" and last.Trend == "UP":
-            state["position"] = {
-                "side": "long",
-                "entry": price,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now
-            }
-            utils.log(f"🟢 LONG {symbol} @ {price}", tg=True)
-
-        elif last.BOS == "DOWN" and last.Trend == "DOWN":
-            state["position"] = {
-                "side": "short",
-                "entry": price,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now
-            }
-            utils.log(f"🔴 SHORT {symbol} @ {price}", tg=True)
-
-# ================= MAIN =================
-
 def run():
 
     state = {
-        s: {
-            "position": None,
-            "last_candle_time": None,
-            "last_exit_candle": None,
-            "balance": 5000
-        } for s in SYMBOLS
+        "balance": 10000,
+        "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    utils.log("🚀 NON-REPAINT BOT STARTED", tg=True)
+    print("BOT STARTED")
 
     while True:
-
         try:
             for symbol in SYMBOLS:
 
-                df = utils.fetch_candles(symbol)
-
-                if df is None or len(df) < 100:
+                df = safe_fetch(utils.fetch_candles, symbol, "5m")
+                if df is None or df.empty:
                     continue
 
-                latest = df.index[-2]
-                is_new = state[symbol]["last_candle_time"] != latest
+                if not is_new_candle(symbol, df):
+                    continue
 
-                if is_new:
-                    state[symbol]["last_candle_time"] = latest
-
-                price = utils.fetch_price(symbol)
+                price = safe_fetch(utils.fetch_price, symbol)
                 if price is None:
                     continue
 
-                process_symbol(symbol, df, price, state[symbol], is_new)
+                process_symbol(symbol, df, price, state)
 
-            time.sleep(3)
+            time.sleep(SLEEP_TIME)
 
         except Exception as e:
-            utils.log(f"ERROR: {e}", tg=True)
+            print("ERROR:", e)
             time.sleep(5)
-
-# ================= START =================
 
 if __name__ == "__main__":
     run()
