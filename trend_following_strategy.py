@@ -228,19 +228,7 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
 
-    # ================= ENTRY FAIL =================
-
-    if level["locked"] and not level["attempted"]:
-
-        if level["side"] == "long" and close < st:
-            utils.log(f"❌ {symbol} LONG FAILED", tg=True)
-            level.update({"high": None, "locked": False, "side": None})
-
-        elif level["side"] == "short" and close > st:
-            utils.log(f"❌ {symbol} SHORT FAILED", tg=True)
-            level.update({"low": None, "locked": False, "side": None})
-
-    # ================= EXIT =================
+# ================= EXIT =================
 
     for p in positions[:]:
 
@@ -318,7 +306,7 @@ def run():
         try:
             for symbol in SYMBOLS:
 
-                df = safe_fetch(utils.fetch_candles, symbol, "5m")
+                df = safe_fetch(utils.fetch_candles, symbol, "15m")
                 if df is None or df.empty:
                     continue
 
