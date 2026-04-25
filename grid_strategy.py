@@ -134,7 +134,6 @@ def process_symbol(symbol, df, price, state):
     qty = QTY[symbol]
 
     df = add_indicators(df)
-    # save_processed_data(df, symbol)
 
     if len(df) < 30:
         return
@@ -192,42 +191,43 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📉 {symbol} SHORT LEVEL SET @ {round(level['low'], 2)}", tg=True)
 
-    # ================= ENTRY =================
+    # ================= ENTRY (REVERSED) =================
 
     if level["locked"] and not level["attempted"]:
 
-        if level["side"] == "long" and close > level["high"] and trade_allowed:
-            if not any(p["side"] == "long" for p in positions):
-
-                positions.append({
-                    "side": "long",
-                    "entry": price,
-                    "qty": qty,
-                    "trail_sl": price - atr * 3,
-                    "entry_time": get_ist_time()
-                })
-
-                level["attempted"] = True
-                level["locked"] = False
-
-                utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
-
-        elif level["side"] == "short" and close < level["low"] and trade_allowed:
+        # LONG signal → SHORT entry
+        if level["side"] == "long" and close > st and trade_allowed:
             if not any(p["side"] == "short" for p in positions):
 
                 positions.append({
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 3,
+                    "trail_sl": price + atr * 1,
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
 
-                utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
+                utils.log(f"🔻 {symbol} SHORT ENTRY (REVERSED) @ {price}", tg=True)
 
+        # SHORT signal → LONG entry
+        elif level["side"] == "short" and close < st and trade_allowed:
+            if not any(p["side"] == "long" for p in positions):
+
+                positions.append({
+                    "side": "long",
+                    "entry": price,
+                    "qty": qty,
+                    "trail_sl": price - atr * 1,
+                    "entry_time": get_ist_time()
+                })
+
+                level["attempted"] = True
+                level["locked"] = False
+
+                utils.log(f"🚀 {symbol} LONG ENTRY (REVERSED) @ {price}", tg=True)
 
     # ================= EXIT =================
 
@@ -238,7 +238,7 @@ def process_symbol(symbol, df, price, state):
         if p["side"] == "long":
 
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 3)
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 1)
 
             if price <= p["trail_sl"] or price < st:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -249,7 +249,7 @@ def process_symbol(symbol, df, price, state):
         else:
 
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 3)
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 1)
 
             if price >= p["trail_sl"] or price > st:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
