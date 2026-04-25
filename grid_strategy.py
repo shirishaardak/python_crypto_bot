@@ -196,7 +196,7 @@ def process_symbol(symbol, df, price, state):
     if level["locked"] and not level["attempted"]:
 
         # LONG signal → SHORT entry
-        if level["side"] == "long" and close > st and trade_allowed:
+        if level["side"] == "long" and close > st:
             if not any(p["side"] == "short" for p in positions):
 
                 positions.append({
@@ -213,7 +213,7 @@ def process_symbol(symbol, df, price, state):
                 utils.log(f"🔻 {symbol} SHORT ENTRY (REVERSED) @ {price}", tg=True)
 
         # SHORT signal → LONG entry
-        elif level["side"] == "short" and close < st and trade_allowed:
+        elif level["side"] == "short" and close < st:
             if not any(p["side"] == "long" for p in positions):
 
                 positions.append({
@@ -240,7 +240,7 @@ def process_symbol(symbol, df, price, state):
             if price - p["entry"] > trail_step:
                 p["trail_sl"] = max(p["trail_sl"], price - atr * 3)
 
-            if price <= p["trail_sl"] or price < st:
+            if price <= p["trail_sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
@@ -251,7 +251,7 @@ def process_symbol(symbol, df, price, state):
             if p["entry"] - price > trail_step:
                 p["trail_sl"] = min(p["trail_sl"], price + atr * 3)
 
-            if price >= p["trail_sl"] or price > st:
+            if price >= p["trail_sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
