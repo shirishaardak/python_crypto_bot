@@ -84,6 +84,9 @@ def calculate_trendline(df):
 
     ha = ta.ha(df["Open"], df["High"], df["Low"], df["Close"]).reset_index(drop=True)
 
+    ha["atr"] = ta.atr(ha["HA_high"], ha["HA_low"], ha["HA_close"], length=14)
+    ha["atr_ma"] = ha["atr"].rolling(14).mean()
+
     order = 21
     ha["UPPER"] = ha["HA_high"].rolling(order).max()
     ha["LOWER"] = ha["HA_low"].rolling(order).min()
@@ -122,12 +125,12 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and last.HA_close < last.Trendline:
+        if pos["side"] == "long" and price < last.Trendline:
 
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
-        elif pos["side"] == "short" and last.HA_close > last.Trendline:
+        elif pos["side"] == "short" and price > last.Trendline:
 
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True

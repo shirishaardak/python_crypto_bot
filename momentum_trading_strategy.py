@@ -86,7 +86,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testing_strategy_my_aglo_bot"),
+    telegram_token=os.getenv("trend_following_strategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -170,12 +170,12 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
-        if pos["side"] == "long" and price < last.Trendline:
+        if pos["side"] == "long" and last.HA_close < last.Trendline:
 
             pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
 
-        elif pos["side"] == "short" and price > last.Trendline:
+        elif pos["side"] == "short" and last.HA_close > last.Trendline:
 
             pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
             exit_trade = True
@@ -224,7 +224,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         # LONG
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open and last.atr > last.atr_ma:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_close and last.HA_close > prev.HA_open:
 
             # place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
 
@@ -239,7 +239,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"🟢 {symbol} LONG @ {price} | SL: {price - STOPLOSS[symbol]}", tg=True)
 
         # SHORT
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open and last.atr > last.atr_ma:
+        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_close and last.HA_close < prev.HA_open:
 
             # place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
 
