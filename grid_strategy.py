@@ -162,7 +162,7 @@ def strong_trend(ha):
 def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
-    save_processed_data(ha, symbol)
+    # save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
@@ -176,12 +176,12 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
 
         if pos["side"] == "long":
-            if price <= pos["SL"] or price >= pos["TP"] or last.HA_close < last.Trendline:
+            if price >= pos["TP"] or last.HA_close < last.Trendline:
                 pnl = (price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
         else:
-            if price >= pos["SL"] or price <= pos["TP"] or last.HA_close > last.Trendline:
+            if price <= pos["TP"] or last.HA_close > last.Trendline:
                 pnl = (pos["entry"] - price) * CONTRACT_SIZE[symbol] * pos["qty"]
                 exit_trade = True
 
