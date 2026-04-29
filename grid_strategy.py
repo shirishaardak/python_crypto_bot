@@ -110,7 +110,7 @@ def add_indicators(df):
         low=df["HA_low"],
         close=df["HA_close"],
         length=10,
-        multiplier=3
+        multiplier=4.5
     )
 
     supertrend_col = [c for c in st.columns if "SUPERT_" in c and not c.endswith("d")][0]
