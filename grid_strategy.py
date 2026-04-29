@@ -288,7 +288,7 @@ def process_symbol(symbol, df, price, state):
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="15m",
+    timeframe="1m",
     days=5,
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
