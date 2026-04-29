@@ -13,7 +13,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "grid_strategy"
+BOT_NAME = "supertrend_fixed_TP_bot"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -23,7 +23,7 @@ QTY = {"BTCUSD": 100, "ETHUSD": 100}
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
 
-SAVE_DIR = "data/grid_strategy"
+SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -66,7 +66,8 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
 # ================= SAVE =================
 
 def save_processed_data(df, symbol):
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    path = os.path.join(SAVE_DIR, f"{symbol}.csv")
+
     out = pd.DataFrame({
         "time": df.index,
         "ha_open": df["HA_open"],
@@ -119,7 +120,7 @@ def add_indicators(df):
     df["trend"] = st[trend_col]
 
     df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
-    df["atr_ma"] = df["atr"].rolling(20).mean()
+    df["atr_ma"] = df["HA_close"].rolling(50).mean()
 
     df["trend_strength"] = abs(df["HA_close"] - df["supertrend"]) / df["atr"]
 
@@ -150,7 +151,7 @@ def process_symbol(symbol, df, price, state):
     atr = curr["atr"]
     atr_ma = curr["atr_ma"]
 
-    momentum_ok = atr > atr_ma
+    momentum_ok = prev_close > atr_ma
     trend_strong = curr["trend_strength"] > 0.8
     trade_allowed = momentum_ok
 
@@ -169,7 +170,7 @@ def process_symbol(symbol, df, price, state):
 
     # ================= TREND FLIP =================
 
-    if prev_close < prev_st and close > st:
+    if prev_close <= prev_st and close > st:
         level.update({
             "high": curr["HA_high"],
             "low": None,
@@ -180,7 +181,7 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📈 {symbol} LONG LEVEL SET @ {round(level['high'], 2)}", tg=True)
 
-    elif prev_close > prev_st and close < st:
+    elif prev_close >= prev_st and close < st:
         level.update({
             "low": curr["HA_low"],
             "high": None,
@@ -191,45 +192,45 @@ def process_symbol(symbol, df, price, state):
 
         utils.log(f"📉 {symbol} SHORT LEVEL SET @ {round(level['low'], 2)}", tg=True)
 
-    # ================= ENTRY (REVERSED) =================
+    # ================= ENTRY =================
 
     if level["locked"] and not level["attempted"]:
 
-        # LONG signal → SHORT entry
-        if level["side"] == "long" and close > st:
-            if not any(p["side"] == "short" for p in positions):
-
-                positions.append({
-                    "side": "short",
-                    "entry": price,
-                    "qty": qty,
-                    "trail_sl": price + atr * 3,
-                    "entry_time": get_ist_time()
-                })
-
-                level["attempted"] = True
-                level["locked"] = False
-
-                utils.log(f"🔻 {symbol} SHORT ENTRY (REVERSED) @ {price}", tg=True)
-
-        # SHORT signal → LONG entry
-        elif level["side"] == "short" and close < st:
+        if level["side"] == "long" and close > level["high"] and trade_allowed:
             if not any(p["side"] == "long" for p in positions):
 
                 positions.append({
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 3,
+                    "trail_sl": price - atr * 1.5,
+                    "TP": price + atr * 3,
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
 
-                utils.log(f"🚀 {symbol} LONG ENTRY (REVERSED) @ {price}", tg=True)
+                utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
 
-    # ================= EXIT =================
+        elif level["side"] == "short" and close < level["low"] and trade_allowed:
+            if not any(p["side"] == "short" for p in positions):
+
+                positions.append({
+                    "side": "short",
+                    "entry": price,
+                    "qty": qty,
+                    "trail_sl": price + atr * 1.5,
+                    "TP": price - atr * 3,
+                    "entry_time": get_ist_time()
+                })
+
+                level["attempted"] = True
+                level["locked"] = False
+
+                utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
+
+# ================= EXIT =================
 
     for p in positions[:]:
 
@@ -238,9 +239,9 @@ def process_symbol(symbol, df, price, state):
         if p["side"] == "long":
 
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 3)
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 1.5)
 
-            if price <= p["trail_sl"]:
+            if price <= p["trail_sl"] or price >= p["TP"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
@@ -249,9 +250,9 @@ def process_symbol(symbol, df, price, state):
         else:
 
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 3)
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 1.5)
 
-            if price >= p["trail_sl"]:
+            if price >= p["trail_sl"] or price <= p["TP"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
@@ -287,7 +288,7 @@ def process_symbol(symbol, df, price, state):
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1m",
+    timeframe="15m",
     days=5,
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -301,13 +302,13 @@ def run():
         "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    utils.log("🤖 BOT STARTED", tg=True)
+    print("BOT STARTED")
 
     while True:
         try:
             for symbol in SYMBOLS:
 
-                df = safe_fetch(utils.fetch_candles, symbol, "1m")
+                df = safe_fetch(utils.fetch_candles, symbol, "15m")
                 if df is None or df.empty:
                     continue
 
