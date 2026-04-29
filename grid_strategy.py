@@ -120,7 +120,7 @@ def add_indicators(df):
     df["trend"] = st[trend_col]
 
     df["atr"] = ta.atr(df["HA_high"], df["HA_low"], df["HA_close"], length=10)
-    df["atr_ma"] = df["HA_close"].rolling(50).mean()
+    df["atr_ma"] = df["HA_close"].rolling(200).mean()
 
     df["trend_strength"] = abs(df["HA_close"] - df["supertrend"]) / df["atr"]
 
@@ -196,10 +196,10 @@ def process_symbol(symbol, df, price, state):
 
     if level["locked"] and not level["attempted"]:
 
-        if level["side"] == "long" and close > level["high"]:
+        if level["side"] == "long" and close > level["high"] and prev_close > atr_ma:
             if not any(p["side"] == "long" for p in positions):
 
-                positions.append({
+                positions.append({ 
                     "side": "long",
                     "entry": price,
                     "qty": qty,
@@ -213,7 +213,7 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
 
-        elif level["side"] == "short" and close < level["low"]:
+        elif level["side"] == "short" and close < level["low"] and prev_close < atr_ma:
             if not any(p["side"] == "short" for p in positions):
 
                 positions.append({
