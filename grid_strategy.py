@@ -215,7 +215,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         # LONG
-        if last.HA_close > last.Trendline and prev.HA_close < prev.Trendline:
+        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open:
 
             state["position"] = {
                 "side": "long",
@@ -229,7 +229,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"🟢 {symbol} LONG @ {price}", tg=True)
 
         # SHORT
-        elif last.HA_close < last.Trendline and prev.HA_close > prev.Trendline:
+        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_open:
 
             state["position"] = {
                 "side": "short",
