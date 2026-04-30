@@ -30,17 +30,6 @@ MIN_BALANCE = 5000
 
 last_git_push = time.time()
 
-# ================= TIME FILTER =================
-
-def is_trading_time():
-    now = datetime.utcnow()
-    hour = now.hour + 5.5  # convert to IST
-
-    if hour >= 24:
-        hour -= 24
-
-    # Trade between 16:00 and 01:00 IST
-    return (hour >= 16 or hour <= 1)
 
 # ================= AUTO GIT =================
 
@@ -150,7 +139,7 @@ def calculate_trendline(df):
 # ================= FILTERS =================
 
 def is_volatile(ha):
-    return ha["atr"].iloc[-2] > ha["atr_ma"].iloc[-2]
+    return ha["atr"].iloc[-1] > ha["atr_ma"].iloc[-5]
 
 def strong_trend(ha):
     last = ha.iloc[-2]
@@ -214,10 +203,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     # ================= ENTRY =================
     if not pos and is_new_candle:
-
-        if not is_trading_time():
-            return
-
+       
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
@@ -274,7 +260,6 @@ def run():
     while True:
 
         try:
-            auto_git_push()
 
             for symbol in SYMBOLS:
 
