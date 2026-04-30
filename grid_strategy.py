@@ -18,7 +18,7 @@ BOT_NAME = "test_trading_strategy"
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 500}
+DEFAULT_CONTRACTS = {"BTCUSD": 100, "ETHUSD": 100}
 
 STOPLOSS = {"BTCUSD": 200, "ETHUSD": 10}
 TAKER_FEE = 0.0005
@@ -27,6 +27,7 @@ TIMEFRAME = "5m"
 DAYS = 5
 
 MIN_BALANCE = 5000
+BALANCE = 500
 
 last_git_push = time.time()
 
@@ -207,7 +208,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        if state["balance"] < MIN_BALANCE:
+        if state["balance"] < BALANCE:
             utils.log(f"⚠️ Low balance: {state['balance']}", tg=True)
             return
 
@@ -215,7 +216,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         # LONG
-        if last.HA_close > last.Trendline and last.HA_close > prev.HA_open:
+        if last.HA_close > last.Trendline and prev.HA_close < prev.Trendline:
 
             state["position"] = {
                 "side": "long",
@@ -229,7 +230,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             utils.log(f"🟢 {symbol} LONG @ {price}", tg=True)
 
         # SHORT
-        elif last.HA_close < last.Trendline and last.HA_close < prev.HA_open:
+        elif last.HA_close < last.Trendline and prev.HA_close > prev.Trendline:
 
             state["position"] = {
                 "side": "short",
