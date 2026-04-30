@@ -139,10 +139,12 @@ def process_symbol(symbol, df, price, state):
     if len(df) < 30:
         return
 
-    curr = df.iloc[-1]
-    prev = df.iloc[-2]
+    curr = df.iloc[-2]
+    prev = df.iloc[-3]
+    live = df.iloc[-1]
 
     close = curr["HA_close"]
+    live_close = live["HA_close"]
     prev_close = prev["HA_close"]
 
     st = curr["supertrend"]
@@ -196,14 +198,14 @@ def process_symbol(symbol, df, price, state):
 
     if level["locked"] and not level["attempted"]:
 
-        if level["side"] == "long" and close > level["high"] and trade_allowed:
+        if level["side"] == "long" and live_close > level["high"] and trade_allowed:
             if not any(p["side"] == "long" for p in positions):
 
                 positions.append({
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 3,
+                    "trail_sl": price - atr * 2.5,
                     "entry_time": get_ist_time()
                 })
 
@@ -212,14 +214,14 @@ def process_symbol(symbol, df, price, state):
 
                 utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
 
-        elif level["side"] == "short" and close < level["low"] and trade_allowed:
+        elif level["side"] == "short" and live_close < level["low"] and trade_allowed:
             if not any(p["side"] == "short" for p in positions):
 
                 positions.append({
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 3,
+                    "trail_sl": price + atr * 2.5,
                     "entry_time": get_ist_time()
                 })
 
@@ -236,10 +238,10 @@ def process_symbol(symbol, df, price, state):
 
         if p["side"] == "long":
 
-            # if price - p["entry"] > trail_step:
-            #     p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
+            if price - p["entry"] > trail_step:
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 2.5)
 
-            if price <= p["trail_sl"] or close < st:
+            if price <= p["trail_sl"] or live_close < st:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
@@ -247,10 +249,10 @@ def process_symbol(symbol, df, price, state):
 
         else:
 
-            # if p["entry"] - price > trail_step:
-            #     p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
+            if p["entry"] - price > trail_step:
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 2.5)
 
-            if price >= p["trail_sl"] or close > st:
+            if price >= p["trail_sl"] or live_close > st:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
 
             else:
