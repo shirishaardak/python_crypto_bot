@@ -300,7 +300,7 @@ def run():
         "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    print("BOT STARTED")
+    utils.log("🚀 supertrend_ha_fast BOT STARTED", tg=True)
 
     while True:
         try:
