@@ -5,7 +5,8 @@ import numpy as np
 from datetime import datetime
 import pytz
 import pandas_ta as ta
-
+import traceback
+import subprocess
 from dotenv import load_dotenv
 from utils import TradingUtils
 
@@ -27,6 +28,36 @@ SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
+last_git_push = time.time()
+
+# ================= AUTO GIT =================
+
+def auto_git_push():
+    global last_git_push
+
+    if time.time() - last_git_push < 3600:
+        return
+
+    try:
+        subprocess.run("git add -A", shell=True)
+
+        res = subprocess.run(
+            'git diff --cached --quiet || git commit -m "auto update"',
+            shell=True
+        )
+
+        if res.returncode != 0:
+            utils.log("✅ Changes committed")
+
+        res = subprocess.run("git push origin main", shell=True)
+
+        if res.returncode == 0:
+            utils.log("✅ Git Push Done", tg=True)
+
+        last_git_push = time.time()
+
+    except Exception as e:
+        utils.log(f"Git Error: {e}")
 
 # ================= TIME =================
 
@@ -203,7 +234,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 2.5,
+                    "trail_sl": price - atr * 2,
                     "entry_time": get_ist_time()
                 })
 
@@ -219,7 +250,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 2.5,
+                    "trail_sl": price + atr * 2,
                     "entry_time": get_ist_time()
                 })
 
@@ -237,7 +268,7 @@ def process_symbol(symbol, df, price, state):
         if p["side"] == "long":
 
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 2.5)
+                p["trail_sl"] = max(p["trail_sl"], price - atr * 2)
 
             if price <= p["trail_sl"] or close < st:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -248,7 +279,7 @@ def process_symbol(symbol, df, price, state):
         else:
 
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 2.5)
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
 
             if price >= p["trail_sl"] or close > st:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
@@ -318,6 +349,7 @@ def run():
                     continue
 
                 process_symbol(symbol, df, price, state)
+                auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
