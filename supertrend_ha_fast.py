@@ -234,7 +234,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 3,
+                    "trail_sl": price - atr * 2,
                     "entry_time": get_ist_time()
                 })
 
@@ -250,7 +250,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 3,
+                    "trail_sl": price + atr * 2,
                     "entry_time": get_ist_time()
                 })
 
