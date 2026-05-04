@@ -21,7 +21,7 @@ SYMBOLS = ["BTCUSD", "ETHUSD"]
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
-STOPLOSS = {"BTCUSD": 50, "ETHUSD": 5}
+STOPLOSS = {"BTCUSD": 500, "ETHUSD": 25}
 
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
@@ -236,7 +236,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - atr * 2,
+                    "trail_sl": price - STOPLOSS[symbol],
                     "entry_time": get_ist_time()
                 })
 
@@ -252,7 +252,7 @@ def process_symbol(symbol, df, price, state):
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + atr * 2,
+                    "trail_sl": price + STOPLOSS[symbol],
                     "entry_time": get_ist_time()
                 })
 
@@ -280,8 +280,8 @@ def process_symbol(symbol, df, price, state):
 
         else:
 
-            # if p["entry"] - price > trail_step:
-            #     p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
+            if p["entry"] - price > trail_step:
+                p["trail_sl"] = min(p["trail_sl"], price + atr * 2)
 
             if price >= p["trail_sl"] or price > st + STOPLOSS[symbol]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
