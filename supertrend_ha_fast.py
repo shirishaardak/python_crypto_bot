@@ -231,35 +231,35 @@ def process_symbol(symbol, df, price, state):
 
         if level["side"] == "long" and close > level["high"] and trade_allowed:
             if not any(p["side"] == "long" for p in positions):
-
+                sl = price - STOPLOSS[symbol]       
                 positions.append({
                     "side": "long",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price - STOPLOSS[symbol],
+                    "trail_sl": sl,
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
 
-                utils.log(f"🚀 {symbol} LONG ENTRY @ {price}", tg=True)
+                utils.log(f"🚀 {symbol} LONG ENTRY @ {price}  SL: {round(sl, 2)}", tg=True)
 
         elif level["side"] == "short" and close < level["low"] and trade_allowed:
             if not any(p["side"] == "short" for p in positions):
-
+                sl = price + STOPLOSS[symbol]
                 positions.append({
                     "side": "short",
                     "entry": price,
                     "qty": qty,
-                    "trail_sl": price + STOPLOSS[symbol],
+                    "trail_sl": sl,
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
 
-                utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}", tg=True)
+                utils.log(f"🔻 {symbol} SHORT ENTRY @ {price}  SL: {round(sl, 2)}", tg=True)
 
 # ================= EXIT =================
 
