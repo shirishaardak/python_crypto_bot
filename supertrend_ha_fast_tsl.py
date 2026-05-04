@@ -262,34 +262,74 @@ def process_symbol(symbol, df, price, state):
 
 # ================= EXIT =================
 
+    # ================= EXIT =================
+
     for p in positions[:]:
 
         trail_step = atr
 
         if p["side"] == "long":
 
+            # 🔼 Activate trailing after move
             if price - p["entry"] > trail_step:
-                p["trail_sl"] = max(p["trail_sl"], price - atr * 1)
 
-            if price <= p["trail_sl"] or price < st - STOPLOSS[symbol]:
+                new_sl_candidate = st
+
+                # Ensure SL stays below price
+                if new_sl_candidate < price:
+
+                    old_sl = p["trail_sl"]
+                    new_sl = max(old_sl, new_sl_candidate)
+
+                    if new_sl != old_sl:
+                        p["trail_sl"] = new_sl
+
+                        utils.log(
+                            f"🔼 {symbol} TRAIL SL UPDATED (LONG)\n"
+                            f"Entry: {round(p['entry'],2)} | Price: {round(price,2)}\n"
+                            f"Old SL: {round(old_sl,2)} → New SL: {round(new_sl,2)}",
+                            tg=True
+                        )
+
+            # 🔴 Exit condition
+            if price <= p["trail_sl"]:
                 pnl = (price - p["entry"]) * CONTRACT_SIZE[symbol] * p["qty"]
-
             else:
                 continue
 
-        else:
+        else:  # SHORT
 
+            # 🔽 Activate trailing after move
             if p["entry"] - price > trail_step:
-                p["trail_sl"] = min(p["trail_sl"], price + atr * 1)
 
-            if price >= p["trail_sl"] or price > st + STOPLOSS[symbol]:
+                new_sl_candidate = st
+
+                # Ensure SL stays above price
+                if new_sl_candidate > price:
+
+                    old_sl = p["trail_sl"]
+                    new_sl = min(old_sl, new_sl_candidate)
+
+                    if new_sl != old_sl:
+                        p["trail_sl"] = new_sl
+
+                        utils.log(
+                            f"🔽 {symbol} TRAIL SL UPDATED (SHORT)\n"
+                            f"Entry: {round(p['entry'],2)} | Price: {round(price,2)}\n"
+                            f"Old SL: {round(old_sl,2)} → New SL: {round(new_sl,2)}",
+                            tg=True
+                        )
+
+            # 🔴 Exit condition
+            if price >= p["trail_sl"]:
                 pnl = (p["entry"] - price) * CONTRACT_SIZE[symbol] * p["qty"]
-
             else:
                 continue
+
+        # ================= PNL CALC =================
 
         fee = utils.commission(p["entry"], p["qty"], symbol) + \
-              utils.commission(price, p["qty"], symbol)
+            utils.commission(price, p["qty"], symbol)
 
         net = pnl - fee
         state["balance"] += net
@@ -297,8 +337,16 @@ def process_symbol(symbol, df, price, state):
         now = get_ist_time()
 
         emoji = "🟢" if net > 0 else "🔴"
-        utils.log(f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}", tg=True)
-        utils.log(f"💰 Balance: {round(state['balance'],2)}", tg=True)
+
+        utils.log(
+            f"{emoji} {symbol} EXIT @ {round(price,2)} | PNL: {round(net,6)}",
+            tg=True
+        )
+
+        utils.log(
+            f"💰 Balance: {round(state['balance'],2)}",
+            tg=True
+        )
 
         utils.save_trade({
             "symbol": symbol,
