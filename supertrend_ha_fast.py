@@ -181,7 +181,7 @@ def process_symbol(symbol, df, price, state):
     qty = QTY[symbol]
 
     df = add_indicators(df)
-    save_processed_data(df, symbol)
+    # save_processed_data(df, symbol)
 
     if len(df) < 30:
         return
