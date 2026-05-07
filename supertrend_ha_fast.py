@@ -222,7 +222,7 @@ def process_symbol(symbol, df, price, state):
                 "attempted": False
             })
 
-            utils.log(f"📈 {symbol} LONG LEVEL @ {round(level_high,2)}", tg=True)
+            # utils.log(f"📈 {symbol} LONG LEVEL @ {round(level_high,2)}", tg=True)
 
         elif trend_dir == -1:
             level_low = df["HA_low"].iloc[idx: idx + LOOKBACK].min()
@@ -235,7 +235,7 @@ def process_symbol(symbol, df, price, state):
                 "attempted": False
             })
 
-            utils.log(f"📉 {symbol} SHORT LEVEL @ {round(level_low,2)}", tg=True)
+            # utils.log(f"📉 {symbol} SHORT LEVEL @ {round(level_low,2)}", tg=True)
 
     close = curr["HA_close"]
 
