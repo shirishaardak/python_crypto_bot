@@ -33,8 +33,8 @@ STOPLOSS = {
 }
 
 TP = {
-    "BTCUSD": 200,
-    "ETHUSD": 15
+    "BTCUSD": 20000,
+    "ETHUSD": 15000
 }
 
 TAKER_FEE = 0.0005
@@ -216,7 +216,7 @@ def add_indicators(df):
         low=df["HA_low"],
         close=df["HA_close"],
         length=10,
-        multiplier=3
+        multiplier=4
     )
 
     supertrend_col = [
@@ -587,7 +587,7 @@ def process_symbol(
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="5m",
+    timeframe="1m",
     days=5,
     telegram_token=os.getenv(
         "testmyaglostrategy_bot"
@@ -626,7 +626,7 @@ def run():
                 df = safe_fetch(
                     utils.fetch_candles,
                     symbol,
-                    "5m"
+                    "1m"
                 )
 
                 if (
