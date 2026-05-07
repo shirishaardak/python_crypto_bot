@@ -32,6 +32,11 @@ STOPLOSS = {
     "ETHUSD": 25
 }
 
+OFFSET = {
+    "BTCUSD": 70,
+    "ETHUSD": 5
+}
+
 TP = {
     "BTCUSD": 20000,
     "ETHUSD": 15000
@@ -334,7 +339,7 @@ def process_symbol(
             ].max()
 
             level.update({
-                "high": level_high,
+                "high": level_high + OFFSET[symbol],
                 "low": None,
                 "locked": True,
                 "side": "long",
@@ -356,7 +361,7 @@ def process_symbol(
             ].min()
 
             level.update({
-                "low": level_low,
+                "low": level_low - OFFSET[symbol],
                 "high": None,
                 "locked": True,
                 "side": "short",
