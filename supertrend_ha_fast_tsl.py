@@ -38,8 +38,8 @@ OFFSET = {
 }
 
 TP = {
-    "BTCUSD": 200,
-    "ETHUSD": 10
+    "BTCUSD": 20000,
+    "ETHUSD": 1000
 }
 
 TAKER_FEE = 0.0005
@@ -390,7 +390,6 @@ def process_symbol(
         if (
             level["side"] == "long"
             and close > level["high"] 
-            and curr['atr'] >  curr['atr_ma']
         ):
 
             if not any(
@@ -436,7 +435,6 @@ def process_symbol(
         elif (
             level["side"] == "short"
             and close < level["low"]
-            and curr['atr'] >  curr['atr_ma']
         ):
 
             if not any(
