@@ -663,7 +663,7 @@ def run():
                     state
                 )
 
-            auto_git_push()
+            # auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
