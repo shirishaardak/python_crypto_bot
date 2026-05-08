@@ -13,68 +13,36 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "supertrend_ha_tp"
+BOT_NAME = "supertrend_ha_fast"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-CONTRACT_SIZE = {
-    "BTCUSD": 0.001,
-    "ETHUSD": 0.01
-}
+CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
+QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
-QTY = {
-    "BTCUSD": 100,
-    "ETHUSD": 100
-}
-
-STOPLOSS = {
-    "BTCUSD": 500,
-    "ETHUSD": 25
-}
-
-OFFSET = {
-    "BTCUSD": 70,
-    "ETHUSD": 5
-}
-
-TP = {
-    "BTCUSD": 20000,
-    "ETHUSD": 1000
-}
+STOPLOSS = {"BTCUSD": 200, "ETHUSD": 10}
 
 TAKER_FEE = 0.0005
-
 SLEEP_TIME = 5
 
-LOOKBACK = 3
-
-SAVE_DIR = "data/supertrend_ha_tp"
+SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
-
 last_git_push = time.time()
 
-# ================= TIME =================
-
-def get_ist_time():
-    return datetime.now(IST)
+LOOKBACK = 3
 
 # ================= AUTO GIT =================
 
 def auto_git_push():
-
     global last_git_push
 
     if time.time() - last_git_push < 3600:
         return
 
     try:
-
-        subprocess.run(
-            "git add -A",
-            shell=True
-        )
+        subprocess.run("git add -A", shell=True)
 
         res = subprocess.run(
             'git diff --cached --quiet || git commit -m "auto update"',
@@ -84,38 +52,33 @@ def auto_git_push():
         if res.returncode != 0:
             utils.log("✅ Changes committed")
 
-        res = subprocess.run(
-            "git push origin main",
-            shell=True
-        )
+        res = subprocess.run("git push origin main", shell=True)
 
-        if res.returncode == 0:
-            utils.log(
-                "✅ Git Push Done",
-                tg=True
-            )
+        # if res.returncode == 0:
+        #     # utils.log("✅ Git Push Done", tg=True)
 
         last_git_push = time.time()
 
     except Exception as e:
-
         utils.log(f"Git Error: {e}")
+
+# ================= TIME =================
+
+def get_ist_time():
+    return datetime.now(IST)
 
 # ================= NEW CANDLE =================
 
 last_candle_time = {}
 
 def is_new_candle(symbol, df):
-
     t = df.index[-1]
 
     if symbol not in last_candle_time:
-
         last_candle_time[symbol] = t
         return True
 
     if t != last_candle_time[symbol]:
-
         last_candle_time[symbol] = t
         return True
 
@@ -123,24 +86,15 @@ def is_new_candle(symbol, df):
 
 # ================= SAFE FETCH =================
 
-def safe_fetch(
-    fetch_func,
-    *args,
-    retries=3,
-    delay=1
-):
-
+def safe_fetch(fetch_func, *args, retries=3, delay=1):
     for _ in range(retries):
-
         try:
-
             result = fetch_func(*args)
 
             if result is not None:
                 return result
 
         except Exception as e:
-
             print("Fetch error:", e)
 
         time.sleep(delay)
@@ -151,10 +105,7 @@ def safe_fetch(
 
 def save_processed_data(df, symbol):
 
-    path = os.path.join(
-        SAVE_DIR,
-        f"{symbol}_processed.csv"
-    )
+    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
 
     out = pd.DataFrame({
         "time": df.index,
@@ -184,7 +135,6 @@ def add_heikin_ashi(df):
     ha_open[0] = df["Open"].iloc[0]
 
     for i in range(1, len(df)):
-
         ha_open[i] = (
             ha_open[i - 1] +
             ha_close.iloc[i - 1]
@@ -221,13 +171,12 @@ def add_indicators(df):
         low=df["HA_low"],
         close=df["HA_close"],
         length=10,
-        multiplier=4
+        multiplier=3
     )
 
     supertrend_col = [
         c for c in st.columns
-        if "SUPERT_" in c
-        and not c.endswith("d")
+        if "SUPERT_" in c and not c.endswith("d")
     ][0]
 
     trend_col = [
@@ -236,7 +185,6 @@ def add_indicators(df):
     ][0]
 
     df["supertrend"] = st[supertrend_col]
-
     df["trend"] = st[trend_col]
 
     df["atr"] = ta.atr(
@@ -257,10 +205,7 @@ def add_indicators(df):
 
 # ================= LAST CROSSOVER =================
 
-def get_last_crossover(
-    df,
-    lookback=50
-):
+def get_last_crossover(df, lookback=50):
 
     trend = df["trend"].values
 
@@ -271,19 +216,13 @@ def get_last_crossover(
     ):
 
         if trend[i] != trend[i - 1]:
-
             return i, trend[i]
 
     return None, None
 
 # ================= STRATEGY =================
 
-def process_symbol(
-    symbol,
-    df,
-    price,
-    state
-):
+def process_symbol(symbol, df, price, state):
 
     sym = state["symbols"][symbol]
 
@@ -292,8 +231,6 @@ def process_symbol(
     qty = QTY[symbol]
 
     df = add_indicators(df)
-
-    # save_processed_data(df, symbol)
 
     if len(df) < 30:
         return
@@ -312,9 +249,7 @@ def process_symbol(
             "locked": False,
             "side": None,
             "attempted": False,
-            "last_cross_idx": None,
-            "level_idx": None,
-            "traded_level_idx": None
+            "last_cross_idx": None
         }
 
     level = sym["level"]
@@ -323,14 +258,9 @@ def process_symbol(
 
     idx, trend_dir = get_last_crossover(df)
 
-    if (
-        idx is not None
-        and idx != level["last_cross_idx"]
-    ):
+    if idx is not None and idx != level["last_cross_idx"]:
 
         level["last_cross_idx"] = idx
-
-        # ===== LONG CROSS =====
 
         if trend_dir == 1:
 
@@ -343,16 +273,8 @@ def process_symbol(
                 "low": None,
                 "locked": True,
                 "side": "long",
-                "attempted": False,
-                "level_idx": idx
+                "attempted": False
             })
-
-            # utils.log(
-            #     f"📈 {symbol} LONG LEVEL "
-            #     f"@ {round(level_high, 2)}"
-            # )
-
-        # ===== SHORT CROSS =====
 
         elif trend_dir == -1:
 
@@ -365,31 +287,20 @@ def process_symbol(
                 "high": None,
                 "locked": True,
                 "side": "short",
-                "attempted": False,
-                "level_idx": idx
+                "attempted": False
             })
-
-            # utils.log(
-            #     f"📉 {symbol} SHORT LEVEL "
-            #     f"@ {round(level_low, 2)}"
-            # )
 
     close = curr["HA_close"]
 
     # ================= ENTRY =================
 
-    if (
-        level["locked"]
-        and not level["attempted"]
-        and level["traded_level_idx"]
-        != level["level_idx"]
-    ):
+    if level["locked"] and not level["attempted"]:
 
-        # ===== LONG ENTRY =====
+        # LONG
 
         if (
             level["side"] == "long"
-            and close > level["high"] 
+            and close > level["high"]
         ):
 
             if not any(
@@ -399,38 +310,23 @@ def process_symbol(
 
                 sl = price - STOPLOSS[symbol]
 
-                # ===== POST ONLY ORDER =====
-                # exchange.create_limit_buy_order(
-                #     symbol,
-                #     qty,
-                #     price,
-                #     params={
-                #         "postOnly": True
-                #     }
-                # )
-
                 positions.append({
                     "side": "long",
                     "entry": price,
                     "qty": qty,
                     "trail_sl": sl,
-                    "TP": price + TP[symbol],
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
-                level["traded_level_idx"] = (
-                    level["level_idx"]
-                )
 
                 utils.log(
-                    f"🚀 {symbol} LONG ENTRY "
-                    f"@ {price}",
+                    f"🚀 {symbol} LONG ENTRY @ {price}",
                     tg=True
                 )
 
-        # ===== SHORT ENTRY =====
+        # SHORT
 
         elif (
             level["side"] == "short"
@@ -444,148 +340,45 @@ def process_symbol(
 
                 sl = price + STOPLOSS[symbol]
 
-                # ===== POST ONLY ORDER =====
-                # exchange.create_limit_sell_order(
-                #     symbol,
-                #     qty,
-                #     price,
-                #     params={
-                #         "postOnly": True
-                #     }
-                # )
-
                 positions.append({
                     "side": "short",
                     "entry": price,
                     "qty": qty,
                     "trail_sl": sl,
-                    "TP": price - TP[symbol],
                     "entry_time": get_ist_time()
                 })
 
                 level["attempted"] = True
                 level["locked"] = False
-                level["traded_level_idx"] = (
-                    level["level_idx"]
-                )
 
                 utils.log(
-                    f"🔻 {symbol} SHORT ENTRY "
-                    f"@ {price}",
+                    f"🔻 {symbol} SHORT ENTRY @ {price}",
                     tg=True
                 )
 
-    # ================= EXIT =================
+    # ================= TRAILING =================
 
     for p in positions[:]:
 
-        trail_step = atr
-
-        # ===== LONG EXIT =====
+        # LONG
 
         if p["side"] == "long":
-
-            if (
-                price - p["entry"]
-                > trail_step
-            ):
 
                 p["trail_sl"] = max(
                     p["trail_sl"],
                     curr["supertrend"]
                 )
 
-            if (
-                price <= p["trail_sl"]
-                or price >= p["TP"]
-            ):
-
-                pnl = (
-                    (
-                        price - p["entry"]
-                    )
-                    * CONTRACT_SIZE[symbol]
-                    * p["qty"]
-                )
-
-            else:
-                continue
-
-        # ===== SHORT EXIT =====
+        # SHORT
 
         else:
 
-            if (
-                p["entry"] - price
-                > trail_step
-            ):
+           
 
                 p["trail_sl"] = min(
                     p["trail_sl"],
                     curr["supertrend"]
                 )
-
-            if (
-                price >= p["trail_sl"]
-                or price <= p["TP"]
-            ):
-
-                pnl = (
-                    (
-                        p["entry"] - price
-                    )
-                    * CONTRACT_SIZE[symbol]
-                    * p["qty"]
-                )
-
-            else:
-                continue
-
-        fee = (
-            utils.commission(
-                p["entry"],
-                p["qty"],
-                symbol
-            )
-            +
-            utils.commission(
-                price,
-                p["qty"],
-                symbol
-            )
-        )
-
-        net = pnl - fee
-
-        state["balance"] += net
-
-        now = get_ist_time()
-
-        emoji = (
-            "🟢"
-            if net > 0
-            else "🔴"
-        )
-
-        utils.log(
-            f"{emoji} {symbol} EXIT @ "
-            f"{price} | "
-            f"PNL: {round(net, 6)}",
-            tg=True
-        )
-
-        utils.save_trade({
-            "symbol": symbol,
-            "side": p["side"],
-            "entry_price": p["entry"],
-            "exit_price": price,
-            "qty": p["qty"],
-            "net_pnl": round(net, 6),
-            "entry_time": p.get("entry_time"),
-            "exit_time": now
-        })
-
-        positions.remove(p)
 
 # ================= UTILS =================
 
@@ -594,12 +387,8 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe="1m",
     days=5,
-    telegram_token=os.getenv(
-        "testmyaglostrategy_bot"
-    ),
-    telegram_chat_id=os.getenv(
-        "TELEGRAM_CHAT_ID"
-    ),
+    telegram_token=os.getenv("supertrend_ha_fast_bot"),
+    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
@@ -609,18 +398,10 @@ def run():
 
     state = {
         "balance": 10000,
-        "symbols": {
-            s: {
-                "positions": []
-            }
-            for s in SYMBOLS
-        }
+        "symbols": {s: {"positions": []} for s in SYMBOLS}
     }
 
-    utils.log(
-        "🚀 BOT STARTED",
-        tg=True
-    )
+    utils.log("🚀 BOT STARTED", tg=True)
 
     while True:
 
@@ -628,23 +409,7 @@ def run():
 
             for symbol in SYMBOLS:
 
-                df = safe_fetch(
-                    utils.fetch_candles,
-                    symbol,
-                    "1m"
-                )
-
-                if (
-                    df is None
-                    or df.empty
-                ):
-                    continue
-
-                if not is_new_candle(
-                    symbol,
-                    df
-                ):
-                    continue
+                # ================= FETCH LIVE PRICE =================
 
                 price = safe_fetch(
                     utils.fetch_price,
@@ -654,6 +419,98 @@ def run():
                 if price is None:
                     continue
 
+                sym = state["symbols"][symbol]
+
+                positions = sym["positions"]
+
+                # ================= FAST EXIT =================
+
+                for p in positions[:]:
+
+                    # LONG EXIT
+
+                    if p["side"] == "long":
+
+                        if price <= p["trail_sl"]:
+
+                            pnl = (
+                                (price - p["entry"])
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                        else:
+                            continue
+
+                    # SHORT EXIT
+
+                    else:
+
+                        if price >= p["trail_sl"]:
+
+                            pnl = (
+                                (p["entry"] - price)
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                        else:
+                            continue
+
+                    fee = (
+                        utils.commission(
+                            p["entry"],
+                            p["qty"],
+                            symbol
+                        )
+                        +
+                        utils.commission(
+                            price,
+                            p["qty"],
+                            symbol
+                        )
+                    )
+
+                    net = pnl - fee
+
+                    state["balance"] += net
+
+                    now = get_ist_time()
+
+                    emoji = "🟢" if net > 0 else "🔴"
+
+                    utils.log(
+                        f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}",
+                        tg=True
+                    )
+
+                    utils.save_trade({
+                        "symbol": symbol,
+                        "side": p["side"],
+                        "entry_price": p["entry"],
+                        "exit_price": price,
+                        "qty": p["qty"],
+                        "net_pnl": round(net, 6),
+                        "entry_time": p.get("entry_time"),
+                        "exit_time": now
+                    })
+
+                    positions.remove(p)
+
+                # ================= CANDLE LOGIC =================
+
+                df = safe_fetch(
+                    utils.fetch_candles,
+                    symbol,
+                    "1m"
+                )
+
+                if df is None or df.empty:
+                    continue
+
+                if not is_new_candle(symbol, df):
+                    continue
+
                 process_symbol(
                     symbol,
                     df,
@@ -661,7 +518,7 @@ def run():
                     state
                 )
 
-            # auto_git_push()
+                # auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
@@ -674,5 +531,4 @@ def run():
 # ================= START =================
 
 if __name__ == "__main__":
-
     run()
