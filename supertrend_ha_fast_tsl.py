@@ -38,8 +38,8 @@ OFFSET = {
 }
 
 TP = {
-    "BTCUSD": 20000,
-    "ETHUSD": 15000
+    "BTCUSD": 200,
+    "ETHUSD": 10
 }
 
 TAKER_FEE = 0.0005
@@ -339,7 +339,7 @@ def process_symbol(
             ].max()
 
             level.update({
-                "high": level_high + OFFSET[symbol],
+                "high": level_high,
                 "low": None,
                 "locked": True,
                 "side": "long",
@@ -347,10 +347,10 @@ def process_symbol(
                 "level_idx": idx
             })
 
-            utils.log(
-                f"📈 {symbol} LONG LEVEL "
-                f"@ {round(level_high, 2)}"
-            )
+            # utils.log(
+            #     f"📈 {symbol} LONG LEVEL "
+            #     f"@ {round(level_high, 2)}"
+            # )
 
         # ===== SHORT CROSS =====
 
@@ -361,7 +361,7 @@ def process_symbol(
             ].min()
 
             level.update({
-                "low": level_low - OFFSET[symbol],
+                "low": level_low,
                 "high": None,
                 "locked": True,
                 "side": "short",
@@ -369,10 +369,10 @@ def process_symbol(
                 "level_idx": idx
             })
 
-            utils.log(
-                f"📉 {symbol} SHORT LEVEL "
-                f"@ {round(level_low, 2)}"
-            )
+            # utils.log(
+            #     f"📉 {symbol} SHORT LEVEL "
+            #     f"@ {round(level_low, 2)}"
+            # )
 
     close = curr["HA_close"]
 
@@ -389,7 +389,8 @@ def process_symbol(
 
         if (
             level["side"] == "long"
-            and close > level["high"]
+            and close > level["high"] 
+            and curr['atr'] >  curr['atr_ma']
         ):
 
             if not any(
@@ -435,6 +436,7 @@ def process_symbol(
         elif (
             level["side"] == "short"
             and close < level["low"]
+            and curr['atr'] >  curr['atr_ma']
         ):
 
             if not any(
