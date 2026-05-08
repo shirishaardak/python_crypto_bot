@@ -17,10 +17,20 @@ BOT_NAME = "supertrend_ha_fast"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
-CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-QTY = {"BTCUSD": 100, "ETHUSD": 100}
+CONTRACT_SIZE = {
+    "BTCUSD": 0.001,
+    "ETHUSD": 0.01
+}
 
-STOPLOSS = {"BTCUSD": 500, "ETHUSD": 25}
+QTY = {
+    "BTCUSD": 100,
+    "ETHUSD": 100
+}
+
+STOPLOSS = {
+    "BTCUSD": 500,
+    "ETHUSD": 25
+}
 
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
@@ -29,6 +39,7 @@ SAVE_DIR = "data/supertrend_ha_fast"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
+
 last_git_push = time.time()
 
 LOOKBACK = 3
@@ -36,13 +47,18 @@ LOOKBACK = 3
 # ================= AUTO GIT =================
 
 def auto_git_push():
+
     global last_git_push
 
     if time.time() - last_git_push < 3600:
         return
 
     try:
-        subprocess.run("git add -A", shell=True)
+
+        subprocess.run(
+            "git add -A",
+            shell=True
+        )
 
         res = subprocess.run(
             'git diff --cached --quiet || git commit -m "auto update"',
@@ -52,19 +68,21 @@ def auto_git_push():
         if res.returncode != 0:
             utils.log("✅ Changes committed")
 
-        res = subprocess.run("git push origin main", shell=True)
-
-        # if res.returncode == 0:
-        #     # utils.log("✅ Git Push Done", tg=True)
+        subprocess.run(
+            "git push origin main",
+            shell=True
+        )
 
         last_git_push = time.time()
 
     except Exception as e:
+
         utils.log(f"Git Error: {e}")
 
 # ================= TIME =================
 
 def get_ist_time():
+
     return datetime.now(IST)
 
 # ================= NEW CANDLE =================
@@ -72,13 +90,16 @@ def get_ist_time():
 last_candle_time = {}
 
 def is_new_candle(symbol, df):
+
     t = df.index[-1]
 
     if symbol not in last_candle_time:
+
         last_candle_time[symbol] = t
         return True
 
     if t != last_candle_time[symbol]:
+
         last_candle_time[symbol] = t
         return True
 
@@ -87,14 +108,18 @@ def is_new_candle(symbol, df):
 # ================= SAFE FETCH =================
 
 def safe_fetch(fetch_func, *args, retries=3, delay=1):
+
     for _ in range(retries):
+
         try:
+
             result = fetch_func(*args)
 
             if result is not None:
                 return result
 
         except Exception as e:
+
             print("Fetch error:", e)
 
         time.sleep(delay)
@@ -105,7 +130,10 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
 
 def save_processed_data(df, symbol):
 
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    path = os.path.join(
+        SAVE_DIR,
+        f"{symbol}_processed.csv"
+    )
 
     out = pd.DataFrame({
         "time": df.index,
@@ -135,6 +163,7 @@ def add_heikin_ashi(df):
     ha_open[0] = df["Open"].iloc[0]
 
     for i in range(1, len(df)):
+
         ha_open[i] = (
             ha_open[i - 1] +
             ha_close.iloc[i - 1]
@@ -162,7 +191,7 @@ def add_heikin_ashi(df):
 
 def add_indicators(df):
 
-    df = df.tail(200)
+    df = df.tail(200).copy()
 
     df = add_heikin_ashi(df)
 
@@ -185,21 +214,8 @@ def add_indicators(df):
     ][0]
 
     df["supertrend"] = st[supertrend_col]
+
     df["trend"] = st[trend_col]
-
-    df["atr"] = ta.atr(
-        df["HA_high"],
-        df["HA_low"],
-        df["HA_close"],
-        length=10
-    )
-
-    df["atr_ma"] = df["atr"].rolling(20).mean()
-
-    df["trend_strength"] = (
-        abs(df["HA_close"] - df["supertrend"])
-        / df["atr"]
-    )
 
     return df.dropna()
 
@@ -216,6 +232,7 @@ def get_last_crossover(df, lookback=50):
     ):
 
         if trend[i] != trend[i - 1]:
+
             return i, trend[i]
 
     return None, None
@@ -236,8 +253,6 @@ def process_symbol(symbol, df, price, state):
         return
 
     curr = df.iloc[-1]
-
-    atr = curr["atr"]
 
     # ================= LEVEL INIT =================
 
@@ -262,6 +277,8 @@ def process_symbol(symbol, df, price, state):
 
         level["last_cross_idx"] = idx
 
+        # LONG SETUP
+
         if trend_dir == 1:
 
             level_high = df["HA_high"].iloc[
@@ -275,6 +292,8 @@ def process_symbol(symbol, df, price, state):
                 "side": "long",
                 "attempted": False
             })
+
+        # SHORT SETUP
 
         elif trend_dir == -1:
 
@@ -296,7 +315,7 @@ def process_symbol(symbol, df, price, state):
 
     if level["locked"] and not level["attempted"]:
 
-        # LONG
+        # LONG ENTRY
 
         if (
             level["side"] == "long"
@@ -326,7 +345,7 @@ def process_symbol(symbol, df, price, state):
                     tg=True
                 )
 
-        # SHORT
+        # SHORT ENTRY
 
         elif (
             level["side"] == "short"
@@ -360,29 +379,27 @@ def process_symbol(symbol, df, price, state):
 
     for p in positions[:]:
 
-        trail_step = atr
-
         # LONG
 
         if p["side"] == "long":
 
-            if price - p["entry"] > trail_step:
+            # SL only moves upward
 
-                p["trail_sl"] = max(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = max(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
         # SHORT
 
         else:
 
-            if p["entry"] - price > trail_step:
+            # SL only moves downward
 
-                p["trail_sl"] = min(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = min(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
 # ================= UTILS =================
 
@@ -402,10 +419,18 @@ def run():
 
     state = {
         "balance": 10000,
-        "symbols": {s: {"positions": []} for s in SYMBOLS}
+        "symbols": {
+            s: {
+                "positions": []
+            }
+            for s in SYMBOLS
+        }
     }
 
-    utils.log("🚀 BOT STARTED", tg=True)
+    utils.log(
+        "🚀 BOT STARTED",
+        tg=True
+    )
 
     while True:
 
@@ -413,7 +438,7 @@ def run():
 
             for symbol in SYMBOLS:
 
-                # ================= FETCH LIVE PRICE =================
+                # ================= LIVE PRICE =================
 
                 price = safe_fetch(
                     utils.fetch_price,
@@ -484,7 +509,7 @@ def run():
                     emoji = "🟢" if net > 0 else "🔴"
 
                     utils.log(
-                        f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}",
+                        f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net, 6)}",
                         tg=True
                     )
 
@@ -501,7 +526,7 @@ def run():
 
                     positions.remove(p)
 
-                # ================= CANDLE LOGIC =================
+                # ================= CANDLE FETCH =================
 
                 df = safe_fetch(
                     utils.fetch_candles,
@@ -512,8 +537,12 @@ def run():
                 if df is None or df.empty:
                     continue
 
+                # ================= ONLY NEW CANDLE =================
+
                 if not is_new_candle(symbol, df):
                     continue
+
+                # ================= STRATEGY =================
 
                 process_symbol(
                     symbol,
@@ -521,6 +550,12 @@ def run():
                     price,
                     state
                 )
+
+                # ================= SAVE =================
+
+                save_processed_data(df, symbol)
+
+                # ================= AUTO PUSH =================
 
                 auto_git_push()
 
@@ -535,4 +570,5 @@ def run():
 # ================= START =================
 
 if __name__ == "__main__":
+
     run()
