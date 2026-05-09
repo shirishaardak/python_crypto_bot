@@ -25,7 +25,7 @@ STOPLOSS = {"BTCUSD": 200, "ETHUSD": 10}
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
 
-SAVE_DIR = "data/supertrend_ha_fast"
+SAVE_DIR = "data/supertrend_ha_fast_tsl"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
