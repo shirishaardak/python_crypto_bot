@@ -13,7 +13,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "supertrend_ha_fast"
+BOT_NAME = "supertrend_ha_fast_tsl"
 
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
@@ -21,6 +21,13 @@ CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
 QTY = {"BTCUSD": 100, "ETHUSD": 100}
 
 STOPLOSS = {"BTCUSD": 200, "ETHUSD": 10}
+
+# ================= TARGET PROFIT =================
+
+TARGET_PROFIT = {
+    "BTCUSD": 300,
+    "ETHUSD": 15
+}
 
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
@@ -32,35 +39,6 @@ IST = pytz.timezone("Asia/Kolkata")
 last_git_push = time.time()
 
 LOOKBACK = 3
-
-# ================= AUTO GIT =================
-
-def auto_git_push():
-    global last_git_push
-
-    if time.time() - last_git_push < 3600:
-        return
-
-    try:
-        subprocess.run("git add -A", shell=True)
-
-        res = subprocess.run(
-            'git diff --cached --quiet || git commit -m "auto update"',
-            shell=True
-        )
-
-        if res.returncode != 0:
-            utils.log("✅ Changes committed")
-
-        res = subprocess.run("git push origin main", shell=True)
-
-        # if res.returncode == 0:
-        #     # utils.log("✅ Git Push Done", tg=True)
-
-        last_git_push = time.time()
-
-    except Exception as e:
-        utils.log(f"Git Error: {e}")
 
 # ================= TIME =================
 
@@ -309,12 +287,14 @@ def process_symbol(symbol, df, price, state):
             ):
 
                 sl = price - STOPLOSS[symbol]
+                tp = price + TARGET_PROFIT[symbol]
 
                 positions.append({
                     "side": "long",
                     "entry": price,
                     "qty": qty,
                     "trail_sl": sl,
+                    "target": tp,
                     "entry_time": get_ist_time()
                 })
 
@@ -322,7 +302,7 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🚀 {symbol} LONG ENTRY @ {price}",
+                    f"🚀 {symbol} LONG ENTRY @ {price} | TP: {tp}",
                     tg=True
                 )
 
@@ -339,12 +319,14 @@ def process_symbol(symbol, df, price, state):
             ):
 
                 sl = price + STOPLOSS[symbol]
+                tp = price - TARGET_PROFIT[symbol]
 
                 positions.append({
                     "side": "short",
                     "entry": price,
                     "qty": qty,
                     "trail_sl": sl,
+                    "target": tp,
                     "entry_time": get_ist_time()
                 })
 
@@ -352,7 +334,7 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🔻 {symbol} SHORT ENTRY @ {price}",
+                    f"🔻 {symbol} SHORT ENTRY @ {price} | TP: {tp}",
                     tg=True
                 )
 
@@ -364,28 +346,26 @@ def process_symbol(symbol, df, price, state):
 
         if p["side"] == "long":
 
-                p["trail_sl"] = max(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = max(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
         # SHORT
 
         else:
 
-           
-
-                p["trail_sl"] = min(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = min(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
 # ================= UTILS =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="1m",
+    timeframe="5m",
     days=5,
     telegram_token=os.getenv("testmyaglostrategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -427,11 +407,28 @@ def run():
 
                 for p in positions[:]:
 
-                    # LONG EXIT
+                    exit_reason = None
+
+                    # ================= LONG EXIT =================
 
                     if p["side"] == "long":
 
-                        if price <= p["trail_sl"]:
+                        # TARGET HIT
+
+                        if price >= p["target"]:
+
+                            pnl = (
+                                (p["target"] - p["entry"])
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                            exit_price = p["target"]
+                            exit_reason = "TARGET"
+
+                        # STOPLOSS HIT
+
+                        elif price <= p["trail_sl"]:
 
                             pnl = (
                                 (price - p["entry"])
@@ -439,20 +436,41 @@ def run():
                                 * p["qty"]
                             )
 
+                            exit_price = price
+                            exit_reason = "SL"
+
                         else:
                             continue
 
-                    # SHORT EXIT
+                    # ================= SHORT EXIT =================
 
                     else:
 
-                        if price >= p["trail_sl"]:
+                        # TARGET HIT
+
+                        if price <= p["target"]:
+
+                            pnl = (
+                                (p["entry"] - p["target"])
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                            exit_price = p["target"]
+                            exit_reason = "TARGET"
+
+                        # STOPLOSS HIT
+
+                        elif price >= p["trail_sl"]:
 
                             pnl = (
                                 (p["entry"] - price)
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
                             )
+
+                            exit_price = price
+                            exit_reason = "SL"
 
                         else:
                             continue
@@ -465,7 +483,7 @@ def run():
                         )
                         +
                         utils.commission(
-                            price,
+                            exit_price,
                             p["qty"],
                             symbol
                         )
@@ -480,7 +498,7 @@ def run():
                     emoji = "🟢" if net > 0 else "🔴"
 
                     utils.log(
-                        f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}",
+                        f"{emoji} {symbol} EXIT ({exit_reason}) @ {exit_price} | PNL: {round(net,6)}",
                         tg=True
                     )
 
@@ -488,7 +506,7 @@ def run():
                         "symbol": symbol,
                         "side": p["side"],
                         "entry_price": p["entry"],
-                        "exit_price": price,
+                        "exit_price": exit_price,
                         "qty": p["qty"],
                         "net_pnl": round(net, 6),
                         "entry_time": p.get("entry_time"),
@@ -502,7 +520,7 @@ def run():
                 df = safe_fetch(
                     utils.fetch_candles,
                     symbol,
-                    "1m"
+                    "5m"
                 )
 
                 if df is None or df.empty:
@@ -517,8 +535,6 @@ def run():
                     price,
                     state
                 )
-
-                # auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
