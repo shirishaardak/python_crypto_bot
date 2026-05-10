@@ -40,6 +40,11 @@ last_git_push = time.time()
 
 LOOKBACK = 3
 
+# ================= ADX FILTER =================
+
+ADX_LENGTH = 14
+ADX_THRESHOLD = 30
+
 # ================= TIME =================
 
 def get_ist_time():
@@ -50,6 +55,7 @@ def get_ist_time():
 last_candle_time = {}
 
 def is_new_candle(symbol, df):
+
     t = df.index[-1]
 
     if symbol not in last_candle_time:
@@ -65,8 +71,11 @@ def is_new_candle(symbol, df):
 # ================= SAFE FETCH =================
 
 def safe_fetch(fetch_func, *args, retries=3, delay=1):
+
     for _ in range(retries):
+
         try:
+
             result = fetch_func(*args)
 
             if result is not None:
@@ -92,7 +101,8 @@ def save_processed_data(df, symbol):
         "ha_low": df["HA_low"],
         "ha_close": df["HA_close"],
         "supertrend": df["supertrend"],
-        "trend": df["trend"]
+        "trend": df["trend"],
+        "adx": df["adx"]
     })
 
     out.to_csv(path, index=False)
@@ -113,6 +123,7 @@ def add_heikin_ashi(df):
     ha_open[0] = df["Open"].iloc[0]
 
     for i in range(1, len(df)):
+
         ha_open[i] = (
             ha_open[i - 1] +
             ha_close.iloc[i - 1]
@@ -144,6 +155,8 @@ def add_indicators(df):
 
     df = add_heikin_ashi(df)
 
+    # ================= SUPERTREND =================
+
     st = ta.supertrend(
         high=df["HA_high"],
         low=df["HA_low"],
@@ -165,6 +178,8 @@ def add_indicators(df):
     df["supertrend"] = st[supertrend_col]
     df["trend"] = st[trend_col]
 
+    # ================= ATR =================
+
     df["atr"] = ta.atr(
         df["HA_high"],
         df["HA_low"],
@@ -178,6 +193,22 @@ def add_indicators(df):
         abs(df["HA_close"] - df["supertrend"])
         / df["atr"]
     )
+
+    # ================= ADX =================
+
+    adx = ta.adx(
+        high=df["HA_high"],
+        low=df["HA_low"],
+        close=df["HA_close"],
+        length=ADX_LENGTH
+    )
+
+    adx_col = [
+        c for c in adx.columns
+        if f"ADX_{ADX_LENGTH}" in c
+    ][0]
+
+    df["adx"] = adx[adx_col]
 
     return df.dropna()
 
@@ -216,6 +247,7 @@ def process_symbol(symbol, df, price, state):
     curr = df.iloc[-1]
 
     atr = curr["atr"]
+    adx_value = curr["adx"]
 
     # ================= LEVEL INIT =================
 
@@ -240,6 +272,8 @@ def process_symbol(symbol, df, price, state):
 
         level["last_cross_idx"] = idx
 
+        # ================= LONG LEVEL =================
+
         if trend_dir == 1:
 
             level_high = df["HA_high"].iloc[
@@ -253,6 +287,8 @@ def process_symbol(symbol, df, price, state):
                 "side": "long",
                 "attempted": False
             })
+
+        # ================= SHORT LEVEL =================
 
         elif trend_dir == -1:
 
@@ -274,7 +310,17 @@ def process_symbol(symbol, df, price, state):
 
     if level["locked"] and not level["attempted"]:
 
-        # LONG
+        # ================= ADX FILTER =================
+
+        if adx_value < ADX_THRESHOLD:
+
+            print(
+                f"{symbol} ADX LOW => {round(adx_value,2)}"
+            )
+
+            return
+
+        # ================= LONG =================
 
         if (
             level["side"] == "long"
@@ -302,11 +348,11 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🚀 {symbol} LONG ENTRY @ {price} | TP: {tp}",
+                    f"🚀 {symbol} LONG ENTRY @ {price} | TP: {tp} | ADX: {round(adx_value,2)}",
                     tg=True
                 )
 
-        # SHORT
+        # ================= SHORT =================
 
         elif (
             level["side"] == "short"
@@ -334,7 +380,7 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🔻 {symbol} SHORT ENTRY @ {price} | TP: {tp}",
+                    f"🔻 {symbol} SHORT ENTRY @ {price} | TP: {tp} | ADX: {round(adx_value,2)}",
                     tg=True
                 )
 
@@ -342,7 +388,7 @@ def process_symbol(symbol, df, price, state):
 
     for p in positions[:]:
 
-        # LONG
+        # ================= LONG =================
 
         if p["side"] == "long":
 
@@ -351,7 +397,7 @@ def process_symbol(symbol, df, price, state):
                 curr["supertrend"]
             )
 
-        # SHORT
+        # ================= SHORT =================
 
         else:
 
