@@ -348,7 +348,7 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🚀 {symbol} LONG ENTRY @ {price} | TP: {tp} | ADX: {round(adx_value,2)}",
+                    f"🚀 {symbol} LONG ENTRY @ {price} | TP: {tp}",
                     tg=True
                 )
 
@@ -380,7 +380,7 @@ def process_symbol(symbol, df, price, state):
                 level["locked"] = False
 
                 utils.log(
-                    f"🔻 {symbol} SHORT ENTRY @ {price} | TP: {tp} | ADX: {round(adx_value,2)}",
+                    f"🔻 {symbol} SHORT ENTRY @ {price} | TP: {tp}",
                     tg=True
                 )
 
