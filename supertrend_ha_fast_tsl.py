@@ -26,7 +26,7 @@ STOPLOSS = {"BTCUSD": 200, "ETHUSD": 10}
 
 TARGET_PROFIT = {
     "BTCUSD": 300,
-    "ETHUSD": 15
+    "ETHUSD": 10
 }
 
 TAKER_FEE = 0.0005
@@ -312,13 +312,13 @@ def process_symbol(symbol, df, price, state):
 
         # ================= ADX FILTER =================
 
-        if adx_value < ADX_THRESHOLD:
+        # if adx_value < ADX_THRESHOLD:
 
-            print(
-                f"{symbol} ADX LOW => {round(adx_value,2)}"
-            )
+        #     print(
+        #         f"{symbol} ADX LOW => {round(adx_value,2)}"
+        #     )
 
-            return
+        #     return
 
         # ================= LONG =================
 
