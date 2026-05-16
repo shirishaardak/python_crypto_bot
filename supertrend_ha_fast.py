@@ -236,6 +236,7 @@ def process_symbol(symbol, df, price, state):
         return
 
     curr = df.iloc[-1]
+    last = df.iloc[-2]
 
     atr = curr["atr"]
 
@@ -291,6 +292,7 @@ def process_symbol(symbol, df, price, state):
             })
 
     close = curr["HA_close"]
+    last_close = last["HA_close"]
 
     # ================= ENTRY =================
 
@@ -299,8 +301,9 @@ def process_symbol(symbol, df, price, state):
         # LONG
 
         if (
-            level["side"] == "long"
+            level["side"] == "long"            
             and close > level["high"]
+            and last_close <= level["high"]
         ):
 
             if not any(
@@ -331,6 +334,7 @@ def process_symbol(symbol, df, price, state):
         elif (
             level["side"] == "short"
             and close < level["low"]
+            and last_close >= level["low"]
         ):
 
             if not any(
