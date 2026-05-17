@@ -338,7 +338,6 @@ def process_symbol(symbol, df, price, state):
         if (
             level["side"] == "long"
             and close > level["high"]
-            and last_close <= level["high"]
             and bullish_filter
         ):
 
@@ -372,7 +371,6 @@ def process_symbol(symbol, df, price, state):
         elif (
             level["side"] == "short"
             and close < level["low"]
-            and last_close >= level["low"]
             and bearish_filter
         ):
 
