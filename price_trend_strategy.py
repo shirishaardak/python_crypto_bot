@@ -215,7 +215,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # LONG EXIT
         if (
             pos["side"] == "long"
-            and last.HA_close < last.Trendline
+            and (price < last.Trendline or price >= pos["entry"] + TP[symbol])
         ):
 
             pnl = (
@@ -229,7 +229,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # SHORT EXIT
         elif (
             pos["side"] == "short"
-            and last.HA_close > last.Trendline
+            and (price > last.Trendline or price <= pos["entry"] - TP[symbol])
             
         ):
 
@@ -345,7 +345,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # ================= LONG ENTRY =================
 
         if (
-            prev.HA_close <= prev.Trendline
+              prev.HA_close <= prev.Trendline
             and last.HA_close > last.Trendline
         ):
 
@@ -367,7 +367,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # ================= SHORT ENTRY =================
 
         elif (
-            prev.HA_close >= prev.Trendline
+              prev.HA_close >= prev.Trendline
             and last.HA_close < last.Trendline
         ):
 
