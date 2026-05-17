@@ -22,6 +22,7 @@ SYMBOLS = ["BTCUSD"]
 DEFAULT_CONTRACTS = {"BTCUSD": 1000}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 STOPLOSS = {"BTCUSD": 500}
+TP = {"BTCUSD": 300}
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "5m"
@@ -96,6 +97,8 @@ def reset_daily_state(state):
 
 def calculate_trendline(df):
 
+    # ================= HEIKIN ASHI =================
+
     ha = ta.ha(
         df["Open"],
         df["High"],
@@ -103,41 +106,51 @@ def calculate_trendline(df):
         df["Close"]
     ).reset_index(drop=True)
 
-    # ===== FRACTALS =====
+    # ================= FRACTALS =================
 
     ha["high_fractal"] = np.nan
     ha["low_fractal"] = np.nan
 
+    # NON-REPAINTING FRACTALS
+    # Fractal at candle i becomes CONFIRMED only after i+2 closes
+
     for i in range(2, len(ha) - 2):
 
-        # HIGH FRACTAL
-        if (
+        is_high = (
             ha.loc[i, "HA_high"] > ha.loc[i - 1, "HA_high"] and
             ha.loc[i, "HA_high"] > ha.loc[i - 2, "HA_high"] and
             ha.loc[i, "HA_high"] > ha.loc[i + 1, "HA_high"] and
             ha.loc[i, "HA_high"] > ha.loc[i + 2, "HA_high"]
-        ):
-            ha.loc[i, "high_fractal"] = ha.loc[i, "HA_high"]
+        )
 
-        # LOW FRACTAL
-        if (
+        is_low = (
             ha.loc[i, "HA_low"] < ha.loc[i - 1, "HA_low"] and
             ha.loc[i, "HA_low"] < ha.loc[i - 2, "HA_low"] and
             ha.loc[i, "HA_low"] < ha.loc[i + 1, "HA_low"] and
             ha.loc[i, "HA_low"] < ha.loc[i + 2, "HA_low"]
-        ):
-            ha.loc[i, "low_fractal"] = ha.loc[i, "HA_low"]
+        )
 
-    # ===== TRENDLINE =====
+        # CONFIRM AFTER 2 CANDLES
+        if is_high:
+            ha.loc[i + 2, "high_fractal"] = ha.loc[i, "HA_high"]
+
+        if is_low:
+            ha.loc[i + 2, "low_fractal"] = ha.loc[i, "HA_low"]
+
+    # ================= TRENDLINE =================
 
     ha["Trendline"] = np.nan
 
     last_high_fractal = np.nan
     last_low_fractal = np.nan
 
+    # INITIAL TRENDLINE
     trendline = ha.loc[0, "HA_close"]
 
-    for i in range(len(ha)):
+    # START FROM 1 BECAUSE WE USE i-1
+    for i in range(1, len(ha)):
+
+        # UPDATE LAST CONFIRMED FRACTALS
 
         if not np.isnan(ha.loc[i, "high_fractal"]):
             last_high_fractal = ha.loc[i, "high_fractal"]
@@ -145,22 +158,34 @@ def calculate_trendline(df):
         if not np.isnan(ha.loc[i, "low_fractal"]):
             last_low_fractal = ha.loc[i, "low_fractal"]
 
-        # BREAK HIGH FRACTAL
+        current_close = ha.loc[i, "HA_close"]
+        prev_close = ha.loc[i - 1, "HA_close"]
+
+        # ================= BULLISH BREAK =================
+
         if (
             not np.isnan(last_high_fractal)
-            and ha.loc[i, "HA_close"] > last_high_fractal
+            and prev_close <= last_high_fractal
+            and current_close > last_high_fractal
+            and current_close > trendline
             and not np.isnan(last_low_fractal)
         ):
+
             trendline = last_low_fractal
 
-        # BREAK LOW FRACTAL
+        # ================= BEARISH BREAK =================
+
         elif (
             not np.isnan(last_low_fractal)
-            and ha.loc[i, "HA_close"] < last_low_fractal
+            and prev_close >= last_low_fractal
+            and current_close < last_low_fractal
+            and current_close < trendline
             and not np.isnan(last_high_fractal)
         ):
+
             trendline = last_high_fractal
 
+        # SAVE TRENDLINE
         ha.loc[i, "Trendline"] = trendline
 
     return ha
