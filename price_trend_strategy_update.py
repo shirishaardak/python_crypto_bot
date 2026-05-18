@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 
-from datetime import datetime
+from datetime import datetime, UTC
 from datetime import time as dt_time
 
 from zoneinfo import ZoneInfo
@@ -131,7 +131,7 @@ def reset_daily_state(state):
 
 def is_volatile_session():
 
-    utc_now = datetime.utcnow().time()
+    utc_now = datetime.now(UTC).time()
 
     # ================= UK SESSION =================
     # 07:00 UTC → 11:30 UTC
@@ -155,11 +155,9 @@ def is_volatile_session():
 
 def monitor_sessions(session_state):
 
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(UTC)
 
     utc_time = now_utc.time()
-
-    # TOKYO SERVER TIME
 
     tokyo_now = datetime.now(
         ZoneInfo("Asia/Tokyo")
@@ -187,7 +185,7 @@ def monitor_sessions(session_state):
 
         utils.log(
             f"🇬🇧 UK SESSION STARTED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S')}\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
             tg=True
         )
@@ -203,7 +201,7 @@ def monitor_sessions(session_state):
 
         utils.log(
             f"🇬🇧 UK SESSION ENDED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S')}\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
             tg=True
         )
@@ -220,7 +218,7 @@ def monitor_sessions(session_state):
 
         utils.log(
             f"🇺🇸 US SESSION STARTED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S')}\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
             tg=True
         )
@@ -236,12 +234,12 @@ def monitor_sessions(session_state):
 
         utils.log(
             f"🇺🇸 US SESSION ENDED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S')}\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
             tg=True
         )
 
-    # ================= DAILY RESET FLAGS =================
+    # ================= RESET FLAGS =================
 
     if utc_time < uk_start:
 
@@ -356,7 +354,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    save_processed_data(ha, symbol)
+    # save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
 
