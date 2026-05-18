@@ -1,9 +1,9 @@
-# Full Updated Strategy Code
 import os
 import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from datetime import time as dt_time
 import pandas_ta as ta
 from dotenv import load_dotenv
 import traceback
@@ -21,16 +21,22 @@ SYMBOLS = ["BTCUSD"]
 
 DEFAULT_CONTRACTS = {"BTCUSD": 1000}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
+
 STOPLOSS = {"BTCUSD": 500}
-TP = {"BTCUSD": 300}
+TP = {"BTCUSD": 3000}
+
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "5m"
 DAYS = 15
 
 MIN_BALANCE = 1000
-DAILY_TARGET = 200
-MAX_DAILY_LOSS = -500
+
+# OPEN TARGET MODE
+DAILY_TARGET = 500
+
+# DAILY LOSS DISABLED
+MAX_DAILY_LOSS = None
 
 # ================= INIT UTILS =================
 
@@ -45,14 +51,23 @@ utils = TradingUtils(
 )
 
 BASE_DIR = os.getcwd()
-SAVE_DIR = os.path.join(BASE_DIR, "data", "price_trend_strategy")
+
+SAVE_DIR = os.path.join(
+    BASE_DIR,
+    "data",
+    "price_trend_strategy"
+)
+
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # ================= SAVE DATA =================
 
 def save_processed_data(data, symbol):
 
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    path = os.path.join(
+        SAVE_DIR,
+        f"{symbol}_processed.csv"
+    )
 
     out = pd.DataFrame({
         "time": data.index,
@@ -93,6 +108,30 @@ def reset_daily_state(state):
             tg=True
         )
 
+# ================= SESSION FILTER =================
+
+def is_volatile_session():
+
+    utc_now = datetime.utcnow().time()
+
+    # ================= UK SESSION =================
+    # 07:00 UTC → 11:30 UTC
+
+    uk_start = dt_time(7, 0)
+    uk_end = dt_time(11, 30)
+
+    # ================= US SESSION =================
+    # 13:00 UTC → 20:00 UTC
+
+    us_start = dt_time(13, 0)
+    us_end = dt_time(20, 0)
+
+    return (
+        (uk_start <= utc_now <= uk_end)
+        or
+        (us_start <= utc_now <= us_end)
+    )
+
 # ================= FRACTAL TRENDLINE =================
 
 def calculate_trendline(df):
@@ -112,25 +151,25 @@ def calculate_trendline(df):
     ha["low_fractal"] = np.nan
 
     # NON-REPAINTING FRACTALS
-    # Fractal at candle i becomes CONFIRMED only after i+2 closes
 
     for i in range(2, len(ha) - 2):
 
         is_high = (
-            ha.loc[i, "HA_high"] > ha.loc[i - 1, "HA_high"] and
-            ha.loc[i, "HA_high"] > ha.loc[i - 2, "HA_high"] and
-            ha.loc[i, "HA_high"] > ha.loc[i + 1, "HA_high"] and
-            ha.loc[i, "HA_high"] > ha.loc[i + 2, "HA_high"]
+            ha.loc[i, "HA_high"] > ha.loc[i - 1, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i - 2, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i + 1, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i + 2, "HA_high"]
         )
 
         is_low = (
-            ha.loc[i, "HA_low"] < ha.loc[i - 1, "HA_low"] and
-            ha.loc[i, "HA_low"] < ha.loc[i - 2, "HA_low"] and
-            ha.loc[i, "HA_low"] < ha.loc[i + 1, "HA_low"] and
-            ha.loc[i, "HA_low"] < ha.loc[i + 2, "HA_low"]
+            ha.loc[i, "HA_low"] < ha.loc[i - 1, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i - 2, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i + 1, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i + 2, "HA_low"]
         )
 
         # CONFIRM AFTER 2 CANDLES
+
         if is_high:
             ha.loc[i + 2, "high_fractal"] = ha.loc[i, "HA_high"]
 
@@ -144,13 +183,11 @@ def calculate_trendline(df):
     last_high_fractal = np.nan
     last_low_fractal = np.nan
 
-    # INITIAL TRENDLINE
     trendline = ha.loc[0, "HA_close"]
 
-    # START FROM 1 BECAUSE WE USE i-1
     for i in range(1, len(ha)):
 
-        # UPDATE LAST CONFIRMED FRACTALS
+        # UPDATE FRACTALS
 
         if not np.isnan(ha.loc[i, "high_fractal"]):
             last_high_fractal = ha.loc[i, "high_fractal"]
@@ -185,7 +222,6 @@ def calculate_trendline(df):
 
             trendline = last_high_fractal
 
-        # SAVE TRENDLINE
         ha.loc[i, "Trendline"] = trendline
 
     return ha
@@ -197,12 +233,14 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     reset_daily_state(state)
 
     ha = calculate_trendline(df)
+
     # save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
     prev = ha.iloc[-3]
 
     pos = state["position"]
+
     now = datetime.now()
 
     # ================= EXIT =================
@@ -212,34 +250,66 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
-        # LONG EXIT
-        if (
-            pos["side"] == "long"
-            and (price < last.Trendline or price >= pos["entry"] + TP[symbol])
-        ):
+        # ================= LIVE PNL =================
 
-            pnl = (
+        if pos["side"] == "long":
+
+            live_pnl = (
                 (price - pos["entry"])
                 * CONTRACT_SIZE[symbol]
                 * pos["qty"]
             )
 
-            exit_trade = True
+        else:
 
-        # SHORT EXIT
-        elif (
-            pos["side"] == "short"
-            and (price > last.Trendline or price <= pos["entry"] - TP[symbol])
-            
-        ):
-
-            pnl = (
+            live_pnl = (
                 (pos["entry"] - price)
                 * CONTRACT_SIZE[symbol]
                 * pos["qty"]
             )
 
+        # ================= DAILY TARGET FORCE EXIT =================
+
+        if (
+            DAILY_TARGET is not None
+            and state["daily_pnl"] + live_pnl >= DAILY_TARGET
+        ):
+
+            pnl = live_pnl
             exit_trade = True
+
+            utils.log(
+                "🎯 DAILY TARGET REACHED DURING LIVE TRADE",
+                tg=True
+            )
+
+        # ================= LONG EXIT =================
+
+        elif (
+            pos["side"] == "long"
+            and (
+                price < last.Trendline
+                or price >= pos["entry"] + TP[symbol]
+            )
+        ):
+
+            pnl = live_pnl
+            exit_trade = True
+
+        # ================= SHORT EXIT =================
+
+        elif (
+            pos["side"] == "short"
+            and (
+                price > last.Trendline
+                or price <= pos["entry"] - TP[symbol]
+            )
+        ):
+
+            pnl = live_pnl
+            exit_trade = True
+
+        # ================= FINAL EXIT =================
 
         if exit_trade:
 
@@ -256,12 +326,15 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             )
 
             total_fee = entry_fee + exit_fee
+
             net = pnl - total_fee
 
             # UPDATE BALANCE
+
             state["balance"] += net
 
             # UPDATE DAILY PNL
+
             state["daily_pnl"] += net
 
             utils.save_trade({
@@ -278,7 +351,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             emoji = "🟢" if net > 0 else "🔴"
 
             utils.log(
-                f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net, 6)}",
+                f"{emoji} {symbol} EXIT @ {price} | "
+                f"PNL: {round(net, 6)}",
                 tg=True
             )
 
@@ -292,20 +366,27 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 tg=True
             )
 
-            # ===== DAILY TARGET =====
+            # ================= DAILY TARGET =================
 
-            if state["daily_pnl"] >= DAILY_TARGET:
+            if (
+                DAILY_TARGET is not None
+                and state["daily_pnl"] >= DAILY_TARGET
+            ):
 
                 state["trading_enabled"] = False
 
                 utils.log(
-                    f"🎯 DAILY TARGET HIT: ${round(state['daily_pnl'], 2)}",
+                    f"🎯 DAILY TARGET HIT: "
+                    f"{round(state['daily_pnl'], 2)}",
                     tg=True
                 )
 
-            # ===== MAX DAILY LOSS =====
+            # ================= DAILY LOSS =================
 
-            if state["daily_pnl"] <= MAX_DAILY_LOSS:
+            if (
+                MAX_DAILY_LOSS is not None
+                and state["daily_pnl"] <= MAX_DAILY_LOSS
+            ):
 
                 state["trading_enabled"] = False
 
@@ -315,6 +396,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 )
 
             state["position"] = None
+
             state["last_exit_candle"] = df.index[-1]
 
             return
@@ -323,11 +405,18 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     if not pos and is_new_candle:
 
-        # BLOCK AFTER DAILY TARGET
+        # ================= SESSION FILTER =================
+
+        if not is_volatile_session():
+            return
+
+        # ================= TRADING ENABLED =================
+
         if not state["trading_enabled"]:
             return
 
-        # AVOID RE-ENTRY SAME CANDLE
+        # ================= AVOID SAME CANDLE REENTRY =================
+
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
@@ -345,11 +434,15 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # ================= LONG ENTRY =================
 
         if (
-              prev.HA_close <= prev.Trendline
+            prev.HA_close <= prev.Trendline
             and last.HA_close > last.Trendline
         ):
 
-            # place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
+            # place_market_order(
+            #     symbol,
+            #     "buy",
+            #     DEFAULT_CONTRACTS[symbol]
+            # )
 
             state["position"] = {
                 "side": "long",
@@ -360,18 +453,23 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             }
 
             utils.log(
-                f"🟢 {symbol} LONG @ {price} | SL: {last.Trendline}",
+                f"🟢 {symbol} LONG @ {price} | "
+                f"SL: {last.Trendline}",
                 tg=True
             )
 
         # ================= SHORT ENTRY =================
 
         elif (
-              prev.HA_close >= prev.Trendline
+            prev.HA_close >= prev.Trendline
             and last.HA_close < last.Trendline
         ):
 
-            # place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
+            # place_market_order(
+            #     symbol,
+            #     "sell",
+            #     DEFAULT_CONTRACTS[symbol]
+            # )
 
             state["position"] = {
                 "side": "short",
@@ -382,7 +480,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             }
 
             utils.log(
-                f"🔴 {symbol} SHORT @ {price} | SL: {last.Trendline}",
+                f"🔴 {symbol} SHORT @ {price} | "
+                f"SL: {last.Trendline}",
                 tg=True
             )
 
@@ -453,7 +552,10 @@ def run():
                 )
 
                 if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_candle_time
+
+                    state[symbol][
+                        "last_candle_time"
+                    ] = latest_candle_time
 
                 price = utils.fetch_price(symbol)
 
@@ -475,7 +577,8 @@ def run():
         except Exception as e:
 
             utils.log(
-                f"🚨 Runtime error: {e}\n{traceback.format_exc()}",
+                f"🚨 Runtime error: {e}\n"
+                f"{traceback.format_exc()}",
                 tg=True
             )
 
