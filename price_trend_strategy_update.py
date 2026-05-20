@@ -38,7 +38,7 @@ STOPLOSS = {
 }
 
 TP = {
-    "BTCUSD": 3000
+    "BTCUSD": 250
 }
 
 TAKER_FEE = 0.0005
@@ -532,8 +532,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         # ================= SESSION FILTER =================
 
-        if not is_volatile_session():
-            return
+        # if not is_volatile_session():
+        #     return
 
         # ================= TRADING ENABLED =================
 
