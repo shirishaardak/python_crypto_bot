@@ -2,10 +2,16 @@ import os
 import time
 import pandas as pd
 import numpy as np
-from datetime import datetime
+
+from datetime import datetime, UTC
 from datetime import time as dt_time
+
+from zoneinfo import ZoneInfo
+
 import pandas_ta as ta
+
 from dotenv import load_dotenv
+
 import traceback
 import subprocess
 
@@ -19,23 +25,34 @@ BOT_NAME = "price_trend_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
-DEFAULT_CONTRACTS = {"BTCUSD": 1000}
-CONTRACT_SIZE = {"BTCUSD": 0.001}
+DEFAULT_CONTRACTS = {
+    "BTCUSD": 1000
+}
 
-STOPLOSS = {"BTCUSD": 500}
-TP = {"BTCUSD": 3000}
+CONTRACT_SIZE = {
+    "BTCUSD": 0.001
+}
+
+STOPLOSS = {
+    "BTCUSD": 500
+}
+
+TP = {
+    "BTCUSD": 500
+}
 
 TAKER_FEE = 0.0005
 
 TIMEFRAME = "5m"
+
 DAYS = 15
 
 MIN_BALANCE = 1000
 
-# OPEN TARGET MODE
-DAILY_TARGET = 500
+# ================= TARGET / LOSS =================
 
-# DAILY LOSS DISABLED
+DAILY_TARGET = 1000
+
 MAX_DAILY_LOSS = None
 
 # ================= INIT UTILS =================
@@ -45,7 +62,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testmyaglostrategy_bot"),
+    telegram_token=os.getenv("testmyaglostrateg"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -100,7 +117,9 @@ def reset_daily_state(state):
     if state["last_reset_day"] != today:
 
         state["daily_pnl"] = 0
+
         state["trading_enabled"] = True
+
         state["last_reset_day"] = today
 
         utils.log(
@@ -112,7 +131,7 @@ def reset_daily_state(state):
 
 def is_volatile_session():
 
-    utc_now = datetime.utcnow().time()
+    utc_now = datetime.now(UTC).time()
 
     # ================= UK SESSION =================
     # 07:00 UTC → 11:30 UTC
@@ -131,6 +150,106 @@ def is_volatile_session():
         or
         (us_start <= utc_now <= us_end)
     )
+
+# ================= SESSION TELEGRAM ALERTS =================
+
+def monitor_sessions(session_state):
+
+    now_utc = datetime.now(UTC)
+
+    utc_time = now_utc.time()
+
+    tokyo_now = datetime.now(
+        ZoneInfo("Asia/Tokyo")
+    )
+
+    # ================= UK SESSION =================
+
+    uk_start = dt_time(7, 0)
+    uk_end = dt_time(11, 30)
+
+    # ================= US SESSION =================
+
+    us_start = dt_time(13, 0)
+    us_end = dt_time(20, 0)
+
+    # ================= UK START =================
+
+    if (
+        utc_time >= uk_start
+        and not session_state["uk_started"]
+    ):
+
+        session_state["uk_started"] = True
+        session_state["uk_ended"] = False
+
+        utils.log(
+            f"🇬🇧 UK SESSION STARTED\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+            tg=True
+        )
+
+    # ================= UK END =================
+
+    if (
+        utc_time >= uk_end
+        and not session_state["uk_ended"]
+    ):
+
+        session_state["uk_ended"] = True
+
+        utils.log(
+            f"🇬🇧 UK SESSION ENDED\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+            tg=True
+        )
+
+    # ================= US START =================
+
+    if (
+        utc_time >= us_start
+        and not session_state["us_started"]
+    ):
+
+        session_state["us_started"] = True
+        session_state["us_ended"] = False
+
+        utils.log(
+            f"🇺🇸 US SESSION STARTED\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+            tg=True
+        )
+
+    # ================= US END =================
+
+    if (
+        utc_time >= us_end
+        and not session_state["us_ended"]
+    ):
+
+        session_state["us_ended"] = True
+
+        utils.log(
+            f"🇺🇸 US SESSION ENDED\n"
+            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+            tg=True
+        )
+
+    # ================= RESET FLAGS =================
+
+    if utc_time < uk_start:
+
+        session_state["uk_started"] = False
+        session_state["uk_ended"] = False
+
+    if utc_time < us_start:
+
+        session_state["us_started"] = False
+        session_state["us_ended"] = False
 
 # ================= FRACTAL TRENDLINE =================
 
@@ -196,6 +315,7 @@ def calculate_trendline(df):
             last_low_fractal = ha.loc[i, "low_fractal"]
 
         current_close = ha.loc[i, "HA_close"]
+
         prev_close = ha.loc[i - 1, "HA_close"]
 
         # ================= BULLISH BREAK =================
@@ -234,9 +354,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    # save_processed_data(ha, symbol)
+    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
+
     prev = ha.iloc[-3]
 
     pos = state["position"]
@@ -248,6 +369,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
     if pos:
 
         exit_trade = False
+
         pnl = 0
 
         # ================= LIVE PNL =================
@@ -276,6 +398,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         ):
 
             pnl = live_pnl
+
             exit_trade = True
 
             utils.log(
@@ -294,6 +417,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         ):
 
             pnl = live_pnl
+
             exit_trade = True
 
         # ================= SHORT EXIT =================
@@ -307,6 +431,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         ):
 
             pnl = live_pnl
+
             exit_trade = True
 
         # ================= FINAL EXIT =================
@@ -407,8 +532,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         # ================= SESSION FILTER =================
 
-        if not is_volatile_session():
-            return
+        # if not is_volatile_session():
+        #     return
 
         # ================= TRADING ENABLED =================
 
@@ -438,12 +563,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             and last.HA_close > last.Trendline
         ):
 
-            # place_market_order(
-            #     symbol,
-            #     "buy",
-            #     DEFAULT_CONTRACTS[symbol]
-            # )
-
             state["position"] = {
                 "side": "long",
                 "entry": price,
@@ -464,12 +583,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             prev.HA_close >= prev.Trendline
             and last.HA_close < last.Trendline
         ):
-
-            # place_market_order(
-            #     symbol,
-            #     "sell",
-            #     DEFAULT_CONTRACTS[symbol]
-            # )
 
             state["position"] = {
                 "side": "short",
@@ -528,6 +641,15 @@ def run():
         } for s in SYMBOLS
     }
 
+    # ================= SESSION STATE =================
+
+    session_state = {
+        "uk_started": False,
+        "uk_ended": False,
+        "us_started": False,
+        "us_ended": False
+    }
+
     utils.log(
         "🚀 LIVE BOT STARTED (PAPER MODE)",
         tg=True
@@ -536,6 +658,10 @@ def run():
     while True:
 
         try:
+
+            # ================= SESSION ALERTS =================
+
+            monitor_sessions(session_state)
 
             for symbol in SYMBOLS:
 
@@ -587,4 +713,5 @@ def run():
 # ================= START =================
 
 if __name__ == "__main__":
+
     run()

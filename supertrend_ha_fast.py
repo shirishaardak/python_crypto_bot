@@ -15,12 +15,15 @@ load_dotenv()
 
 BOT_NAME = "supertrend_ha_fast"
 
-SYMBOLS = ["BTCUSD", "ETHUSD"]
+SYMBOLS = ["BTCUSD"]
 
-CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01}
-QTY = {"BTCUSD": 100, "ETHUSD": 100}
+CONTRACT_SIZE = {"BTCUSD": 0.001}
+QTY = {"BTCUSD": 1000}
 
-STOPLOSS = {"BTCUSD": 500, "ETHUSD": 25}
+STOPLOSS = {"BTCUSD": 500}
+
+# TARGET PROFIT
+TP = {"BTCUSD": 250}
 
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
@@ -52,10 +55,7 @@ def auto_git_push():
         if res.returncode != 0:
             utils.log("✅ Changes committed")
 
-        res = subprocess.run("git push origin main", shell=True)
-
-        # if res.returncode == 0:
-        #     # utils.log("✅ Git Push Done", tg=True)
+        subprocess.run("git push origin main", shell=True)
 
         last_git_push = time.time()
 
@@ -87,8 +87,11 @@ def is_new_candle(symbol, df):
 # ================= SAFE FETCH =================
 
 def safe_fetch(fetch_func, *args, retries=3, delay=1):
+
     for _ in range(retries):
+
         try:
+
             result = fetch_func(*args)
 
             if result is not None:
@@ -135,6 +138,7 @@ def add_heikin_ashi(df):
     ha_open[0] = df["Open"].iloc[0]
 
     for i in range(1, len(df)):
+
         ha_open[i] = (
             ha_open[i - 1] +
             ha_close.iloc[i - 1]
@@ -224,6 +228,10 @@ def get_last_crossover(df, lookback=50):
 
 def process_symbol(symbol, df, price, state):
 
+    # STOP NEW ENTRIES IF DAILY TARGET HIT
+    if not state["trading_enabled"]:
+        return
+
     sym = state["symbols"][symbol]
 
     positions = sym["positions"]
@@ -237,8 +245,6 @@ def process_symbol(symbol, df, price, state):
 
     curr = df.iloc[-1]
     last = df.iloc[-2]
-
-    atr = curr["atr"]
 
     # ================= LEVEL INIT =================
 
@@ -301,7 +307,7 @@ def process_symbol(symbol, df, price, state):
         # LONG
 
         if (
-            level["side"] == "long"            
+            level["side"] == "long"
             and close > level["high"]
             and last_close <= level["high"]
         ):
@@ -368,28 +374,29 @@ def process_symbol(symbol, df, price, state):
 
         if p["side"] == "long":
 
-                p["trail_sl"] = max(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = max(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
         # SHORT
 
         else:
 
-           
-
-                p["trail_sl"] = min(
-                    p["trail_sl"],
-                    curr["supertrend"]
-                )
+            p["trail_sl"] = min(
+                p["trail_sl"],
+                curr["supertrend"]
+            )
 
 # ================= UTILS =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="15m",
+
+    # CHANGED TO 5m
+    timeframe="5m",
+
     days=5,
     telegram_token=os.getenv("supertrend_ha_fast_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -402,7 +409,16 @@ def run():
 
     state = {
         "balance": 10000,
-        "symbols": {s: {"positions": []} for s in SYMBOLS}
+
+        # DAILY TARGET TRACKER
+        "daily_pnl": 0,
+        "last_day": get_ist_time().date(),
+        "trading_enabled": True,
+
+        "symbols": {
+            s: {"positions": []}
+            for s in SYMBOLS
+        }
     }
 
     utils.log("🚀 BOT STARTED", tg=True)
@@ -410,6 +426,21 @@ def run():
     while True:
 
         try:
+
+            # RESET DAILY LIMIT NEXT DAY
+
+            today = get_ist_time().date()
+
+            if today != state["last_day"]:
+
+                state["daily_pnl"] = 0
+                state["last_day"] = today
+                state["trading_enabled"] = True
+
+                utils.log(
+                    "✅ New Day Started - Trading Enabled",
+                    tg=True
+                )
 
             for symbol in SYMBOLS:
 
@@ -427,15 +458,19 @@ def run():
 
                 positions = sym["positions"]
 
-                # ================= FAST EXIT =================
+                # ================= EXIT LOGIC =================
 
                 for p in positions[:]:
 
-                    # LONG EXIT
+                    exit_trade = False
+
+                    # ================= LONG =================
 
                     if p["side"] == "long":
 
-                        if price <= p["trail_sl"]:
+                        # TAKE PROFIT
+
+                        if price >= p["entry"] + TP[symbol]:
 
                             pnl = (
                                 (price - p["entry"])
@@ -443,14 +478,27 @@ def run():
                                 * p["qty"]
                             )
 
-                        else:
-                            continue
+                            exit_trade = True
 
-                    # SHORT EXIT
+                        # STOP LOSS / TRAIL
+
+                        elif price <= p["trail_sl"]:
+
+                            pnl = (
+                                (price - p["entry"])
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                            exit_trade = True
+
+                    # ================= SHORT =================
 
                     else:
 
-                        if price >= p["trail_sl"]:
+                        # TAKE PROFIT
+
+                        if price <= p["entry"] - TP[symbol]:
 
                             pnl = (
                                 (p["entry"] - price)
@@ -458,8 +506,22 @@ def run():
                                 * p["qty"]
                             )
 
-                        else:
-                            continue
+                            exit_trade = True
+
+                        # STOP LOSS / TRAIL
+
+                        elif price >= p["trail_sl"]:
+
+                            pnl = (
+                                (p["entry"] - price)
+                                * CONTRACT_SIZE[symbol]
+                                * p["qty"]
+                            )
+
+                            exit_trade = True
+
+                    if not exit_trade:
+                        continue
 
                     fee = (
                         utils.commission(
@@ -479,12 +541,17 @@ def run():
 
                     state["balance"] += net
 
+                    # DAILY PNL UPDATE
+                    state["daily_pnl"] += net
+
                     now = get_ist_time()
 
                     emoji = "🟢" if net > 0 else "🔴"
 
                     utils.log(
-                        f"{emoji} {symbol} EXIT @ {price} | PNL: {round(net,6)}",
+                        f"{emoji} {symbol} EXIT @ {price} | "
+                        f"PNL: {round(net,6)} | "
+                        f"DAILY: {round(state['daily_pnl'],2)}",
                         tg=True
                     )
 
@@ -501,12 +568,26 @@ def run():
 
                     positions.remove(p)
 
+                    # ================= DAILY TARGET HIT =================
+
+                    if state["daily_pnl"] >= 500:
+
+                        state["trading_enabled"] = False
+
+                        utils.log(
+                            "🛑 DAILY TARGET HIT ($500). "
+                            "Trading stopped for today.",
+                            tg=True
+                        )
+
                 # ================= CANDLE LOGIC =================
 
                 df = safe_fetch(
                     utils.fetch_candles,
                     symbol,
-                    "15m"
+
+                    # CHANGED TO 5m
+                    "5m"
                 )
 
                 if df is None or df.empty:

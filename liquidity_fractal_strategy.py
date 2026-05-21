@@ -16,7 +16,7 @@ load_dotenv()
 # CONFIG
 # =========================================================
 
-BOT_NAME = "liquidity_fractal_strategy"
+BOT_NAME = "liquidity_displacement_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -30,9 +30,7 @@ DAYS = 15
 
 START_BALANCE = 10000
 
-MIN_BALANCE = 1000
-
-RISK_PER_TRADE = 0.01  # 1%
+RISK_PER_TRADE = 0.01
 
 MAX_TRADES_PER_DAY = 10
 
@@ -46,49 +44,29 @@ ATR_LENGTH = 14
 
 ATR_BUFFER = 0.2
 
-MIN_SWEEP_ATR = 0.2
+ATR_TP_MULTIPLIER = 2.0
 
-REJECTION_THRESHOLD = 0.6
+MIN_SWEEP_ATR = 0.3
 
-LOOKBACK_FRAC = 100
+STRONG_BODY_THRESHOLD = 0.7
+
+# =========================================================
+# DAILY TARGET
+# =========================================================
+
+DAILY_TARGET_MAX = 1000
+
+MAX_DAILY_LOSS = -1000
 
 # =========================================================
 # CONTRACT SETTINGS
 # =========================================================
-
-DEFAULT_CONTRACTS = {
-    "BTCUSD": 1000
-}
 
 CONTRACT_SIZE = {
     "BTCUSD": 0.001
 }
 
 TAKER_FEE = 0.0005
-
-# =========================================================
-# DAILY TARGET
-# =========================================================
-
-DAILY_TARGET_MIN = 200
-
-DAILY_TARGET_MAX = 500
-
-MAX_DAILY_LOSS = -3000
-
-# =========================================================
-# SAVE PATHS
-# =========================================================
-
-BASE_DIR = os.getcwd()
-
-SAVE_DIR = os.path.join(
-    BASE_DIR,
-    "data",
-    BOT_NAME
-)
-
-os.makedirs(SAVE_DIR, exist_ok=True)
 
 # =========================================================
 # UTILS
@@ -105,45 +83,6 @@ utils = TradingUtils(
 )
 
 # =========================================================
-# SAVE PROCESSED DATA
-# =========================================================
-
-def save_processed_data(df, symbol):
-
-    path = os.path.join(
-        SAVE_DIR,
-        f"{symbol}_processed.csv"
-    )
-
-    out = pd.DataFrame({
-
-        "time": df.index,
-
-        "Open": df["Open"],
-        "High": df["High"],
-        "Low": df["Low"],
-        "Close": df["Close"],
-
-        "EMA": df["EMA"],
-        "ATR": df["ATR"],
-
-        "high_fractal": df["high_fractal"],
-        "low_fractal": df["low_fractal"],
-
-        "long_signal": df["long_signal"],
-        "short_signal": df["short_signal"],
-
-        "long_sl": df["long_sl"],
-        "short_sl": df["short_sl"],
-
-        "long_tp": df["long_tp"],
-        "short_tp": df["short_tp"],
-
-    })
-
-    out.to_csv(path, index=False)
-
-# =========================================================
 # DAILY RESET
 # =========================================================
 
@@ -157,12 +96,10 @@ def reset_daily_state(state):
 
         state["trade_count"] = 0
 
-        state["trading_enabled"] = True
-
         state["last_reset_day"] = today
 
         utils.log(
-            "🌞 New trading day started",
+            "🌞 New Trading Day Started",
             tg=True
         )
 
@@ -178,10 +115,7 @@ def detect_fractals(df):
 
     for i in range(2, len(df) - 2):
 
-        # =================================================
         # HIGH FRACTAL
-        # =================================================
-
         if (
             df["High"].iloc[i] > df["High"].iloc[i - 1]
             and
@@ -197,10 +131,7 @@ def detect_fractals(df):
                 "high_fractal"
             ] = df["High"].iloc[i]
 
-        # =================================================
         # LOW FRACTAL
-        # =================================================
-
         if (
             df["Low"].iloc[i] < df["Low"].iloc[i - 1]
             and
@@ -237,60 +168,6 @@ def apply_indicators(df):
     )
 
     return df
-
-# =========================================================
-# RESISTANCE
-# =========================================================
-
-def get_nearest_resistance(df, idx):
-
-    current_price = df["Close"].iloc[idx]
-
-    levels = []
-
-    start = max(0, idx - LOOKBACK_FRAC)
-
-    for i in range(start, idx):
-
-        val = df["high_fractal"].iloc[i]
-
-        if not np.isnan(val):
-
-            if val > current_price:
-
-                levels.append(val)
-
-    if len(levels) == 0:
-        return None
-
-    return min(levels)
-
-# =========================================================
-# SUPPORT
-# =========================================================
-
-def get_nearest_support(df, idx):
-
-    current_price = df["Close"].iloc[idx]
-
-    levels = []
-
-    start = max(0, idx - LOOKBACK_FRAC)
-
-    for i in range(start, idx):
-
-        val = df["low_fractal"].iloc[i]
-
-        if not np.isnan(val):
-
-            if val < current_price:
-
-                levels.append(val)
-
-    if len(levels) == 0:
-        return None
-
-    return max(levels)
 
 # =========================================================
 # SIGNAL GENERATION
@@ -330,15 +207,33 @@ def generate_signals(df):
                 df["high_fractal"].iloc[i]
             )
 
-        close = df["Close"].iloc[i]
-
-        low = df["Low"].iloc[i]
-
-        high = df["High"].iloc[i]
-
         ema = df["EMA"].iloc[i]
 
         atr = df["ATR"].iloc[i]
+
+        # =================================================
+        # PREVIOUS CANDLE
+        # =================================================
+
+        prev_open = df["Open"].iloc[i - 2]
+
+        prev_close = df["Close"].iloc[i - 2]
+
+        prev_low = df["Low"].iloc[i - 2]
+
+        prev_high = df["High"].iloc[i - 2]
+
+        # =================================================
+        # CURRENT CANDLE
+        # =================================================
+
+        open_price = df["Open"].iloc[i - 1]
+
+        close = df["Close"].iloc[i -1]
+
+        low = df["Low"].iloc[i -1]
+
+        high = df["High"].iloc[i-1]
 
         # =================================================
         # LONG SETUP
@@ -346,59 +241,83 @@ def generate_signals(df):
 
         if not np.isnan(last_low_fractal):
 
-            sweep = low < last_low_fractal
-
-            reclaim = close > last_low_fractal
-
-            bullish_trend = close > ema
-
-            sweep_size = (
-                abs(last_low_fractal - low)
+            # SWEEP
+            sweep = (
+                prev_low < last_low_fractal
             )
 
-            min_sweep = (
+            # RECLAIM
+            reclaim = (
+                prev_close > last_low_fractal
+            )
+
+            # SWEEP SIZE
+            sweep_size = (
+                abs(last_low_fractal - prev_low)
+            )
+
+            valid_sweep = (
                 sweep_size > atr * MIN_SWEEP_ATR
             )
 
-            candle_strength = (
+            # STRONG BULLISH CANDLE
+            bullish_candle = (
+                close > open_price
+            )
+
+            bull_strength = (
                 (close - low)
-                / max((high - low), 0.0001)
+                /
+                max((high - low), 0.0001)
             )
 
-            strong_rejection = (
-                candle_strength > REJECTION_THRESHOLD
+            strong_bull = (
+                bull_strength
+                > STRONG_BODY_THRESHOLD
             )
 
+            # TREND
+            bullish_trend = (
+                close > ema
+            )
+
+            # ENTRY
             if (
                 sweep
                 and reclaim
+                and valid_sweep
+                and bullish_candle
+                and strong_bull
                 and bullish_trend
-                and min_sweep
-                and strong_rejection
             ):
 
-                resistance = (
-                    get_nearest_resistance(df, i)
+                sl = (
+                    prev_low
+                    - (atr * ATR_BUFFER)
                 )
 
-                if resistance is not None:
-
-                    df.loc[
-                        df.index[i],
-                        "long_signal"
-                    ] = True
-
-                    df.loc[
-                        df.index[i],
-                        "long_sl"
-                    ] = (
-                        low - (atr * ATR_BUFFER)
+                tp = (
+                    close
+                    + (
+                        atr
+                        * ATR_TP_MULTIPLIER
                     )
+                )
 
-                    df.loc[
-                        df.index[i],
-                        "long_tp"
-                    ] = resistance
+                df.loc[
+                    df.index[i],
+                    "long_signal"
+                ] = True
+
+                df.loc[
+                    df.index[i],
+                    "long_sl"
+                ] = sl
+
+                df.loc[
+                    df.index[i],
+                    "long_tp"
+                ] = tp
 
         # =================================================
         # SHORT SETUP
@@ -406,59 +325,83 @@ def generate_signals(df):
 
         if not np.isnan(last_high_fractal):
 
-            sweep = high > last_high_fractal
-
-            reclaim = close < last_high_fractal
-
-            bearish_trend = close < ema
-
-            sweep_size = (
-                abs(high - last_high_fractal)
+            # SWEEP
+            sweep = (
+                prev_high > last_high_fractal
             )
 
-            min_sweep = (
+            # RECLAIM
+            reclaim = (
+                prev_close < last_high_fractal
+            )
+
+            # SWEEP SIZE
+            sweep_size = (
+                abs(prev_high - last_high_fractal)
+            )
+
+            valid_sweep = (
                 sweep_size > atr * MIN_SWEEP_ATR
             )
 
-            candle_strength = (
+            # STRONG BEARISH CANDLE
+            bearish_candle = (
+                close < open_price
+            )
+
+            bear_strength = (
                 (high - close)
-                / max((high - low), 0.0001)
+                /
+                max((high - low), 0.0001)
             )
 
-            strong_rejection = (
-                candle_strength > REJECTION_THRESHOLD
+            strong_bear = (
+                bear_strength
+                > STRONG_BODY_THRESHOLD
             )
 
+            # TREND
+            bearish_trend = (
+                close < ema
+            )
+
+            # ENTRY
             if (
                 sweep
                 and reclaim
+                and valid_sweep
+                and bearish_candle
+                and strong_bear
                 and bearish_trend
-                and min_sweep
-                and strong_rejection
             ):
 
-                support = (
-                    get_nearest_support(df, i)
+                sl = (
+                    prev_high
+                    + (atr * ATR_BUFFER)
                 )
 
-                if support is not None:
-
-                    df.loc[
-                        df.index[i],
-                        "short_signal"
-                    ] = True
-
-                    df.loc[
-                        df.index[i],
-                        "short_sl"
-                    ] = (
-                        high + (atr * ATR_BUFFER)
+                tp = (
+                    close
+                    - (
+                        atr
+                        * ATR_TP_MULTIPLIER
                     )
+                )
 
-                    df.loc[
-                        df.index[i],
-                        "short_tp"
-                    ] = support
+                df.loc[
+                    df.index[i],
+                    "short_signal"
+                ] = True
+
+                df.loc[
+                    df.index[i],
+                    "short_sl"
+                ] = sl
+
+                df.loc[
+                    df.index[i],
+                    "short_tp"
+                ] = tp
 
     return df
 
@@ -490,16 +433,21 @@ def calculate_position_size(
     symbol
 ):
 
-    risk_amount = balance * risk_percent
+    risk_amount = (
+        balance * risk_percent
+    )
 
-    stop_distance = abs(entry - stop)
+    stop_distance = abs(
+        entry - stop
+    )
 
     if stop_distance <= 0:
         return 0
 
     qty = (
         risk_amount
-        / (
+        /
+        (
             stop_distance
             * CONTRACT_SIZE[symbol]
         )
@@ -523,8 +471,6 @@ def process_symbol(
 
     df = prepare_dataframe(df)
 
-    save_processed_data(df, symbol)
-
     last = df.iloc[-2]
 
     pos = state["position"]
@@ -539,6 +485,7 @@ def process_symbol(
 
         exit_trade = False
 
+        # LONG
         if pos["side"] == "long":
 
             pnl = (
@@ -555,6 +502,7 @@ def process_symbol(
 
                 exit_trade = True
 
+        # SHORT
         else:
 
             pnl = (
@@ -571,6 +519,7 @@ def process_symbol(
 
                 exit_trade = True
 
+        # CLOSE POSITION
         if exit_trade:
 
             entry_fee = utils.commission(
@@ -624,7 +573,7 @@ def process_symbol(
             utils.log(
                 f"{emoji} EXIT {symbol} | "
                 f"PNL: {round(net, 2)} | "
-                f"BAL: {round(state['balance'], 2)}",
+                f"BALANCE: {round(state['balance'], 2)}",
                 tg=True
             )
 
@@ -641,32 +590,33 @@ def process_symbol(
         and is_new_candle
     ):
 
-        # =================================================
         # DAILY TARGET
-        # =================================================
-
         if (
             state["daily_pnl"]
             >= DAILY_TARGET_MAX
         ):
 
+            utils.log(
+                "🎯 Daily Target Hit",
+                tg=True
+            )
+
             return
 
-        # =================================================
         # MAX LOSS
-        # =================================================
-
         if (
             state["daily_pnl"]
             <= MAX_DAILY_LOSS
         ):
 
+            utils.log(
+                "🛑 Max Daily Loss Hit",
+                tg=True
+            )
+
             return
 
-        # =================================================
-        # TRADE LIMIT
-        # =================================================
-
+        # MAX TRADES
         if (
             state["trade_count"]
             >= MAX_TRADES_PER_DAY
@@ -714,7 +664,7 @@ def process_symbol(
 
                 utils.log(
                     f"🟢 LONG {symbol}\n"
-                    f"ENTRY: {price}\n"
+                    f"ENTRY: {round(price, 2)}\n"
                     f"SL: {round(sl, 2)}\n"
                     f"TP: {round(tp, 2)}\n"
                     f"QTY: {qty}",
@@ -761,7 +711,7 @@ def process_symbol(
 
                 utils.log(
                     f"🔴 SHORT {symbol}\n"
-                    f"ENTRY: {price}\n"
+                    f"ENTRY: {round(price, 2)}\n"
                     f"SL: {round(sl, 2)}\n"
                     f"TP: {round(tp, 2)}\n"
                     f"QTY: {qty}",
@@ -790,9 +740,7 @@ def run():
 
             "last_reset_day": (
                 datetime.now().date()
-            ),
-
-            "trading_enabled": True
+            )
 
         }
 
@@ -800,7 +748,7 @@ def run():
     }
 
     utils.log(
-        "🚀 Liquidity Fractal Strategy Started",
+        "🚀 Liquidity Displacement Strategy Started",
         tg=True
     )
 
@@ -810,10 +758,7 @@ def run():
 
             for symbol in SYMBOLS:
 
-                # =============================================
                 # FETCH DATA
-                # =============================================
-
                 df = utils.fetch_candles(symbol)
 
                 if (
@@ -842,19 +787,13 @@ def run():
                         "last_candle_time"
                     ] = latest_candle_time
 
-                # =============================================
                 # FETCH PRICE
-                # =============================================
-
                 price = utils.fetch_price(symbol)
 
                 if price is None:
                     continue
 
-                # =============================================
                 # PROCESS
-                # =============================================
-
                 process_symbol(
                     symbol,
                     df,
