@@ -129,129 +129,129 @@ def reset_daily_state(state):
 
 # ================= SESSION FILTER =================
 
-def is_volatile_session():
+# def is_volatile_session():
 
-    utc_now = datetime.now(UTC).time()
+#     utc_now = datetime.now(UTC).time()
 
-    # ================= UK SESSION =================
-    # 07:00 UTC → 11:30 UTC
+#     # ================= UK SESSION =================
+#     # 07:00 UTC → 11:30 UTC
 
-    uk_start = dt_time(7, 0)
-    uk_end = dt_time(11, 30)
+#     uk_start = dt_time(7, 0)
+#     uk_end = dt_time(11, 30)
 
-    # ================= US SESSION =================
-    # 13:00 UTC → 20:00 UTC
+#     # ================= US SESSION =================
+#     # 13:00 UTC → 20:00 UTC
 
-    us_start = dt_time(13, 0)
-    us_end = dt_time(20, 0)
+#     us_start = dt_time(13, 0)
+#     us_end = dt_time(20, 0)
 
-    return (
-        (uk_start <= utc_now <= uk_end)
-        or
-        (us_start <= utc_now <= us_end)
-    )
+#     return (
+#         (uk_start <= utc_now <= uk_end)
+#         or
+#         (us_start <= utc_now <= us_end)
+#     )
 
-# ================= SESSION TELEGRAM ALERTS =================
+# # ================= SESSION TELEGRAM ALERTS =================
 
-def monitor_sessions(session_state):
+# def monitor_sessions(session_state):
 
-    now_utc = datetime.now(UTC)
+#     now_utc = datetime.now(UTC)
 
-    utc_time = now_utc.time()
+#     utc_time = now_utc.time()
 
-    tokyo_now = datetime.now(
-        ZoneInfo("Asia/Tokyo")
-    )
+#     tokyo_now = datetime.now(
+#         ZoneInfo("Asia/Tokyo")
+#     )
 
-    # ================= UK SESSION =================
+#     # ================= UK SESSION =================
 
-    uk_start = dt_time(7, 0)
-    uk_end = dt_time(11, 30)
+#     uk_start = dt_time(7, 0)
+#     uk_end = dt_time(11, 30)
 
-    # ================= US SESSION =================
+#     # ================= US SESSION =================
 
-    us_start = dt_time(13, 0)
-    us_end = dt_time(20, 0)
+#     us_start = dt_time(13, 0)
+#     us_end = dt_time(20, 0)
 
-    # ================= UK START =================
+#     # ================= UK START =================
 
-    if (
-        utc_time >= uk_start
-        and not session_state["uk_started"]
-    ):
+#     if (
+#         utc_time >= uk_start
+#         and not session_state["uk_started"]
+#     ):
 
-        session_state["uk_started"] = True
-        session_state["uk_ended"] = False
+#         session_state["uk_started"] = True
+#         session_state["uk_ended"] = False
 
-        utils.log(
-            f"🇬🇧 UK SESSION STARTED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
-            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
-            tg=True
-        )
+#         utils.log(
+#             f"🇬🇧 UK SESSION STARTED\n"
+#             f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+#             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+#             tg=True
+#         )
 
-    # ================= UK END =================
+#     # ================= UK END =================
 
-    if (
-        utc_time >= uk_end
-        and not session_state["uk_ended"]
-    ):
+#     if (
+#         utc_time >= uk_end
+#         and not session_state["uk_ended"]
+#     ):
 
-        session_state["uk_ended"] = True
+#         session_state["uk_ended"] = True
 
-        utils.log(
-            f"🇬🇧 UK SESSION ENDED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
-            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
-            tg=True
-        )
+#         utils.log(
+#             f"🇬🇧 UK SESSION ENDED\n"
+#             f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+#             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+#             tg=True
+#         )
 
-    # ================= US START =================
+#     # ================= US START =================
 
-    if (
-        utc_time >= us_start
-        and not session_state["us_started"]
-    ):
+#     if (
+#         utc_time >= us_start
+#         and not session_state["us_started"]
+#     ):
 
-        session_state["us_started"] = True
-        session_state["us_ended"] = False
+#         session_state["us_started"] = True
+#         session_state["us_ended"] = False
 
-        utils.log(
-            f"🇺🇸 US SESSION STARTED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
-            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
-            tg=True
-        )
+#         utils.log(
+#             f"🇺🇸 US SESSION STARTED\n"
+#             f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+#             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+#             tg=True
+#         )
 
-    # ================= US END =================
+#     # ================= US END =================
 
-    if (
-        utc_time >= us_end
-        and not session_state["us_ended"]
-    ):
+#     if (
+#         utc_time >= us_end
+#         and not session_state["us_ended"]
+#     ):
 
-        session_state["us_ended"] = True
+#         session_state["us_ended"] = True
 
-        utils.log(
-            f"🇺🇸 US SESSION ENDED\n"
-            f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
-            f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
-            tg=True
-        )
+#         utils.log(
+#             f"🇺🇸 US SESSION ENDED\n"
+#             f"UTC: {now_utc.strftime('%H:%M:%S UTC')}\n"
+#             f"Tokyo: {tokyo_now.strftime('%H:%M:%S JST')}",
+#             tg=True
+#         )
 
-    # ================= RESET FLAGS =================
+#     # ================= RESET FLAGS =================
 
-    if utc_time < uk_start:
+#     if utc_time < uk_start:
 
-        session_state["uk_started"] = False
-        session_state["uk_ended"] = False
+#         session_state["uk_started"] = False
+#         session_state["uk_ended"] = False
 
-    if utc_time < us_start:
+#     if utc_time < us_start:
 
-        session_state["us_started"] = False
-        session_state["us_ended"] = False
+#         session_state["us_started"] = False
+#         session_state["us_ended"] = False
 
-# ================= FRACTAL TRENDLINE =================
+# # ================= FRACTAL TRENDLINE =================
 
 def calculate_trendline(df):
 
