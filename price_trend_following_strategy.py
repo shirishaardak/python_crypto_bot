@@ -661,7 +661,7 @@ def run():
 
             # ================= SESSION ALERTS =================
 
-            monitor_sessions(session_state)
+            # monitor_sessions(session_state)
 
             for symbol in SYMBOLS:
 
