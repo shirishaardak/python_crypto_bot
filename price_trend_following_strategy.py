@@ -21,7 +21,7 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "price_trend_strategy"
+BOT_NAME = "price_trend_following_strategy"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -38,7 +38,7 @@ STOPLOSS = {
 }
 
 TP = {
-    "BTCUSD": 250
+    "BTCUSD": 300
 }
 
 TAKER_FEE = 0.0005
@@ -62,7 +62,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testmyaglostrategy_bot"),
+    telegram_token=os.getenv("testmyaglostrateg"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -72,7 +72,7 @@ BASE_DIR = os.getcwd()
 SAVE_DIR = os.path.join(
     BASE_DIR,
     "data",
-    "price_trend_strategy"
+    "price_trend_following_strategy"
 )
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -354,7 +354,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    # save_processed_data(ha, symbol)
+    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
 
