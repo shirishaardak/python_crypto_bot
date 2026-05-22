@@ -16,13 +16,13 @@ load_dotenv()
 # CONFIG
 # =========================================================
 
-BOT_NAME = "liquidity_displacement_strategy"
+BOT_NAME = "professional_liquidity_sweep"
 
 SYMBOLS = ["BTCUSD"]
 
 TIMEFRAME = "5m"
 
-DAYS = 15
+DAYS = 20
 
 # =========================================================
 # ACCOUNT SETTINGS
@@ -42,16 +42,20 @@ EMA_LENGTH = 200
 
 ATR_LENGTH = 14
 
-ATR_BUFFER = 0.2
+SWING_LOOKBACK = 3
 
-ATR_TP_MULTIPLIER = 2.0
+MIN_BODY_RATIO = 0.5
 
-MIN_SWEEP_ATR = 0.3
+RISK_REWARD = 3.0
 
-STRONG_BODY_THRESHOLD = 0.5
+USE_TREND_FILTER = True
+
+USE_TRAILING_STOP = True
+
+TRAIL_AT_R = 1.0
 
 # =========================================================
-# DAILY TARGET
+# DAILY SETTINGS
 # =========================================================
 
 DAILY_TARGET_MAX = 1000
@@ -104,48 +108,71 @@ def reset_daily_state(state):
         )
 
 # =========================================================
-# FRACTALS
+# SWING DETECTION
 # =========================================================
 
-def detect_fractals(df):
+def detect_swings(df):
 
-    df["high_fractal"] = np.nan
+    df["swing_high"] = np.nan
 
-    df["low_fractal"] = np.nan
+    df["swing_low"] = np.nan
 
-    for i in range(2, len(df) - 2):
+    for i in range(
+        SWING_LOOKBACK,
+        len(df) - SWING_LOOKBACK
+    ):
 
-        # HIGH FRACTAL
+        current_high = df["High"].iloc[i]
+
+        current_low = df["Low"].iloc[i]
+
+        left_highs = df[
+            "High"
+        ].iloc[
+            i - SWING_LOOKBACK:i
+        ]
+
+        right_highs = df[
+            "High"
+        ].iloc[
+            i + 1:i + SWING_LOOKBACK + 1
+        ]
+
+        left_lows = df[
+            "Low"
+        ].iloc[
+            i - SWING_LOOKBACK:i
+        ]
+
+        right_lows = df[
+            "Low"
+        ].iloc[
+            i + 1:i + SWING_LOOKBACK + 1
+        ]
+
+        # Swing High
         if (
-            df["High"].iloc[i] > df["High"].iloc[i - 1]
+            current_high > left_highs.max()
             and
-            df["High"].iloc[i] > df["High"].iloc[i - 2]
-            and
-            df["High"].iloc[i] > df["High"].iloc[i + 1]
-            and
-            df["High"].iloc[i] > df["High"].iloc[i + 2]
+            current_high > right_highs.max()
         ):
 
             df.loc[
-                df.index[i + 2],
-                "high_fractal"
-            ] = df["High"].iloc[i]
+                df.index[i],
+                "swing_high"
+            ] = current_high
 
-        # LOW FRACTAL
+        # Swing Low
         if (
-            df["Low"].iloc[i] < df["Low"].iloc[i - 1]
+            current_low < left_lows.min()
             and
-            df["Low"].iloc[i] < df["Low"].iloc[i - 2]
-            and
-            df["Low"].iloc[i] < df["Low"].iloc[i + 1]
-            and
-            df["Low"].iloc[i] < df["Low"].iloc[i + 2]
+            current_low < right_lows.min()
         ):
 
             df.loc[
-                df.index[i + 2],
-                "low_fractal"
-            ] = df["Low"].iloc[i]
+                df.index[i],
+                "swing_low"
+            ] = current_low
 
     return df
 
@@ -180,128 +207,130 @@ def generate_signals(df):
     df["short_signal"] = False
 
     df["long_sl"] = np.nan
+
     df["short_sl"] = np.nan
 
     df["long_tp"] = np.nan
+
     df["short_tp"] = np.nan
 
-    last_low_fractal = np.nan
+    last_swing_low = np.nan
 
-    last_high_fractal = np.nan
+    last_swing_high = np.nan
 
     for i in range(50, len(df)):
 
-        # =================================================
-        # UPDATE FRACTALS
-        # =================================================
+        # =====================================================
+        # UPDATE LEVELS
+        # =====================================================
 
-        if not np.isnan(df["low_fractal"].iloc[i]):
+        if not np.isnan(df["swing_low"].iloc[i - 2]):
 
-            last_low_fractal = (
-                df["low_fractal"].iloc[i]
+            last_swing_low = (
+                df["swing_low"].iloc[i - 2]
             )
 
-        if not np.isnan(df["high_fractal"].iloc[i]):
+        if not np.isnan(df["swing_high"].iloc[i - 2]):
 
-            last_high_fractal = (
-                df["high_fractal"].iloc[i]
+            last_swing_high = (
+                df["swing_high"].iloc[i - 2]
             )
 
-        ema = df["EMA"].iloc[i]
+        # =====================================================
+        # CONFIRMATION CANDLE
+        # =====================================================
 
-        atr = df["ATR"].iloc[i]
+        confirm_open = df["Open"].iloc[i - 1]
 
-        # =================================================
-        # PREVIOUS CANDLE
-        # =================================================
+        confirm_close = df["Close"].iloc[i - 1]
 
-        prev_open = df["Open"].iloc[i - 2]
+        confirm_high = df["High"].iloc[i - 1]
 
-        prev_close = df["Close"].iloc[i - 2]
+        confirm_low = df["Low"].iloc[i - 1]
 
-        prev_low = df["Low"].iloc[i - 2]
+        # =====================================================
+        # SWEEP CANDLE
+        # =====================================================
 
-        prev_high = df["High"].iloc[i - 2]
+        sweep_open = df["Open"].iloc[i - 2]
 
-        # =================================================
-        # CURRENT CANDLE
-        # =================================================
+        sweep_close = df["Close"].iloc[i - 2]
 
-        open_price = df["Open"].iloc[i - 1]
+        sweep_high = df["High"].iloc[i - 2]
 
-        close = df["Close"].iloc[i -1]
+        sweep_low = df["Low"].iloc[i - 2]
 
-        low = df["Low"].iloc[i -1]
+        atr = df["ATR"].iloc[i - 1]
 
-        high = df["High"].iloc[i-1]
+        ema = df["EMA"].iloc[i - 1]
 
-        # =================================================
+        # =====================================================
         # LONG SETUP
-        # =================================================
+        # =====================================================
 
-        if not np.isnan(last_low_fractal):
+        if not np.isnan(last_swing_low):
 
-            # SWEEP
-            sweep = (
-                prev_low < last_low_fractal
+            # Liquidity Sweep
+            swept_below = (
+                sweep_low < last_swing_low
             )
 
-            # RECLAIM
-            reclaim = (
-                prev_close > last_low_fractal
+            reclaimed = (
+                sweep_close > last_swing_low
             )
 
-            # SWEEP SIZE
-            sweep_size = (
-                abs(last_low_fractal - prev_low)
+            # Bullish Confirmation
+            bullish_confirm = (
+                confirm_close > confirm_open
             )
 
-            valid_sweep = (
-                sweep_size > atr * MIN_SWEEP_ATR
-            )
-
-            # STRONG BULLISH CANDLE
-            bullish_candle = (
-                close > open_price
-            )
-
-            bull_strength = (
-                (close - low)
+            body_ratio = (
+                (confirm_close - confirm_low)
                 /
-                max((high - low), 0.0001)
+                max(
+                    confirm_high - confirm_low,
+                    0.0001
+                )
             )
 
-            strong_bull = (
-                bull_strength
-                > STRONG_BODY_THRESHOLD
+            strong_body = (
+                body_ratio >= MIN_BODY_RATIO
             )
 
-            # TREND
+            # Break previous candle high
+            momentum_break = (
+                confirm_close > sweep_high
+            )
+
+            # Trend Filter
             bullish_trend = (
-                close > ema
+                confirm_close > ema
             )
 
-            # ENTRY
+            if not USE_TREND_FILTER:
+
+                bullish_trend = True
+
+            # ENTRY CONDITION
             if (
-                sweep
-                and reclaim
-                and valid_sweep
-                and bullish_candle
-                and strong_bull
+                swept_below
+                and reclaimed
+                and bullish_confirm
+                and strong_body
+                and momentum_break
                 and bullish_trend
             ):
 
-                sl = (
-                    prev_low
-                    - (atr * ATR_BUFFER)
-                )
+                entry = confirm_close
+
+                sl = sweep_low
+
+                risk = abs(entry - sl)
 
                 tp = (
-                    close
-                    + (
-                        atr
-                        * ATR_TP_MULTIPLIER
-                    )
+                    entry
+                    +
+                    (risk * RISK_REWARD)
                 )
 
                 df.loc[
@@ -319,73 +348,68 @@ def generate_signals(df):
                     "long_tp"
                 ] = tp
 
-        # =================================================
+        # =====================================================
         # SHORT SETUP
-        # =================================================
+        # =====================================================
 
-        if not np.isnan(last_high_fractal):
+        if not np.isnan(last_swing_high):
 
-            # SWEEP
-            sweep = (
-                prev_high > last_high_fractal
+            swept_above = (
+                sweep_high > last_swing_high
             )
 
-            # RECLAIM
-            reclaim = (
-                prev_close < last_high_fractal
+            reclaimed = (
+                sweep_close < last_swing_high
             )
 
-            # SWEEP SIZE
-            sweep_size = (
-                abs(prev_high - last_high_fractal)
+            bearish_confirm = (
+                confirm_close < confirm_open
             )
 
-            valid_sweep = (
-                sweep_size > atr * MIN_SWEEP_ATR
-            )
-
-            # STRONG BEARISH CANDLE
-            bearish_candle = (
-                close < open_price
-            )
-
-            bear_strength = (
-                (high - close)
+            body_ratio = (
+                (confirm_high - confirm_close)
                 /
-                max((high - low), 0.0001)
+                max(
+                    confirm_high - confirm_low,
+                    0.0001
+                )
             )
 
-            strong_bear = (
-                bear_strength
-                > STRONG_BODY_THRESHOLD
+            strong_body = (
+                body_ratio >= MIN_BODY_RATIO
             )
 
-            # TREND
+            momentum_break = (
+                confirm_close < sweep_low
+            )
+
             bearish_trend = (
-                close < ema
+                confirm_close < ema
             )
 
-            # ENTRY
+            if not USE_TREND_FILTER:
+
+                bearish_trend = True
+
             if (
-                sweep
-                and reclaim
-                and valid_sweep
-                and bearish_candle
-                and strong_bear
+                swept_above
+                and reclaimed
+                and bearish_confirm
+                and strong_body
+                and momentum_break
                 and bearish_trend
             ):
 
-                sl = (
-                    prev_high
-                    + (atr * ATR_BUFFER)
-                )
+                entry = confirm_close
+
+                sl = sweep_high
+
+                risk = abs(sl - entry)
 
                 tp = (
-                    close
-                    - (
-                        atr
-                        * ATR_TP_MULTIPLIER
-                    )
+                    entry
+                    -
+                    (risk * RISK_REWARD)
                 )
 
                 df.loc[
@@ -415,7 +439,7 @@ def prepare_dataframe(df):
 
     df = apply_indicators(df)
 
-    df = detect_fractals(df)
+    df = detect_swings(df)
 
     df = generate_signals(df)
 
@@ -442,6 +466,7 @@ def calculate_position_size(
     )
 
     if stop_distance <= 0:
+
         return 0
 
     qty = (
@@ -478,15 +503,27 @@ def process_symbol(
     now = datetime.now()
 
     # =====================================================
-    # EXIT
+    # MANAGE OPEN POSITION
     # =====================================================
 
     if pos:
 
-        exit_trade = False
-
-        # LONG
         if pos["side"] == "long":
+
+            current_profit = (
+                price - pos["entry"]
+            )
+
+            if (
+                USE_TRAILING_STOP
+                and
+                current_profit >= pos["initial_risk"] * TRAIL_AT_R
+            ):
+
+                pos["sl"] = max(
+                    pos["sl"],
+                    pos["entry"]
+                )
 
             pnl = (
                 (price - pos["entry"])
@@ -494,16 +531,28 @@ def process_symbol(
                 * pos["qty"]
             )
 
-            if (
+            exit_trade = (
                 price <= pos["sl"]
                 or
                 price >= pos["tp"]
+            )
+
+        else:
+
+            current_profit = (
+                pos["entry"] - price
+            )
+
+            if (
+                USE_TRAILING_STOP
+                and
+                current_profit >= pos["initial_risk"] * TRAIL_AT_R
             ):
 
-                exit_trade = True
-
-        # SHORT
-        else:
+                pos["sl"] = min(
+                    pos["sl"],
+                    pos["entry"]
+                )
 
             pnl = (
                 (pos["entry"] - price)
@@ -511,15 +560,16 @@ def process_symbol(
                 * pos["qty"]
             )
 
-            if (
+            exit_trade = (
                 price >= pos["sl"]
                 or
                 price <= pos["tp"]
-            ):
+            )
 
-                exit_trade = True
+        # =================================================
+        # EXIT POSITION
+        # =================================================
 
-        # CLOSE POSITION
         if exit_trade:
 
             entry_fee = utils.commission(
@@ -590,33 +640,20 @@ def process_symbol(
         and is_new_candle
     ):
 
-        # DAILY TARGET
         if (
             state["daily_pnl"]
             >= DAILY_TARGET_MAX
         ):
 
-            utils.log(
-                "🎯 Daily Target Hit",
-                tg=True
-            )
-
             return
 
-        # MAX LOSS
         if (
             state["daily_pnl"]
             <= MAX_DAILY_LOSS
         ):
 
-            utils.log(
-                "🛑 Max Daily Loss Hit",
-                tg=True
-            )
-
             return
 
-        # MAX TRADES
         if (
             state["trade_count"]
             >= MAX_TRADES_PER_DAY
@@ -634,10 +671,12 @@ def process_symbol(
 
             tp = last.long_tp
 
+            entry = price
+
             qty = calculate_position_size(
                 state["balance"],
                 RISK_PER_TRADE,
-                price,
+                entry,
                 sl,
                 symbol
             )
@@ -648,7 +687,7 @@ def process_symbol(
 
                     "side": "long",
 
-                    "entry": price,
+                    "entry": entry,
 
                     "qty": qty,
 
@@ -656,7 +695,11 @@ def process_symbol(
 
                     "sl": sl,
 
-                    "tp": tp
+                    "tp": tp,
+
+                    "initial_risk": abs(
+                        entry - sl
+                    )
 
                 }
 
@@ -664,7 +707,7 @@ def process_symbol(
 
                 utils.log(
                     f"🟢 LONG {symbol}\n"
-                    f"ENTRY: {round(price, 2)}\n"
+                    f"ENTRY: {round(entry, 2)}\n"
                     f"SL: {round(sl, 2)}\n"
                     f"TP: {round(tp, 2)}\n"
                     f"QTY: {qty}",
@@ -681,10 +724,12 @@ def process_symbol(
 
             tp = last.short_tp
 
+            entry = price
+
             qty = calculate_position_size(
                 state["balance"],
                 RISK_PER_TRADE,
-                price,
+                entry,
                 sl,
                 symbol
             )
@@ -695,7 +740,7 @@ def process_symbol(
 
                     "side": "short",
 
-                    "entry": price,
+                    "entry": entry,
 
                     "qty": qty,
 
@@ -703,7 +748,11 @@ def process_symbol(
 
                     "sl": sl,
 
-                    "tp": tp
+                    "tp": tp,
+
+                    "initial_risk": abs(
+                        sl - entry
+                    )
 
                 }
 
@@ -711,7 +760,7 @@ def process_symbol(
 
                 utils.log(
                     f"🔴 SHORT {symbol}\n"
-                    f"ENTRY: {round(price, 2)}\n"
+                    f"ENTRY: {round(entry, 2)}\n"
                     f"SL: {round(sl, 2)}\n"
                     f"TP: {round(tp, 2)}\n"
                     f"QTY: {qty}",
@@ -748,7 +797,7 @@ def run():
     }
 
     utils.log(
-        "🚀 Liquidity Displacement Strategy Started",
+        "🚀 Professional Liquidity Sweep Strategy Started",
         tg=True
     )
 
@@ -758,7 +807,6 @@ def run():
 
             for symbol in SYMBOLS:
 
-                # FETCH DATA
                 df = utils.fetch_candles(symbol)
 
                 if (
@@ -787,13 +835,12 @@ def run():
                         "last_candle_time"
                     ] = latest_candle_time
 
-                # FETCH PRICE
                 price = utils.fetch_price(symbol)
 
                 if price is None:
+
                     continue
 
-                # PROCESS
                 process_symbol(
                     symbol,
                     df,
@@ -802,7 +849,7 @@ def run():
                     is_new_candle
                 )
 
-            time.sleep(3)
+            time.sleep(2)
 
         except Exception as e:
 

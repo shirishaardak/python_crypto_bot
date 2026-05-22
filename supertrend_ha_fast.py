@@ -20,10 +20,16 @@ SYMBOLS = ["BTCUSD"]
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 QTY = {"BTCUSD": 1000}
 
-STOPLOSS = {"BTCUSD": 500}
+# ================= RISK SETTINGS =================
 
-# TARGET PROFIT
-TP = {"BTCUSD": 250}
+# INITIAL STOP LOSS
+STOPLOSS = {"BTCUSD": 300}
+
+# TARGET
+TP = {"BTCUSD": 300}
+
+# TRAILING STEP SIZE
+TRAIL_STEP = 100
 
 TAKER_FEE = 0.0005
 SLEEP_TIME = 5
@@ -196,20 +202,6 @@ def add_indicators(df):
     df["supertrend"] = st[supertrend_col]
     df["trend"] = st[trend_col]
 
-    df["atr"] = ta.atr(
-        df["HA_high"],
-        df["HA_low"],
-        df["HA_close"],
-        length=10
-    )
-
-    df["atr_ma"] = df["atr"].rolling(20).mean()
-
-    df["trend_strength"] = (
-        abs(df["HA_close"] - df["supertrend"])
-        / df["atr"]
-    )
-
     return df.dropna()
 
 # ================= LAST CROSSOVER =================
@@ -278,7 +270,6 @@ def process_symbol(symbol, df, price, state):
         level["used"] = False
 
         # ================= LONG CROSSOVER =================
-        # STORE ONLY HIGH
 
         if trend_dir == 1:
 
@@ -295,7 +286,6 @@ def process_symbol(symbol, df, price, state):
             )
 
         # ================= SHORT CROSSOVER =================
-        # STORE ONLY LOW
 
         elif trend_dir == -1:
 
@@ -315,7 +305,6 @@ def process_symbol(symbol, df, price, state):
 
     # ==================================================
     # ENTRY LOGIC
-    # ONLY ONE ENTRY PER LEVEL
     # ==================================================
 
     if not level["used"]:
@@ -327,8 +316,6 @@ def process_symbol(symbol, df, price, state):
             and level["high"] is not None
             and close > level["high"]
         ):
-
-            # NO DUPLICATE LONG POSITION
 
             if not any(
                 p["side"] == "long"
@@ -345,9 +332,6 @@ def process_symbol(symbol, df, price, state):
                     "entry_time": get_ist_time()
                 })
 
-                # IMPORTANT
-                # PREVENT RE-ENTRY
-
                 level["used"] = True
 
                 utils.log(
@@ -362,8 +346,6 @@ def process_symbol(symbol, df, price, state):
             and level["low"] is not None
             and close < level["low"]
         ):
-
-            # NO DUPLICATE SHORT POSITION
 
             if not any(
                 p["side"] == "short"
@@ -380,9 +362,6 @@ def process_symbol(symbol, df, price, state):
                     "entry_time": get_ist_time()
                 })
 
-                # IMPORTANT
-                # PREVENT RE-ENTRY
-
                 level["used"] = True
 
                 utils.log(
@@ -390,7 +369,7 @@ def process_symbol(symbol, df, price, state):
                     tg=True
                 )
 
-    # ================= TRAILING =================
+    # ================= STEP TRAILING STOP =================
 
     for p in positions[:]:
 
@@ -398,18 +377,42 @@ def process_symbol(symbol, df, price, state):
 
         if p["side"] == "long":
 
+            profit_move = price - p["entry"]
+
+            # NUMBER OF 100-POINT STEPS
+            steps = int(profit_move // TRAIL_STEP)
+
+            # MOVE STOP LOSS STEP-BY-STEP
+            new_sl = (
+                p["entry"]
+                - STOPLOSS[symbol]
+                + (steps * TRAIL_STEP)
+            )
+
             p["trail_sl"] = max(
                 p["trail_sl"],
-                curr["supertrend"]
+                new_sl
             )
 
         # ================= SHORT =================
 
         else:
 
+            profit_move = p["entry"] - price
+
+            # NUMBER OF 100-POINT STEPS
+            steps = int(profit_move // TRAIL_STEP)
+
+            # MOVE STOP LOSS STEP-BY-STEP
+            new_sl = (
+                p["entry"]
+                + STOPLOSS[symbol]
+                - (steps * TRAIL_STEP)
+            )
+
             p["trail_sl"] = min(
                 p["trail_sl"],
-                curr["supertrend"]
+                new_sl
             )
 
 # ================= UTILS =================
@@ -500,6 +503,7 @@ def run():
 
                     if p["side"] == "long":
 
+                        # TARGET HIT
                         if price >= p["entry"] + TP[symbol]:
 
                             pnl = (
@@ -510,6 +514,7 @@ def run():
 
                             exit_trade = True
 
+                        # TRAILING STOP HIT
                         elif price <= p["trail_sl"]:
 
                             pnl = (
@@ -524,6 +529,7 @@ def run():
 
                     else:
 
+                        # TARGET HIT
                         if price <= p["entry"] - TP[symbol]:
 
                             pnl = (
@@ -534,6 +540,7 @@ def run():
 
                             exit_trade = True
 
+                        # TRAILING STOP HIT
                         elif price >= p["trail_sl"]:
 
                             pnl = (
@@ -574,7 +581,8 @@ def run():
                     utils.log(
                         f"{emoji} {symbol} EXIT @ {price} | "
                         f"PNL: {round(net,6)} | "
-                        f"DAILY: {round(state['daily_pnl'],2)}",
+                        f"DAILY: {round(state['daily_pnl'],2)} | "
+                        f"SL: {round(p['trail_sl'],2)}",
                         tg=True
                     )
 
