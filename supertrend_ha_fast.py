@@ -243,8 +243,8 @@ def process_symbol(symbol, df, price, state):
     if len(df) < 30:
         return
 
-    curr = df.iloc[-1]
-    last = df.iloc[-2]
+    curr = df.iloc[-2]
+    last = df.iloc[-3]
 
     # ================= LEVEL INIT =================
 
@@ -309,7 +309,6 @@ def process_symbol(symbol, df, price, state):
         if (
             level["side"] == "long"
             and close > level["high"]
-            and last_close <= level["high"]
         ):
 
             if not any(
@@ -340,7 +339,6 @@ def process_symbol(symbol, df, price, state):
         elif (
             level["side"] == "short"
             and close < level["low"]
-            and last_close >= level["low"]
         ):
 
             if not any(
