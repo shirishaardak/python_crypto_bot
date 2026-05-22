@@ -291,208 +291,89 @@ def process_symbol(symbol, df, price, state):
 
     qty = QTY[symbol]
 
-    df = add_indicators(df)
-
     if len(df) < 30:
         return
 
-    # USE LATEST CLOSED CANDLE
-    curr = df.iloc[-1]
-
     # =====================================================
-    # LEVEL INIT
-    # =====================================================
-
-    if "level" not in sym:
-
-        sym["level"] = {
-
-            "high": None,
-            "low": None,
-
-            "side": None,
-
-            "used": False,
-
-            "last_cross_time": None
-
-        }
-
-    level = sym["level"]
-
-    # =====================================================
-    # DETECT CROSSOVER
+    # SUPERTREND CROSSOVER ENTRY
     # =====================================================
 
     idx, trend_dir = get_crossover(df)
 
-    if idx is not None:
+    if idx is None:
+        return
 
-        candle_time = df.index[idx]
+    already_long = any(
+        p["side"] == "long"
+        for p in positions
+    )
 
-        # AVOID DUPLICATE PROCESSING
-        if candle_time != level["last_cross_time"]:
-
-            level["last_cross_time"] = candle_time
-
-            level["used"] = False
-
-            # =================================================
-            # LONG CROSSOVER
-            # =================================================
-
-            if trend_dir == 1:
-
-                crossover_high = df["HA_high"].iloc[idx]
-
-                level.update({
-
-                    "high": crossover_high,
-                    "low": None,
-
-                    "side": "long"
-
-                })
-
-                utils.log(
-
-                    f"🟢 LONG LEVEL SET -> "
-                    f"HIGH: {round(crossover_high, 2)}",
-
-                    tg=True
-
-                )
-
-            # =================================================
-            # SHORT CROSSOVER
-            # =================================================
-
-            elif trend_dir == -1:
-
-                crossover_low = df["HA_low"].iloc[idx]
-
-                level.update({
-
-                    "low": crossover_low,
-                    "high": None,
-
-                    "side": "short"
-
-                })
-
-                utils.log(
-
-                    f"🔴 SHORT LEVEL SET -> "
-                    f"LOW: {round(crossover_low, 2)}",
-
-                    tg=True
-
-                )
-
-    # =====================================================
-    # ENTRY CONFIRMATION
-    # =====================================================
-
-    # USE REAL CANDLE CLOSE FOR FASTER ENTRIES
-    close = curr["Close"]
+    already_short = any(
+        p["side"] == "short"
+        for p in positions
+    )
 
     # =====================================================
     # LONG ENTRY
     # =====================================================
 
-    if not level["used"]:
+    if trend_dir == 1 and not already_long:
 
-        if (
+        sl = price - STOPLOSS[symbol]
 
-            level["side"] == "long"
-            and level["high"] is not None
-            and close >= level["high"]
+        positions.append({
 
-        ):
+            "side": "long",
 
-            already_long = any(
+            "entry": price,
 
-                p["side"] == "long"
-                for p in positions
+            "qty": qty,
 
-            )
+            "trail_sl": sl,
 
-            if not already_long:
+            "entry_time": get_ist_time()
 
-                sl = price - STOPLOSS[symbol]
+        })
 
-                positions.append({
+        utils.log(
 
-                    "side": "long",
+            f"🚀 {symbol} LONG ENTRY @ {price} | "
+            f"SUPERTREND CROSSOVER BUY",
 
-                    "entry": price,
+            tg=True
 
-                    "qty": qty,
+        )
 
-                    "trail_sl": sl,
+    # =====================================================
+    # SHORT ENTRY
+    # =====================================================
 
-                    "entry_time": get_ist_time()
+    elif trend_dir == -1 and not already_short:
 
-                })
+        sl = price + STOPLOSS[symbol]
 
-                level["used"] = True
+        positions.append({
 
-                utils.log(
+            "side": "short",
 
-                    f"🚀 {symbol} LONG ENTRY @ {price} | "
-                    f"BREAKOUT ABOVE {round(level['high'], 2)}",
+            "entry": price,
 
-                    tg=True
+            "qty": qty,
 
-                )
+            "trail_sl": sl,
 
-        # =================================================
-        # SHORT ENTRY
-        # =================================================
+            "entry_time": get_ist_time()
 
-        elif (
+        })
 
-            level["side"] == "short"
-            and level["low"] is not None
-            and close <= level["low"]
+        utils.log(
 
-        ):
+            f"🔻 {symbol} SHORT ENTRY @ {price} | "
+            f"SUPERTREND CROSSOVER SELL",
 
-            already_short = any(
+            tg=True
 
-                p["side"] == "short"
-                for p in positions
-
-            )
-
-            if not already_short:
-
-                sl = price + STOPLOSS[symbol]
-
-                positions.append({
-
-                    "side": "short",
-
-                    "entry": price,
-
-                    "qty": qty,
-
-                    "trail_sl": sl,
-
-                    "entry_time": get_ist_time()
-
-                })
-
-                level["used"] = True
-
-                utils.log(
-
-                    f"🔻 {symbol} SHORT ENTRY @ {price} | "
-                    f"BREAKDOWN BELOW {round(level['low'], 2)}",
-
-                    tg=True
-
-                )
+        )
 
     # =====================================================
     # TRAILING STOP LOSS
@@ -849,24 +730,23 @@ def run():
                     continue
 
                 # =============================================
+                # ADD INDICATORS
+                # =============================================
+
+                processed_df = add_indicators(df)
+
+                # =============================================
                 # STRATEGY
                 # =============================================
 
                 process_symbol(
 
                     symbol,
-                    df,
+                    processed_df,
                     price,
                     state
 
                 )
-
-                save_processed_data(
-                    df,
-                    symbol
-                )
-
-                auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
