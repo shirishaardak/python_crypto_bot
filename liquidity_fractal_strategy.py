@@ -48,7 +48,7 @@ ATR_TP_MULTIPLIER = 2.0
 
 MIN_SWEEP_ATR = 0.3
 
-STRONG_BODY_THRESHOLD = 0.7
+STRONG_BODY_THRESHOLD = 0.5
 
 # =========================================================
 # DAILY TARGET

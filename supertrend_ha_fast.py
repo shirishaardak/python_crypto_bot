@@ -34,17 +34,17 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 IST = pytz.timezone("Asia/Kolkata")
 last_git_push = time.time()
 
-LOOKBACK = 3
-
 # ================= AUTO GIT =================
 
 def auto_git_push():
+
     global last_git_push
 
     if time.time() - last_git_push < 3600:
         return
 
     try:
+
         subprocess.run("git add -A", shell=True)
 
         res = subprocess.run(
@@ -60,6 +60,7 @@ def auto_git_push():
         last_git_push = time.time()
 
     except Exception as e:
+
         utils.log(f"Git Error: {e}")
 
 # ================= TIME =================
@@ -72,13 +73,16 @@ def get_ist_time():
 last_candle_time = {}
 
 def is_new_candle(symbol, df):
+
     t = df.index[-1]
 
     if symbol not in last_candle_time:
+
         last_candle_time[symbol] = t
         return True
 
     if t != last_candle_time[symbol]:
+
         last_candle_time[symbol] = t
         return True
 
@@ -98,6 +102,7 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
                 return result
 
         except Exception as e:
+
             print("Fetch error:", e)
 
         time.sleep(delay)
@@ -220,6 +225,7 @@ def get_last_crossover(df, lookback=50):
     ):
 
         if trend[i] != trend[i - 1]:
+
             return i, trend[i]
 
     return None, None
@@ -229,6 +235,7 @@ def get_last_crossover(df, lookback=50):
 def process_symbol(symbol, df, price, state):
 
     # STOP NEW ENTRIES IF DAILY TARGET HIT
+
     if not state["trading_enabled"]:
         return
 
@@ -244,7 +251,6 @@ def process_symbol(symbol, df, price, state):
         return
 
     curr = df.iloc[-2]
-    last = df.iloc[-3]
 
     # ================= LEVEL INIT =================
 
@@ -253,15 +259,14 @@ def process_symbol(symbol, df, price, state):
         sym["level"] = {
             "high": None,
             "low": None,
-            "locked": False,
             "side": None,
-            "attempted": False,
+            "used": False,
             "last_cross_idx": None
         }
 
     level = sym["level"]
 
-    # ================= RECENT CROSSOVER =================
+    # ================= NEW CROSSOVER =================
 
     idx, trend_dir = get_last_crossover(df)
 
@@ -269,47 +274,61 @@ def process_symbol(symbol, df, price, state):
 
         level["last_cross_idx"] = idx
 
+        # RESET ENTRY FLAG
+        level["used"] = False
+
+        # ================= LONG CROSSOVER =================
+        # STORE ONLY HIGH
+
         if trend_dir == 1:
 
-            level_high = df["HA_high"].iloc[
-                idx: idx + LOOKBACK
-            ].max()
+            crossover_high = df["HA_high"].iloc[idx]
 
             level.update({
-                "high": level_high,
+                "high": crossover_high,
                 "low": None,
-                "locked": True,
-                "side": "long",
-                "attempted": False
+                "side": "long"
             })
+
+            utils.log(
+                f"🟢 LONG LEVEL SET -> HIGH: {round(crossover_high, 2)}"
+            )
+
+        # ================= SHORT CROSSOVER =================
+        # STORE ONLY LOW
 
         elif trend_dir == -1:
 
-            level_low = df["HA_low"].iloc[
-                idx: idx + LOOKBACK
-            ].min()
+            crossover_low = df["HA_low"].iloc[idx]
 
             level.update({
-                "low": level_low,
+                "low": crossover_low,
                 "high": None,
-                "locked": True,
-                "side": "short",
-                "attempted": False
+                "side": "short"
             })
 
+            utils.log(
+                f"🔴 SHORT LEVEL SET -> LOW: {round(crossover_low, 2)}"
+            )
+
     close = curr["HA_close"]
-    last_close = last["HA_close"]
 
-    # ================= ENTRY =================
+    # ==================================================
+    # ENTRY LOGIC
+    # ONLY ONE ENTRY PER LEVEL
+    # ==================================================
 
-    if level["locked"] and not level["attempted"]:
+    if not level["used"]:
 
-        # LONG
+        # ================= LONG ENTRY =================
 
         if (
             level["side"] == "long"
+            and level["high"] is not None
             and close > level["high"]
         ):
+
+            # NO DUPLICATE LONG POSITION
 
             if not any(
                 p["side"] == "long"
@@ -326,20 +345,25 @@ def process_symbol(symbol, df, price, state):
                     "entry_time": get_ist_time()
                 })
 
-                level["attempted"] = True
-                level["locked"] = False
+                # IMPORTANT
+                # PREVENT RE-ENTRY
+
+                level["used"] = True
 
                 utils.log(
                     f"🚀 {symbol} LONG ENTRY @ {price}",
                     tg=True
                 )
 
-        # SHORT
+        # ================= SHORT ENTRY =================
 
         elif (
             level["side"] == "short"
+            and level["low"] is not None
             and close < level["low"]
         ):
+
+            # NO DUPLICATE SHORT POSITION
 
             if not any(
                 p["side"] == "short"
@@ -356,8 +380,10 @@ def process_symbol(symbol, df, price, state):
                     "entry_time": get_ist_time()
                 })
 
-                level["attempted"] = True
-                level["locked"] = False
+                # IMPORTANT
+                # PREVENT RE-ENTRY
+
+                level["used"] = True
 
                 utils.log(
                     f"🔻 {symbol} SHORT ENTRY @ {price}",
@@ -368,7 +394,7 @@ def process_symbol(symbol, df, price, state):
 
     for p in positions[:]:
 
-        # LONG
+        # ================= LONG =================
 
         if p["side"] == "long":
 
@@ -377,7 +403,7 @@ def process_symbol(symbol, df, price, state):
                 curr["supertrend"]
             )
 
-        # SHORT
+        # ================= SHORT =================
 
         else:
 
@@ -389,15 +415,19 @@ def process_symbol(symbol, df, price, state):
 # ================= UTILS =================
 
 utils = TradingUtils(
+
     contract_size=CONTRACT_SIZE,
+
     taker_fee=TAKER_FEE,
 
-    # CHANGED TO 5m
     timeframe="5m",
 
     days=5,
+
     telegram_token=os.getenv("supertrend_ha_fast_bot"),
+
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+
     bot_name=BOT_NAME
 )
 
@@ -406,11 +436,13 @@ utils = TradingUtils(
 def run():
 
     state = {
+
         "balance": 10000,
 
-        # DAILY TARGET TRACKER
         "daily_pnl": 0,
+
         "last_day": get_ist_time().date(),
+
         "trading_enabled": True,
 
         "symbols": {
@@ -425,14 +457,16 @@ def run():
 
         try:
 
-            # RESET DAILY LIMIT NEXT DAY
+            # ================= RESET DAILY =================
 
             today = get_ist_time().date()
 
             if today != state["last_day"]:
 
                 state["daily_pnl"] = 0
+
                 state["last_day"] = today
+
                 state["trading_enabled"] = True
 
                 utils.log(
@@ -442,7 +476,7 @@ def run():
 
             for symbol in SYMBOLS:
 
-                # ================= FETCH LIVE PRICE =================
+                # ================= LIVE PRICE =================
 
                 price = safe_fetch(
                     utils.fetch_price,
@@ -466,8 +500,6 @@ def run():
 
                     if p["side"] == "long":
 
-                        # TAKE PROFIT
-
                         if price >= p["entry"] + TP[symbol]:
 
                             pnl = (
@@ -477,8 +509,6 @@ def run():
                             )
 
                             exit_trade = True
-
-                        # STOP LOSS / TRAIL
 
                         elif price <= p["trail_sl"]:
 
@@ -494,8 +524,6 @@ def run():
 
                     else:
 
-                        # TAKE PROFIT
-
                         if price <= p["entry"] - TP[symbol]:
 
                             pnl = (
@@ -505,8 +533,6 @@ def run():
                             )
 
                             exit_trade = True
-
-                        # STOP LOSS / TRAIL
 
                         elif price >= p["trail_sl"]:
 
@@ -539,7 +565,6 @@ def run():
 
                     state["balance"] += net
 
-                    # DAILY PNL UPDATE
                     state["daily_pnl"] += net
 
                     now = get_ist_time()
@@ -566,25 +591,22 @@ def run():
 
                     positions.remove(p)
 
-                    # ================= DAILY TARGET HIT =================
+                    # ================= DAILY TARGET =================
 
                     if state["daily_pnl"] >= 500:
 
                         state["trading_enabled"] = False
 
                         utils.log(
-                            "🛑 DAILY TARGET HIT ($500). "
-                            "Trading stopped for today.",
+                            "🛑 DAILY TARGET HIT ($500). Trading stopped.",
                             tg=True
                         )
 
-                # ================= CANDLE LOGIC =================
+                # ================= FETCH CANDLES =================
 
                 df = safe_fetch(
                     utils.fetch_candles,
                     symbol,
-
-                    # CHANGED TO 5m
                     "5m"
                 )
 
@@ -614,4 +636,5 @@ def run():
 # ================= START =================
 
 if __name__ == "__main__":
+
     run()
