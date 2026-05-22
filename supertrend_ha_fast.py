@@ -11,36 +11,51 @@ from utils import TradingUtils
 
 load_dotenv()
 
-# ================= CONFIG =================
+# =========================================================
+# CONFIG
+# =========================================================
 
 BOT_NAME = "supertrend_ha_fast"
 
 SYMBOLS = ["BTCUSD"]
 
-CONTRACT_SIZE = {"BTCUSD": 0.001}
-QTY = {"BTCUSD": 1000}
+CONTRACT_SIZE = {
+    "BTCUSD": 0.001
+}
 
-# ================= RISK SETTINGS =================
+QTY = {
+    "BTCUSD": 1000
+}
 
-# INITIAL STOP LOSS
-STOPLOSS = {"BTCUSD": 300}
+# =========================================================
+# RISK SETTINGS
+# =========================================================
 
-# TARGET
-TP = {"BTCUSD": 300}
+STOPLOSS = {
+    "BTCUSD": 300
+}
 
-# TRAILING STEP SIZE
+TP = {
+    "BTCUSD": 300
+}
+
 TRAIL_STEP = 100
 
 TAKER_FEE = 0.0005
+
 SLEEP_TIME = 5
 
 SAVE_DIR = "data/supertrend_ha_fast"
+
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 IST = pytz.timezone("Asia/Kolkata")
+
 last_git_push = time.time()
 
-# ================= AUTO GIT =================
+# =========================================================
+# AUTO GIT
+# =========================================================
 
 def auto_git_push():
 
@@ -51,7 +66,10 @@ def auto_git_push():
 
     try:
 
-        subprocess.run("git add -A", shell=True)
+        subprocess.run(
+            "git add -A",
+            shell=True
+        )
 
         res = subprocess.run(
             'git diff --cached --quiet || git commit -m "auto update"',
@@ -59,9 +77,13 @@ def auto_git_push():
         )
 
         if res.returncode != 0:
+
             utils.log("✅ Changes committed")
 
-        subprocess.run("git push origin main", shell=True)
+        subprocess.run(
+            "git push origin main",
+            shell=True
+        )
 
         last_git_push = time.time()
 
@@ -69,12 +91,17 @@ def auto_git_push():
 
         utils.log(f"Git Error: {e}")
 
-# ================= TIME =================
+# =========================================================
+# TIME
+# =========================================================
 
 def get_ist_time():
+
     return datetime.now(IST)
 
-# ================= NEW CANDLE =================
+# =========================================================
+# NEW CANDLE CHECK
+# =========================================================
 
 last_candle_time = {}
 
@@ -94,7 +121,9 @@ def is_new_candle(symbol, df):
 
     return False
 
-# ================= SAFE FETCH =================
+# =========================================================
+# SAFE FETCH
+# =========================================================
 
 def safe_fetch(fetch_func, *args, retries=3, delay=1):
 
@@ -105,6 +134,7 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
             result = fetch_func(*args)
 
             if result is not None:
+
                 return result
 
         except Exception as e:
@@ -115,25 +145,36 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
 
     return None
 
-# ================= SAVE =================
+# =========================================================
+# SAVE DATA
+# =========================================================
 
 def save_processed_data(df, symbol):
 
-    path = os.path.join(SAVE_DIR, f"{symbol}_processed.csv")
+    path = os.path.join(
+        SAVE_DIR,
+        f"{symbol}_processed.csv"
+    )
 
     out = pd.DataFrame({
+
         "time": df.index,
+
         "ha_open": df["HA_open"],
         "ha_high": df["HA_high"],
         "ha_low": df["HA_low"],
         "ha_close": df["HA_close"],
+
         "supertrend": df["supertrend"],
         "trend": df["trend"]
+
     })
 
     out.to_csv(path, index=False)
 
-# ================= HEIKIN ASHI =================
+# =========================================================
+# HEIKIN ASHI
+# =========================================================
 
 def add_heikin_ashi(df):
 
@@ -173,60 +214,73 @@ def add_heikin_ashi(df):
 
     return df
 
-# ================= INDICATORS =================
+# =========================================================
+# INDICATORS
+# =========================================================
 
 def add_indicators(df):
 
-    df = df.tail(200)
+    df = df.tail(200).copy()
 
     df = add_heikin_ashi(df)
 
     st = ta.supertrend(
+
         high=df["HA_high"],
         low=df["HA_low"],
         close=df["HA_close"],
+
         length=10,
         multiplier=3
+
     )
 
     supertrend_col = [
+
         c for c in st.columns
         if "SUPERT_" in c and not c.endswith("d")
+
     ][0]
 
     trend_col = [
+
         c for c in st.columns
         if "SUPERTd_" in c
+
     ][0]
 
     df["supertrend"] = st[supertrend_col]
+
     df["trend"] = st[trend_col]
 
     return df.dropna()
 
-# ================= LAST CROSSOVER =================
+# =========================================================
+# CROSSOVER DETECTION
+# =========================================================
 
-def get_last_crossover(df, lookback=50):
+def get_crossover(df):
 
-    trend = df["trend"].values
+    if len(df) < 3:
 
-    for i in range(
-        len(trend) - 1,
-        max(1, len(trend) - lookback),
-        -1
-    ):
+        return None, None
 
-        if trend[i] != trend[i - 1]:
+    prev_trend = df["trend"].iloc[-2]
 
-            return i, trend[i]
+    curr_trend = df["trend"].iloc[-1]
+
+    # TREND FLIP
+    if prev_trend != curr_trend:
+
+        return len(df) - 1, curr_trend
 
     return None, None
 
-# ================= STRATEGY =================
+# =========================================================
+# STRATEGY
+# =========================================================
 
 def process_symbol(symbol, df, price, state):
-
-    # STOP NEW ENTRIES IF DAILY TARGET HIT
 
     if not state["trading_enabled"]:
         return
@@ -242,180 +296,267 @@ def process_symbol(symbol, df, price, state):
     if len(df) < 30:
         return
 
-    curr = df.iloc[-2]
+    # USE LATEST CLOSED CANDLE
+    curr = df.iloc[-1]
 
-    # ================= LEVEL INIT =================
+    # =====================================================
+    # LEVEL INIT
+    # =====================================================
 
     if "level" not in sym:
 
         sym["level"] = {
+
             "high": None,
             "low": None,
+
             "side": None,
+
             "used": False,
-            "last_cross_idx": None
+
+            "last_cross_time": None
+
         }
 
     level = sym["level"]
 
-    # ================= NEW CROSSOVER =================
+    # =====================================================
+    # DETECT CROSSOVER
+    # =====================================================
 
-    idx, trend_dir = get_last_crossover(df)
+    idx, trend_dir = get_crossover(df)
 
-    if idx is not None and idx != level["last_cross_idx"]:
+    if idx is not None:
 
-        level["last_cross_idx"] = idx
+        candle_time = df.index[idx]
 
-        # RESET ENTRY FLAG
-        level["used"] = False
+        # AVOID DUPLICATE PROCESSING
+        if candle_time != level["last_cross_time"]:
 
-        # ================= LONG CROSSOVER =================
+            level["last_cross_time"] = candle_time
 
-        if trend_dir == 1:
+            level["used"] = False
 
-            crossover_high = df["HA_high"].iloc[idx]
+            # =================================================
+            # LONG CROSSOVER
+            # =================================================
 
-            level.update({
-                "high": crossover_high,
-                "low": None,
-                "side": "long"
-            })
+            if trend_dir == 1:
 
-            utils.log(
-                f"🟢 LONG LEVEL SET -> HIGH: {round(crossover_high, 2)}"
-            )
+                crossover_high = df["HA_high"].iloc[idx]
 
-        # ================= SHORT CROSSOVER =================
+                level.update({
 
-        elif trend_dir == -1:
+                    "high": crossover_high,
+                    "low": None,
 
-            crossover_low = df["HA_low"].iloc[idx]
+                    "side": "long"
 
-            level.update({
-                "low": crossover_low,
-                "high": None,
-                "side": "short"
-            })
+                })
 
-            utils.log(
-                f"🔴 SHORT LEVEL SET -> LOW: {round(crossover_low, 2)}"
-            )
+                utils.log(
 
-    close = curr["HA_close"]
+                    f"🟢 LONG LEVEL SET -> "
+                    f"HIGH: {round(crossover_high, 2)}",
 
-    # ==================================================
-    # ENTRY LOGIC
-    # ==================================================
+                    tg=True
+
+                )
+
+            # =================================================
+            # SHORT CROSSOVER
+            # =================================================
+
+            elif trend_dir == -1:
+
+                crossover_low = df["HA_low"].iloc[idx]
+
+                level.update({
+
+                    "low": crossover_low,
+                    "high": None,
+
+                    "side": "short"
+
+                })
+
+                utils.log(
+
+                    f"🔴 SHORT LEVEL SET -> "
+                    f"LOW: {round(crossover_low, 2)}",
+
+                    tg=True
+
+                )
+
+    # =====================================================
+    # ENTRY CONFIRMATION
+    # =====================================================
+
+    # USE REAL CANDLE CLOSE FOR FASTER ENTRIES
+    close = curr["Close"]
+
+    # =====================================================
+    # LONG ENTRY
+    # =====================================================
 
     if not level["used"]:
 
-        # ================= LONG ENTRY =================
-
         if (
+
             level["side"] == "long"
             and level["high"] is not None
-            and close > level["high"]
+            and close >= level["high"]
+
         ):
 
-            if not any(
+            already_long = any(
+
                 p["side"] == "long"
                 for p in positions
-            ):
+
+            )
+
+            if not already_long:
 
                 sl = price - STOPLOSS[symbol]
 
                 positions.append({
+
                     "side": "long",
+
                     "entry": price,
+
                     "qty": qty,
+
                     "trail_sl": sl,
+
                     "entry_time": get_ist_time()
+
                 })
 
                 level["used"] = True
 
                 utils.log(
-                    f"🚀 {symbol} LONG ENTRY @ {price}",
+
+                    f"🚀 {symbol} LONG ENTRY @ {price} | "
+                    f"BREAKOUT ABOVE {round(level['high'], 2)}",
+
                     tg=True
+
                 )
 
-        # ================= SHORT ENTRY =================
+        # =================================================
+        # SHORT ENTRY
+        # =================================================
 
         elif (
+
             level["side"] == "short"
             and level["low"] is not None
-            and close < level["low"]
+            and close <= level["low"]
+
         ):
 
-            if not any(
+            already_short = any(
+
                 p["side"] == "short"
                 for p in positions
-            ):
+
+            )
+
+            if not already_short:
 
                 sl = price + STOPLOSS[symbol]
 
                 positions.append({
+
                     "side": "short",
+
                     "entry": price,
+
                     "qty": qty,
+
                     "trail_sl": sl,
+
                     "entry_time": get_ist_time()
+
                 })
 
                 level["used"] = True
 
                 utils.log(
-                    f"🔻 {symbol} SHORT ENTRY @ {price}",
+
+                    f"🔻 {symbol} SHORT ENTRY @ {price} | "
+                    f"BREAKDOWN BELOW {round(level['low'], 2)}",
+
                     tg=True
+
                 )
 
-    # ================= STEP TRAILING STOP =================
+    # =====================================================
+    # TRAILING STOP LOSS
+    # =====================================================
 
     for p in positions[:]:
 
-        # ================= LONG =================
+        # =================================================
+        # LONG
+        # =================================================
 
         if p["side"] == "long":
 
             profit_move = price - p["entry"]
 
-            # NUMBER OF 100-POINT STEPS
-            steps = int(profit_move // TRAIL_STEP)
+            steps = int(
+                profit_move // TRAIL_STEP
+            )
 
-            # MOVE STOP LOSS STEP-BY-STEP
             new_sl = (
+
                 p["entry"]
                 - STOPLOSS[symbol]
                 + (steps * TRAIL_STEP)
+
             )
 
             p["trail_sl"] = max(
+
                 p["trail_sl"],
                 new_sl
+
             )
 
-        # ================= SHORT =================
+        # =================================================
+        # SHORT
+        # =================================================
 
         else:
 
             profit_move = p["entry"] - price
 
-            # NUMBER OF 100-POINT STEPS
-            steps = int(profit_move // TRAIL_STEP)
+            steps = int(
+                profit_move // TRAIL_STEP
+            )
 
-            # MOVE STOP LOSS STEP-BY-STEP
             new_sl = (
+
                 p["entry"]
                 + STOPLOSS[symbol]
                 - (steps * TRAIL_STEP)
+
             )
 
             p["trail_sl"] = min(
+
                 p["trail_sl"],
                 new_sl
+
             )
 
-# ================= UTILS =================
+# =========================================================
+# UTILS
+# =========================================================
 
 utils = TradingUtils(
 
@@ -427,14 +568,20 @@ utils = TradingUtils(
 
     days=5,
 
-    telegram_token=os.getenv("supertrend_ha_fast_bot"),
+    telegram_token=os.getenv(
+        "supertrend_ha_fast_bot"
+    ),
 
-    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+    telegram_chat_id=os.getenv(
+        "TELEGRAM_CHAT_ID"
+    ),
 
     bot_name=BOT_NAME
 )
 
-# ================= MAIN =================
+# =========================================================
+# MAIN
+# =========================================================
 
 def run():
 
@@ -449,18 +596,27 @@ def run():
         "trading_enabled": True,
 
         "symbols": {
-            s: {"positions": []}
+
+            s: {
+                "positions": []
+            }
+
             for s in SYMBOLS
         }
     }
 
-    utils.log("🚀 BOT STARTED", tg=True)
+    utils.log(
+        "🚀 BOT STARTED",
+        tg=True
+    )
 
     while True:
 
         try:
 
-            # ================= RESET DAILY =================
+            # =================================================
+            # DAILY RESET
+            # =================================================
 
             today = get_ist_time().date()
 
@@ -473,13 +629,22 @@ def run():
                 state["trading_enabled"] = True
 
                 utils.log(
+
                     "✅ New Day Started - Trading Enabled",
+
                     tg=True
+
                 )
+
+            # =================================================
+            # SYMBOL LOOP
+            # =================================================
 
             for symbol in SYMBOLS:
 
-                # ================= LIVE PRICE =================
+                # =============================================
+                # LIVE PRICE
+                # =============================================
 
                 price = safe_fetch(
                     utils.fetch_price,
@@ -493,60 +658,84 @@ def run():
 
                 positions = sym["positions"]
 
-                # ================= EXIT LOGIC =================
+                # =============================================
+                # EXIT LOGIC
+                # =============================================
 
                 for p in positions[:]:
 
                     exit_trade = False
 
-                    # ================= LONG =================
+                    # =========================================
+                    # LONG
+                    # =========================================
 
                     if p["side"] == "long":
 
                         # TARGET HIT
-                        if price >= p["entry"] + TP[symbol]:
+                        if price >= (
+
+                            p["entry"] +
+                            TP[symbol]
+
+                        ):
 
                             pnl = (
+
                                 (price - p["entry"])
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
+
                             )
 
                             exit_trade = True
 
-                        # TRAILING STOP HIT
+                        # TRAILING SL HIT
                         elif price <= p["trail_sl"]:
 
                             pnl = (
+
                                 (price - p["entry"])
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
+
                             )
 
                             exit_trade = True
 
-                    # ================= SHORT =================
+                    # =========================================
+                    # SHORT
+                    # =========================================
 
                     else:
 
                         # TARGET HIT
-                        if price <= p["entry"] - TP[symbol]:
+                        if price <= (
+
+                            p["entry"] -
+                            TP[symbol]
+
+                        ):
 
                             pnl = (
+
                                 (p["entry"] - price)
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
+
                             )
 
                             exit_trade = True
 
-                        # TRAILING STOP HIT
+                        # TRAILING SL HIT
                         elif price >= p["trail_sl"]:
 
                             pnl = (
+
                                 (p["entry"] - price)
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
+
                             )
 
                             exit_trade = True
@@ -554,18 +743,26 @@ def run():
                     if not exit_trade:
                         continue
 
+                    # =========================================
+                    # FEES
+                    # =========================================
+
                     fee = (
+
                         utils.commission(
                             p["entry"],
                             p["qty"],
                             symbol
                         )
+
                         +
+
                         utils.commission(
                             price,
                             p["qty"],
                             symbol
                         )
+
                     )
 
                     net = pnl - fee
@@ -576,59 +773,97 @@ def run():
 
                     now = get_ist_time()
 
-                    emoji = "🟢" if net > 0 else "🔴"
+                    emoji = (
+                        "🟢"
+                        if net > 0
+                        else "🔴"
+                    )
 
                     utils.log(
+
                         f"{emoji} {symbol} EXIT @ {price} | "
-                        f"PNL: {round(net,6)} | "
-                        f"DAILY: {round(state['daily_pnl'],2)} | "
-                        f"SL: {round(p['trail_sl'],2)}",
+                        f"PNL: {round(net, 6)} | "
+                        f"DAILY: {round(state['daily_pnl'], 2)} | "
+                        f"SL: {round(p['trail_sl'], 2)}",
+
                         tg=True
+
                     )
 
                     utils.save_trade({
+
                         "symbol": symbol,
+
                         "side": p["side"],
+
                         "entry_price": p["entry"],
+
                         "exit_price": price,
+
                         "qty": p["qty"],
+
                         "net_pnl": round(net, 6),
+
                         "entry_time": p.get("entry_time"),
+
                         "exit_time": now
+
                     })
 
                     positions.remove(p)
 
-                    # ================= DAILY TARGET =================
+                    # =========================================
+                    # DAILY TARGET
+                    # =========================================
 
                     if state["daily_pnl"] >= 500:
 
                         state["trading_enabled"] = False
 
                         utils.log(
-                            "🛑 DAILY TARGET HIT ($500). Trading stopped.",
+
+                            "🛑 DAILY TARGET HIT ($500). "
+                            "Trading stopped.",
+
                             tg=True
+
                         )
 
-                # ================= FETCH CANDLES =================
+                # =============================================
+                # FETCH CANDLES
+                # =============================================
 
                 df = safe_fetch(
+
                     utils.fetch_candles,
                     symbol,
                     "5m"
+
                 )
 
                 if df is None or df.empty:
                     continue
 
+                # ONLY PROCESS ON NEW CANDLE
                 if not is_new_candle(symbol, df):
                     continue
 
+                # =============================================
+                # STRATEGY
+                # =============================================
+
                 process_symbol(
+
                     symbol,
                     df,
                     price,
                     state
+
+                )
+
+                save_processed_data(
+                    df,
+                    symbol
                 )
 
                 auto_git_push()
@@ -641,7 +876,9 @@ def run():
 
             time.sleep(5)
 
-# ================= START =================
+# =========================================================
+# START
+# =========================================================
 
 if __name__ == "__main__":
 
