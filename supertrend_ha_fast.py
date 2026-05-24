@@ -220,8 +220,8 @@ def get_crossover(df):
     if len(df) < 3:
         return None
 
-    prev_trend = df["trend"].iloc[-2]
-    curr_trend = df["trend"].iloc[-1]
+    prev_trend = df["trend"].iloc[-3]
+    curr_trend = df["trend"].iloc[-2]
 
     if prev_trend != curr_trend:
         return curr_trend
