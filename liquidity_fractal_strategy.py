@@ -16,7 +16,7 @@ load_dotenv()
 # CONFIG
 # =========================================================
 
-BOT_NAME = "professional_liquidity_sweep"
+BOT_NAME = "btc_breakout_pro"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -44,8 +44,6 @@ ATR_LENGTH = 14
 
 SWING_LOOKBACK = 3
 
-MIN_BODY_RATIO = 0.5
-
 RISK_REWARD = 3.0
 
 USE_TREND_FILTER = True
@@ -53,6 +51,8 @@ USE_TREND_FILTER = True
 USE_TRAILING_STOP = True
 
 TRAIL_AT_R = 1.0
+
+ATR_BREAKOUT_FILTER = 0.2
 
 # =========================================================
 # DAILY SETTINGS
@@ -81,7 +81,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testmyaglostrateg"),
+    telegram_token=os.getenv("testmyaglostrategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -150,7 +150,7 @@ def detect_swings(df):
             i + 1:i + SWING_LOOKBACK + 1
         ]
 
-        # Swing High
+        # SWING HIGH
         if (
             current_high > left_highs.max()
             and
@@ -162,7 +162,7 @@ def detect_swings(df):
                 "swing_high"
             ] = current_high
 
-        # Swing Low
+        # SWING LOW
         if (
             current_low < left_lows.min()
             and
@@ -221,7 +221,7 @@ def generate_signals(df):
     for i in range(50, len(df)):
 
         # =====================================================
-        # UPDATE LEVELS
+        # UPDATE SWINGS
         # =====================================================
 
         if not np.isnan(df["swing_low"].iloc[i - 2]):
@@ -236,73 +236,30 @@ def generate_signals(df):
                 df["swing_high"].iloc[i - 2]
             )
 
-        # =====================================================
-        # CONFIRMATION CANDLE
-        # =====================================================
-
-        confirm_open = df["Open"].iloc[i - 1]
-
         confirm_close = df["Close"].iloc[i - 1]
-
-        confirm_high = df["High"].iloc[i - 1]
-
-        confirm_low = df["Low"].iloc[i - 1]
-
-        # =====================================================
-        # SWEEP CANDLE
-        # =====================================================
-
-        sweep_open = df["Open"].iloc[i - 2]
-
-        sweep_close = df["Close"].iloc[i - 2]
-
-        sweep_high = df["High"].iloc[i - 2]
-
-        sweep_low = df["Low"].iloc[i - 2]
 
         atr = df["ATR"].iloc[i - 1]
 
         ema = df["EMA"].iloc[i - 1]
 
         # =====================================================
-        # LONG SETUP
+        # LONG BREAKOUT
         # =====================================================
 
-        if not np.isnan(last_swing_low):
+        if (
+            not np.isnan(last_swing_high)
+            and
+            not np.isnan(last_swing_low)
+        ):
 
-            # Liquidity Sweep
-            swept_below = (
-                sweep_low < last_swing_low
+            breakout_buy = (
+
+                confirm_close
+                >
+                last_swing_high
+                + (atr * ATR_BREAKOUT_FILTER)
             )
 
-            reclaimed = (
-                sweep_close > last_swing_low
-            )
-
-            # Bullish Confirmation
-            bullish_confirm = (
-                confirm_close > confirm_open
-            )
-
-            body_ratio = (
-                (confirm_close - confirm_low)
-                /
-                max(
-                    confirm_high - confirm_low,
-                    0.0001
-                )
-            )
-
-            strong_body = (
-                body_ratio >= MIN_BODY_RATIO
-            )
-
-            # Break previous candle high
-            momentum_break = (
-                confirm_close > sweep_high
-            )
-
-            # Trend Filter
             bullish_trend = (
                 confirm_close > ema
             )
@@ -311,76 +268,56 @@ def generate_signals(df):
 
                 bullish_trend = True
 
-            # ENTRY CONDITION
             if (
-                swept_below
-                and reclaimed
-                and bullish_confirm
-                and strong_body
-                and momentum_break
+                breakout_buy
                 and bullish_trend
             ):
 
                 entry = confirm_close
 
-                sl = sweep_low
+                sl = last_swing_low
 
                 risk = abs(entry - sl)
 
-                tp = (
-                    entry
-                    +
-                    (risk * RISK_REWARD)
-                )
+                if risk > 0:
 
-                df.loc[
-                    df.index[i],
-                    "long_signal"
-                ] = True
+                    tp = (
+                        entry
+                        +
+                        (risk * RISK_REWARD)
+                    )
 
-                df.loc[
-                    df.index[i],
-                    "long_sl"
-                ] = sl
+                    df.loc[
+                        df.index[i],
+                        "long_signal"
+                    ] = True
 
-                df.loc[
-                    df.index[i],
-                    "long_tp"
-                ] = tp
+                    df.loc[
+                        df.index[i],
+                        "long_sl"
+                    ] = sl
+
+                    df.loc[
+                        df.index[i],
+                        "long_tp"
+                    ] = tp
 
         # =====================================================
-        # SHORT SETUP
+        # SHORT BREAKOUT
         # =====================================================
 
-        if not np.isnan(last_swing_high):
+        if (
+            not np.isnan(last_swing_low)
+            and
+            not np.isnan(last_swing_high)
+        ):
 
-            swept_above = (
-                sweep_high > last_swing_high
-            )
+            breakout_sell = (
 
-            reclaimed = (
-                sweep_close < last_swing_high
-            )
-
-            bearish_confirm = (
-                confirm_close < confirm_open
-            )
-
-            body_ratio = (
-                (confirm_high - confirm_close)
-                /
-                max(
-                    confirm_high - confirm_low,
-                    0.0001
-                )
-            )
-
-            strong_body = (
-                body_ratio >= MIN_BODY_RATIO
-            )
-
-            momentum_break = (
-                confirm_close < sweep_low
+                confirm_close
+                <
+                last_swing_low
+                - (atr * ATR_BREAKOUT_FILTER)
             )
 
             bearish_trend = (
@@ -392,40 +329,38 @@ def generate_signals(df):
                 bearish_trend = True
 
             if (
-                swept_above
-                and reclaimed
-                and bearish_confirm
-                and strong_body
-                and momentum_break
+                breakout_sell
                 and bearish_trend
             ):
 
                 entry = confirm_close
 
-                sl = sweep_high
+                sl = last_swing_high
 
                 risk = abs(sl - entry)
 
-                tp = (
-                    entry
-                    -
-                    (risk * RISK_REWARD)
-                )
+                if risk > 0:
 
-                df.loc[
-                    df.index[i],
-                    "short_signal"
-                ] = True
+                    tp = (
+                        entry
+                        -
+                        (risk * RISK_REWARD)
+                    )
 
-                df.loc[
-                    df.index[i],
-                    "short_sl"
-                ] = sl
+                    df.loc[
+                        df.index[i],
+                        "short_signal"
+                    ] = True
 
-                df.loc[
-                    df.index[i],
-                    "short_tp"
-                ] = tp
+                    df.loc[
+                        df.index[i],
+                        "short_sl"
+                    ] = sl
+
+                    df.loc[
+                        df.index[i],
+                        "short_tp"
+                    ] = tp
 
     return df
 
@@ -797,7 +732,7 @@ def run():
     }
 
     utils.log(
-        "🚀 Professional Liquidity Sweep Strategy Started",
+        "🚀 BTC BREAKOUT BOT STARTED",
         tg=True
     )
 

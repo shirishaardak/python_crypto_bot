@@ -38,7 +38,7 @@ STOPLOSS = {
 }
 
 TP = {
-    "BTCUSD": 500
+    "BTCUSD": 5000
 }
 
 TAKER_FEE = 0.0005
@@ -51,7 +51,7 @@ MIN_BALANCE = 1000
 
 # ================= TARGET / LOSS =================
 
-DAILY_TARGET = 1000
+DAILY_TARGET = 10000
 
 MAX_DAILY_LOSS = None
 
@@ -62,7 +62,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testmyaglostrateg"),
+    telegram_token=os.getenv("testmyaglostrategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
@@ -411,7 +411,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         elif (
             pos["side"] == "long"
             and (
-                price < last.Trendline
+                last.HA_close < last.Trendline
                 or price >= pos["entry"] + TP[symbol]
             )
         ):
@@ -425,7 +425,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         elif (
             pos["side"] == "short"
             and (
-                price > last.Trendline
+                last.HA_close > last.Trendline
                 or price <= pos["entry"] - TP[symbol]
             )
         ):
@@ -695,8 +695,6 @@ def run():
                     state[symbol],
                     is_new_candle
                 )
-
-                auto_git_push()
 
             time.sleep(3)
 
