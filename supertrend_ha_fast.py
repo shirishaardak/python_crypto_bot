@@ -27,10 +27,6 @@ QTY = {
     "BTCUSD": 1000
 }
 
-# =========================================================
-# RISK SETTINGS
-# =========================================================
-
 STOPLOSS = {
     "BTCUSD": 300
 }
@@ -66,19 +62,12 @@ def auto_git_push():
 
     try:
 
-        subprocess.run(
-            "git add -A",
-            shell=True
-        )
+        subprocess.run("git add -A", shell=True)
 
-        res = subprocess.run(
+        subprocess.run(
             'git diff --cached --quiet || git commit -m "auto update"',
             shell=True
         )
-
-        if res.returncode != 0:
-
-            utils.log("✅ Changes committed")
 
         subprocess.run(
             "git push origin main",
@@ -96,7 +85,6 @@ def auto_git_push():
 # =========================================================
 
 def get_ist_time():
-
     return datetime.now(IST)
 
 # =========================================================
@@ -110,12 +98,10 @@ def is_new_candle(symbol, df):
     t = df.index[-1]
 
     if symbol not in last_candle_time:
-
         last_candle_time[symbol] = t
         return True
 
     if t != last_candle_time[symbol]:
-
         last_candle_time[symbol] = t
         return True
 
@@ -134,43 +120,14 @@ def safe_fetch(fetch_func, *args, retries=3, delay=1):
             result = fetch_func(*args)
 
             if result is not None:
-
                 return result
 
         except Exception as e:
-
             print("Fetch error:", e)
 
         time.sleep(delay)
 
     return None
-
-# =========================================================
-# SAVE DATA
-# =========================================================
-
-def save_processed_data(df, symbol):
-
-    path = os.path.join(
-        SAVE_DIR,
-        f"{symbol}_processed.csv"
-    )
-
-    out = pd.DataFrame({
-
-        "time": df.index,
-
-        "ha_open": df["HA_open"],
-        "ha_high": df["HA_high"],
-        "ha_low": df["HA_low"],
-        "ha_close": df["HA_close"],
-
-        "supertrend": df["supertrend"],
-        "trend": df["trend"]
-
-    })
-
-    out.to_csv(path, index=False)
 
 # =========================================================
 # HEIKIN ASHI
@@ -192,8 +149,8 @@ def add_heikin_ashi(df):
     for i in range(1, len(df)):
 
         ha_open[i] = (
-            ha_open[i - 1] +
-            ha_close.iloc[i - 1]
+            ha_open[i - 1]
+            + ha_close.iloc[i - 1]
         ) / 2
 
     df["HA_open"] = ha_open
@@ -232,13 +189,13 @@ def add_indicators(df):
 
         length=10,
         multiplier=3
-
     )
 
     supertrend_col = [
 
         c for c in st.columns
-        if "SUPERT_" in c and not c.endswith("d")
+        if "SUPERT_" in c
+        and not c.endswith("d")
 
     ][0]
 
@@ -250,34 +207,79 @@ def add_indicators(df):
     ][0]
 
     df["supertrend"] = st[supertrend_col]
-
     df["trend"] = st[trend_col]
 
     return df.dropna()
 
 # =========================================================
-# CROSSOVER DETECTION
+# CROSSOVER
 # =========================================================
 
 def get_crossover(df):
 
     if len(df) < 3:
-
-        return None, None
+        return None
 
     prev_trend = df["trend"].iloc[-2]
-
     curr_trend = df["trend"].iloc[-1]
 
-    # TREND FLIP
     if prev_trend != curr_trend:
+        return curr_trend
 
-        return len(df) - 1, curr_trend
-
-    return None, None
+    return None
 
 # =========================================================
-# STRATEGY
+# TRAILING STOP UPDATE
+# =========================================================
+
+def update_trailing_stop(symbol, price, position):
+
+    if position["side"] == "long":
+
+        profit_move = price - position["entry"]
+
+        if profit_move <= 0:
+            return
+
+        steps = int(profit_move // TRAIL_STEP)
+
+        new_sl = (
+
+            position["entry"]
+            - STOPLOSS[symbol]
+            + steps * TRAIL_STEP
+
+        )
+
+        position["trail_sl"] = max(
+            position["trail_sl"],
+            new_sl
+        )
+
+    elif position["side"] == "short":
+
+        profit_move = position["entry"] - price
+
+        if profit_move <= 0:
+            return
+
+        steps = int(profit_move // TRAIL_STEP)
+
+        new_sl = (
+
+            position["entry"]
+            + STOPLOSS[symbol]
+            - steps * TRAIL_STEP
+
+        )
+
+        position["trail_sl"] = min(
+            position["trail_sl"],
+            new_sl
+        )
+
+# =========================================================
+# ENTRY
 # =========================================================
 
 def process_symbol(symbol, df, price, state):
@@ -286,154 +288,52 @@ def process_symbol(symbol, df, price, state):
         return
 
     sym = state["symbols"][symbol]
-
     positions = sym["positions"]
+
+    # only one trade per symbol
+    if len(positions) > 0:
+        return
+
+    trend_dir = get_crossover(df)
+
+    if trend_dir is None:
+        return
 
     qty = QTY[symbol]
 
-    if len(df) < 30:
-        return
-
-    # =====================================================
-    # SUPERTREND CROSSOVER ENTRY
-    # =====================================================
-
-    idx, trend_dir = get_crossover(df)
-
-    if idx is None:
-        return
-
-    already_long = any(
-        p["side"] == "long"
-        for p in positions
-    )
-
-    already_short = any(
-        p["side"] == "short"
-        for p in positions
-    )
-
-    # =====================================================
-    # LONG ENTRY
-    # =====================================================
-
-    if trend_dir == 1 and not already_long:
-
-        sl = price - STOPLOSS[symbol]
+    if trend_dir == 1:
 
         positions.append({
 
             "side": "long",
-
             "entry": price,
-
             "qty": qty,
-
-            "trail_sl": sl,
-
+            "trail_sl": price - STOPLOSS[symbol],
             "entry_time": get_ist_time()
 
         })
 
         utils.log(
-
-            f"🚀 {symbol} LONG ENTRY @ {price} | "
-            f"SUPERTREND CROSSOVER BUY",
-
+            f"🚀 {symbol} LONG ENTRY @ {price}",
             tg=True
-
         )
 
-    # =====================================================
-    # SHORT ENTRY
-    # =====================================================
-
-    elif trend_dir == -1 and not already_short:
-
-        sl = price + STOPLOSS[symbol]
+    elif trend_dir == -1:
 
         positions.append({
 
             "side": "short",
-
             "entry": price,
-
             "qty": qty,
-
-            "trail_sl": sl,
-
+            "trail_sl": price + STOPLOSS[symbol],
             "entry_time": get_ist_time()
 
         })
 
         utils.log(
-
-            f"🔻 {symbol} SHORT ENTRY @ {price} | "
-            f"SUPERTREND CROSSOVER SELL",
-
+            f"🔻 {symbol} SHORT ENTRY @ {price}",
             tg=True
-
         )
-
-    # =====================================================
-    # TRAILING STOP LOSS
-    # =====================================================
-
-    for p in positions[:]:
-
-        # =================================================
-        # LONG
-        # =================================================
-
-        if p["side"] == "long":
-
-            profit_move = price - p["entry"]
-
-            steps = int(
-                profit_move // TRAIL_STEP
-            )
-
-            new_sl = (
-
-                p["entry"]
-                - STOPLOSS[symbol]
-                + (steps * TRAIL_STEP)
-
-            )
-
-            p["trail_sl"] = max(
-
-                p["trail_sl"],
-                new_sl
-
-            )
-
-        # =================================================
-        # SHORT
-        # =================================================
-
-        else:
-
-            profit_move = p["entry"] - price
-
-            steps = int(
-                profit_move // TRAIL_STEP
-            )
-
-            new_sl = (
-
-                p["entry"]
-                + STOPLOSS[symbol]
-                - (steps * TRAIL_STEP)
-
-            )
-
-            p["trail_sl"] = min(
-
-                p["trail_sl"],
-                new_sl
-
-            )
 
 # =========================================================
 # UTILS
@@ -495,37 +395,20 @@ def run():
 
         try:
 
-            # =================================================
-            # DAILY RESET
-            # =================================================
-
             today = get_ist_time().date()
 
             if today != state["last_day"]:
 
                 state["daily_pnl"] = 0
-
                 state["last_day"] = today
-
                 state["trading_enabled"] = True
 
                 utils.log(
-
                     "✅ New Day Started - Trading Enabled",
-
                     tg=True
-
                 )
 
-            # =================================================
-            # SYMBOL LOOP
-            # =================================================
-
             for symbol in SYMBOLS:
-
-                # =============================================
-                # LIVE PRICE
-                # =============================================
 
                 price = safe_fetch(
                     utils.fetch_price,
@@ -536,30 +419,26 @@ def run():
                     continue
 
                 sym = state["symbols"][symbol]
-
                 positions = sym["positions"]
 
-                # =============================================
-                # EXIT LOGIC
-                # =============================================
+                # ====================================
+                # EXIT + TRAILING STOP
+                # ====================================
 
                 for p in positions[:]:
 
-                    exit_trade = False
+                    update_trailing_stop(
+                        symbol,
+                        price,
+                        p
+                    )
 
-                    # =========================================
-                    # LONG
-                    # =========================================
+                    exit_trade = False
+                    pnl = 0
 
                     if p["side"] == "long":
 
-                        # TARGET HIT
-                        if price >= (
-
-                            p["entry"] +
-                            TP[symbol]
-
-                        ):
+                        if price >= p["entry"] + TP[symbol]:
 
                             pnl = (
 
@@ -571,7 +450,6 @@ def run():
 
                             exit_trade = True
 
-                        # TRAILING SL HIT
                         elif price <= p["trail_sl"]:
 
                             pnl = (
@@ -584,19 +462,9 @@ def run():
 
                             exit_trade = True
 
-                    # =========================================
-                    # SHORT
-                    # =========================================
-
                     else:
 
-                        # TARGET HIT
-                        if price <= (
-
-                            p["entry"] -
-                            TP[symbol]
-
-                        ):
+                        if price <= p["entry"] - TP[symbol]:
 
                             pnl = (
 
@@ -608,7 +476,6 @@ def run():
 
                             exit_trade = True
 
-                        # TRAILING SL HIT
                         elif price >= p["trail_sl"]:
 
                             pnl = (
@@ -621,132 +488,82 @@ def run():
 
                             exit_trade = True
 
-                    if not exit_trade:
-                        continue
+                    if exit_trade:
 
-                    # =========================================
-                    # FEES
-                    # =========================================
+                        fee = (
 
-                    fee = (
+                            utils.commission(
+                                p["entry"],
+                                p["qty"],
+                                symbol
+                            )
 
-                        utils.commission(
-                            p["entry"],
-                            p["qty"],
-                            symbol
+                            +
+
+                            utils.commission(
+                                price,
+                                p["qty"],
+                                symbol
+                            )
                         )
 
-                        +
+                        net = pnl - fee
 
-                        utils.commission(
-                            price,
-                            p["qty"],
-                            symbol
-                        )
-
-                    )
-
-                    net = pnl - fee
-
-                    state["balance"] += net
-
-                    state["daily_pnl"] += net
-
-                    now = get_ist_time()
-
-                    emoji = (
-                        "🟢"
-                        if net > 0
-                        else "🔴"
-                    )
-
-                    utils.log(
-
-                        f"{emoji} {symbol} EXIT @ {price} | "
-                        f"PNL: {round(net, 6)} | "
-                        f"DAILY: {round(state['daily_pnl'], 2)} | "
-                        f"SL: {round(p['trail_sl'], 2)}",
-
-                        tg=True
-
-                    )
-
-                    utils.save_trade({
-
-                        "symbol": symbol,
-
-                        "side": p["side"],
-
-                        "entry_price": p["entry"],
-
-                        "exit_price": price,
-
-                        "qty": p["qty"],
-
-                        "net_pnl": round(net, 6),
-
-                        "entry_time": p.get("entry_time"),
-
-                        "exit_time": now
-
-                    })
-
-                    positions.remove(p)
-
-                    # =========================================
-                    # DAILY TARGET
-                    # =========================================
-
-                    if state["daily_pnl"] >= 500:
-
-                        state["trading_enabled"] = False
+                        state["balance"] += net
+                        state["daily_pnl"] += net
 
                         utils.log(
 
-                            "🛑 DAILY TARGET HIT ($500). "
-                            "Trading stopped.",
+                            f"{'🟢' if net > 0 else '🔴'} "
+                            f"{symbol} EXIT @ {price} | "
+                            f"PNL: {round(net, 2)} | "
+                            f"DAILY: {round(state['daily_pnl'], 2)} | "
+                            f"SL: {round(p['trail_sl'], 2)}",
 
                             tg=True
-
                         )
 
-                # =============================================
-                # FETCH CANDLES
-                # =============================================
+                        utils.save_trade({
+
+                            "symbol": symbol,
+                            "side": p["side"],
+                            "entry_price": p["entry"],
+                            "exit_price": price,
+                            "qty": p["qty"],
+                            "net_pnl": round(net, 6),
+                            "entry_time": p["entry_time"],
+                            "exit_time": get_ist_time()
+
+                        })
+
+                        positions.remove(p)
+
+                # ====================================
+                # ENTRY ONLY ON NEW CANDLE
+                # ====================================
 
                 df = safe_fetch(
-
                     utils.fetch_candles,
                     symbol,
                     "5m"
-
                 )
 
                 if df is None or df.empty:
                     continue
 
-                # ONLY PROCESS ON NEW CANDLE
                 if not is_new_candle(symbol, df):
                     continue
 
-                # =============================================
-                # ADD INDICATORS
-                # =============================================
-
                 processed_df = add_indicators(df)
 
-                # =============================================
-                # STRATEGY
-                # =============================================
-
                 process_symbol(
-
                     symbol,
                     processed_df,
                     price,
                     state
-
                 )
+
+            auto_git_push()
 
             time.sleep(SLEEP_TIME)
 
@@ -761,5 +578,4 @@ def run():
 # =========================================================
 
 if __name__ == "__main__":
-
     run()
