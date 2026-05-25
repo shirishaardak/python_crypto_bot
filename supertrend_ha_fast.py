@@ -35,7 +35,7 @@ TP = {
     "BTCUSD": 300
 }
 
-TRAIL_STEP = 100
+TRAIL_STEP = 5
 
 TAKER_FEE = 0.0005
 
@@ -182,28 +182,22 @@ def add_indicators(df):
     df = add_heikin_ashi(df)
 
     st = ta.supertrend(
-
         high=df["HA_high"],
         low=df["HA_low"],
         close=df["HA_close"],
-
         length=10,
         multiplier=3
     )
 
     supertrend_col = [
-
         c for c in st.columns
         if "SUPERT_" in c
         and not c.endswith("d")
-
     ][0]
 
     trend_col = [
-
         c for c in st.columns
         if "SUPERTd_" in c
-
     ][0]
 
     df["supertrend"] = st[supertrend_col]
@@ -212,16 +206,16 @@ def add_indicators(df):
     return df.dropna()
 
 # =========================================================
-# CROSSOVER
+# CROSSOVER FIXED
 # =========================================================
 
 def get_crossover(df):
 
-    if len(df) < 3:
+    if len(df) < 2:
         return None
 
-    prev_trend = df["trend"].iloc[-3]
-    curr_trend = df["trend"].iloc[-2]
+    prev_trend = df["trend"].iloc[-2]
+    curr_trend = df["trend"].iloc[-1]
 
     if prev_trend != curr_trend:
         return curr_trend
@@ -229,7 +223,7 @@ def get_crossover(df):
     return None
 
 # =========================================================
-# TRAILING STOP UPDATE
+# TRAILING STOP
 # =========================================================
 
 def update_trailing_stop(symbol, price, position):
@@ -244,11 +238,9 @@ def update_trailing_stop(symbol, price, position):
         steps = int(profit_move // TRAIL_STEP)
 
         new_sl = (
-
             position["entry"]
             - STOPLOSS[symbol]
             + steps * TRAIL_STEP
-
         )
 
         position["trail_sl"] = max(
@@ -256,7 +248,7 @@ def update_trailing_stop(symbol, price, position):
             new_sl
         )
 
-    elif position["side"] == "short":
+    else:
 
         profit_move = position["entry"] - price
 
@@ -266,11 +258,9 @@ def update_trailing_stop(symbol, price, position):
         steps = int(profit_move // TRAIL_STEP)
 
         new_sl = (
-
             position["entry"]
             + STOPLOSS[symbol]
             - steps * TRAIL_STEP
-
         )
 
         position["trail_sl"] = min(
@@ -290,7 +280,6 @@ def process_symbol(symbol, df, price, state):
     sym = state["symbols"][symbol]
     positions = sym["positions"]
 
-    # only one trade per symbol
     if len(positions) > 0:
         return
 
@@ -304,13 +293,11 @@ def process_symbol(symbol, df, price, state):
     if trend_dir == 1:
 
         positions.append({
-
             "side": "long",
             "entry": price,
             "qty": qty,
             "trail_sl": price - STOPLOSS[symbol],
             "entry_time": get_ist_time()
-
         })
 
         utils.log(
@@ -321,13 +308,11 @@ def process_symbol(symbol, df, price, state):
     elif trend_dir == -1:
 
         positions.append({
-
             "side": "short",
             "entry": price,
             "qty": qty,
             "trail_sl": price + STOPLOSS[symbol],
             "entry_time": get_ist_time()
-
         })
 
         utils.log(
@@ -340,23 +325,12 @@ def process_symbol(symbol, df, price, state):
 # =========================================================
 
 utils = TradingUtils(
-
     contract_size=CONTRACT_SIZE,
-
     taker_fee=TAKER_FEE,
-
     timeframe="5m",
-
     days=5,
-
-    telegram_token=os.getenv(
-        "supertrend_ha_fast_bot"
-    ),
-
-    telegram_chat_id=os.getenv(
-        "TELEGRAM_CHAT_ID"
-    ),
-
+    telegram_token=os.getenv("supertrend_ha_fast_bot"),
+    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
@@ -367,29 +341,17 @@ utils = TradingUtils(
 def run():
 
     state = {
-
         "balance": 10000,
-
         "daily_pnl": 0,
-
         "last_day": get_ist_time().date(),
-
         "trading_enabled": True,
-
         "symbols": {
-
-            s: {
-                "positions": []
-            }
-
+            s: {"positions": []}
             for s in SYMBOLS
         }
     }
 
-    utils.log(
-        "🚀 BOT STARTED",
-        tg=True
-    )
+    utils.log("🚀 BOT STARTED", tg=True)
 
     while True:
 
@@ -421,10 +383,6 @@ def run():
                 sym = state["symbols"][symbol]
                 positions = sym["positions"]
 
-                # ====================================
-                # EXIT + TRAILING STOP
-                # ====================================
-
                 for p in positions[:]:
 
                     update_trailing_stop(
@@ -432,58 +390,39 @@ def run():
                         price,
                         p
                     )
+                    supertrend_price = processed_df["supertrend"].iloc[-1]
 
                     exit_trade = False
                     pnl = 0
 
                     if p["side"] == "long":
 
-                        if price >= p["entry"] + TP[symbol]:
+                        if (
+                            price >= p["entry"] + TP[symbol]
+                            or price <= p["trail_sl"]
+                            or price <= supertrend_price
+                        ):
 
                             pnl = (
-
                                 (price - p["entry"])
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
-
-                            )
-
-                            exit_trade = True
-
-                        elif price <= p["trail_sl"]:
-
-                            pnl = (
-
-                                (price - p["entry"])
-                                * CONTRACT_SIZE[symbol]
-                                * p["qty"]
-
                             )
 
                             exit_trade = True
 
                     else:
 
-                        if price <= p["entry"] - TP[symbol]:
+                        if (
+                            price <= p["entry"] - TP[symbol]
+                            or price >= p["trail_sl"]
+                            or price >= supertrend_price
+                        ):
 
                             pnl = (
-
                                 (p["entry"] - price)
                                 * CONTRACT_SIZE[symbol]
                                 * p["qty"]
-
-                            )
-
-                            exit_trade = True
-
-                        elif price >= p["trail_sl"]:
-
-                            pnl = (
-
-                                (p["entry"] - price)
-                                * CONTRACT_SIZE[symbol]
-                                * p["qty"]
-
                             )
 
                             exit_trade = True
@@ -491,15 +430,12 @@ def run():
                     if exit_trade:
 
                         fee = (
-
                             utils.commission(
                                 p["entry"],
                                 p["qty"],
                                 symbol
                             )
-
                             +
-
                             utils.commission(
                                 price,
                                 p["qty"],
@@ -513,18 +449,15 @@ def run():
                         state["daily_pnl"] += net
 
                         utils.log(
-
                             f"{'🟢' if net > 0 else '🔴'} "
                             f"{symbol} EXIT @ {price} | "
                             f"PNL: {round(net, 2)} | "
                             f"DAILY: {round(state['daily_pnl'], 2)} | "
                             f"SL: {round(p['trail_sl'], 2)}",
-
                             tg=True
                         )
 
                         utils.save_trade({
-
                             "symbol": symbol,
                             "side": p["side"],
                             "entry_price": p["entry"],
@@ -533,14 +466,9 @@ def run():
                             "net_pnl": round(net, 6),
                             "entry_time": p["entry_time"],
                             "exit_time": get_ist_time()
-
                         })
 
                         positions.remove(p)
-
-                # ====================================
-                # ENTRY ONLY ON NEW CANDLE
-                # ====================================
 
                 df = safe_fetch(
                     utils.fetch_candles,
@@ -550,6 +478,9 @@ def run():
 
                 if df is None or df.empty:
                     continue
+
+                # remove open candle if exchange returns it
+                df = df.iloc[:-1]
 
                 if not is_new_candle(symbol, df):
                     continue
