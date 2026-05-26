@@ -35,7 +35,7 @@ TP = {
     "BTCUSD": 500
 }
 
-TRAIL_STEP = 5
+TRAIL_STEP = 100
 
 TAKER_FEE = 0.0005
 
