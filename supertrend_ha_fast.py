@@ -28,11 +28,11 @@ QTY = {
 }
 
 STOPLOSS = {
-    "BTCUSD": 300
+    "BTCUSD": 200
 }
 
 TP = {
-    "BTCUSD": 200
+    "BTCUSD": 500
 }
 
 TRAIL_STEP = 5
