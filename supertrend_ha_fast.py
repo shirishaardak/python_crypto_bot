@@ -32,7 +32,7 @@ STOPLOSS = {
 }
 
 TP = {
-    "BTCUSD": 300
+    "BTCUSD": 200
 }
 
 TRAIL_STEP = 5
