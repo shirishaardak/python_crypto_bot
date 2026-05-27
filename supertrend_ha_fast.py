@@ -28,18 +28,18 @@ QTY = {
 }
 
 STOPLOSS = {
-    "BTCUSD": 300
+    "BTCUSD": 500
 }
 
 TP = {
-    "BTCUSD": 500
+    "BTCUSD": 50000
 }
 
 TRAIL_STEP = 1
 
 TAKER_FEE = 0.0005
 
-SLEEP_TIME = 5
+SLEEP_TIME =2 
 
 SAVE_DIR = "data/supertrend_ha_fast"
 
@@ -327,7 +327,7 @@ def process_symbol(symbol, df, price, state):
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
-    timeframe="5m",
+    timeframe="15m",
     days=5,
     telegram_token=os.getenv("supertrend_ha_fast_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -473,7 +473,7 @@ def run():
                 df = safe_fetch(
                     utils.fetch_candles,
                     symbol,
-                    "5m"
+                    "15m"
                 )
 
                 if df is None or df.empty:
@@ -502,7 +502,7 @@ def run():
 
             print("ERROR:", e)
 
-            time.sleep(5)
+            time.sleep(2)
 
 # =========================================================
 # START
