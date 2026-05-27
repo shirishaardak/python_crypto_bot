@@ -28,14 +28,14 @@ QTY = {
 }
 
 STOPLOSS = {
-    "BTCUSD": 200
+    "BTCUSD": 300
 }
 
 TP = {
     "BTCUSD": 500
 }
 
-TRAIL_STEP = 100
+TRAIL_STEP = 1
 
 TAKER_FEE = 0.0005
 
