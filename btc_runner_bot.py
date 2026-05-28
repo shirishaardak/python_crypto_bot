@@ -199,7 +199,6 @@ def calculate_trendline(df):
             not np.isnan(last_high_fractal)
             and prev_close <= last_high_fractal
             and current_close > last_high_fractal
-            and current_close > trendline
             and not np.isnan(last_low_fractal)
         ):
 
@@ -211,7 +210,6 @@ def calculate_trendline(df):
             not np.isnan(last_low_fractal)
             and prev_close >= last_low_fractal
             and current_close < last_low_fractal
-            and current_close < trendline
             and not np.isnan(last_high_fractal)
         ):
 
