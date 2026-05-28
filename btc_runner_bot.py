@@ -373,8 +373,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # ================= LONG ENTRY =================
 
         if (
-            prev.HA_close <= prev.Trendline
-            and last.HA_close > last.Trendline
+             last.HA_close > last.Trendline
         ):
 
             state["position"] = {
@@ -394,8 +393,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         # ================= SHORT ENTRY =================
 
         elif (
-            prev.HA_close >= prev.Trendline
-            and last.HA_close < last.Trendline
+            last.HA_close < last.Trendline
         ):
 
             state["position"] = {
