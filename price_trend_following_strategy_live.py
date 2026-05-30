@@ -340,7 +340,8 @@ def process_symbol(
         if not product_id:
             return
 
-        if last.HA_close > last.Trendline:
+        if (prev.HA_close <= prev.up_Trendline
+            and last.HA_close > last.up_Trendline):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -369,7 +370,8 @@ def process_symbol(
                     tg=True
                 )
 
-        elif last.HA_close < last.Trendline:
+        elif (prev.HA_close >= prev.down_Trendline
+              and last.HA_close < last.down_Trendline):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
