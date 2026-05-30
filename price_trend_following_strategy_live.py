@@ -133,6 +133,8 @@ def calculate_trendline(df):
             trendline = last_high_fractal
 
         ha.loc[i, "Trendline"] = trendline
+        ha.loc[i, "up_Trendline"] = trendline + 50
+        ha.loc[i, "down_Trendline"] = trendline - 50
 
     return ha
 
@@ -239,7 +241,7 @@ def process_symbol(
         elif (
             pos["side"] == "long"
             and (
-                price < last.Trendline
+                price < last.down_Trendline
                 or price >= pos["entry"] + TP[symbol]
             )
         ):
@@ -248,7 +250,7 @@ def process_symbol(
         elif (
             pos["side"] == "short"
             and (
-                price > last.Trendline
+                price > last.up_Trendline
                 or price <= pos["entry"] - TP[symbol]
             )
         ):
@@ -282,8 +284,8 @@ def process_symbol(
         if not product_id:
             return
 
-        if ( prev.HA_close <= prev.Trendline
-            and last.HA_close > last.Trendline ):
+        if ( prev.HA_close <= prev.up_Trendline
+            and last.HA_close > last.up_Trendline ):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -295,7 +297,7 @@ def process_symbol(
 
                 orders.place_bracket_order(
                     product_id=product_id,
-                    stop_loss_price=last.Trendline,
+                    stop_loss_price=last.down_Trendline,
                     take_profit_price=price + TP[symbol]
                 )
 
@@ -312,8 +314,8 @@ def process_symbol(
                     tg=True
                 )
 
-        elif (prev.HA_close >= prev.Trendline
-            and last.HA_close < last.Trendline):
+        elif (prev.HA_close >= prev.down_Trendline
+            and last.HA_close < last.down_Trendline):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -325,7 +327,7 @@ def process_symbol(
 
                 orders.place_bracket_order(
                     product_id=product_id,
-                    stop_loss_price=last.Trendline,
+                    stop_loss_price=last.up_Trendline,
                     take_profit_price=price - TP[symbol]
                 )
 
