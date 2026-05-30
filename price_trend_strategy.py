@@ -44,11 +44,11 @@ TP = {
 }
 
 TRAIL_TRIGGER = {
-    "BTCUSD": 100
+    "BTCUSD": 200   # Trail activates only after 200 points in profit
 }
 
 TRAIL_DISTANCE = {
-    "BTCUSD": 100
+    "BTCUSD": 100   # SL moves in 100-point steps
 }
 
 DAILY_TARGET = 1000
@@ -190,12 +190,14 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 * pos["qty"]
             )
 
-            if price >= pos["entry"] + TRAIL_TRIGGER[symbol]:
+            profit_points = price - pos["entry"]
 
-                new_sl = max(
-                    pos["entry"],
-                    price - TRAIL_DISTANCE[symbol]
-                )
+            if profit_points >= TRAIL_TRIGGER[symbol]:
+
+                # How many 100-point steps beyond the trigger has price moved?
+                steps = int((profit_points - TRAIL_TRIGGER[symbol]) / TRAIL_DISTANCE[symbol])
+                new_sl = pos["entry"] + (steps * TRAIL_DISTANCE[symbol])
+                new_sl = max(pos["entry"], new_sl)
 
                 if new_sl > pos["sl"]:
 
@@ -214,12 +216,14 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 * pos["qty"]
             )
 
-            if price <= pos["entry"] - TRAIL_TRIGGER[symbol]:
+            profit_points = pos["entry"] - price
 
-                new_sl = min(
-                    pos["entry"],
-                    price + TRAIL_DISTANCE[symbol]
-                )
+            if profit_points >= TRAIL_TRIGGER[symbol]:
+
+                # How many 100-point steps beyond the trigger has price moved?
+                steps = int((profit_points - TRAIL_TRIGGER[symbol]) / TRAIL_DISTANCE[symbol])
+                new_sl = pos["entry"] - (steps * TRAIL_DISTANCE[symbol])
+                new_sl = min(pos["entry"], new_sl)
 
                 if new_sl < pos["sl"]:
 
@@ -322,8 +326,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         if (
-            prev.HA_close <= prev.up_Trendline
-            and last.HA_close > last.up_Trendline
+            prev.HA_close <= prev.Trendline
+            and last.HA_close > last.Trendline
         ):
 
             state["position"] = {
@@ -340,8 +344,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             )
 
         elif (
-            prev.HA_close >= prev.down_Trendline
-            and last.HA_close < last.down_Trendline
+            prev.HA_close >= prev.Trendline
+            and last.HA_close < last.Trendline
         ):
 
             state["position"] = {
