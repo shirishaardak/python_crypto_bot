@@ -264,18 +264,7 @@ def calculate_trendline(df):
         df["Close"]
     ).reset_index(drop=True)
 
-    # ================= ADX =================
-
-    adx = ta.adx(
-        high=df["HA_high"],
-        low=df["HA_low"],
-        close=df["HA_close"],
-        length=14
-    )
-
-    ha["ADX"] = adx["ADX_14"]
-    ha["+DI"] = adx["DMP_14"]
-    ha["-DI"] = adx["DMN_14"]
+   
     # ================= FRACTALS =================
 
     ha["high_fractal"] = np.nan
