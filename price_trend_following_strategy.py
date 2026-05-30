@@ -264,6 +264,18 @@ def calculate_trendline(df):
         df["Close"]
     ).reset_index(drop=True)
 
+    # ================= ADX =================
+
+    adx = ta.adx(
+    high=ha["HA_high"],
+    low=ha["HA_low"],
+    close=ha["HA_close"],
+    length=14
+)
+
+    ha["ADX"] = adx["ADX_14"]
+    ha["+DI"] = adx["DMP_14"]
+    ha["-DI"] = adx["DMN_14"]
     # ================= FRACTALS =================
 
     ha["high_fractal"] = np.nan
@@ -562,7 +574,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         if (
             prev.HA_close <= prev.up_Trendline
-            and last.HA_close > last.up_Trendline
+            and last.HA_close > last.up_Trendline and last.ADX > 30
         ):
 
             state["position"] = {
@@ -583,7 +595,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         elif (
             prev.HA_close >= prev.down_Trendline
-            and last.HA_close < last.down_Trendline
+            and last.HA_close < last.down_Trendline and last.ADX > 30
         ):
 
             state["position"] = {
