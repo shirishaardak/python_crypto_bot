@@ -273,6 +273,8 @@ class OrderManager:
 
             return None
 
+    # FIX 1: Use cancel_all_orders instead of filtering by stop_order_type
+    # which was always None for bracket orders, causing nothing to be cancelled
     def cancel_bracket_order(self, symbol=None, product_id=None):
 
         try:
@@ -286,38 +288,20 @@ class OrderManager:
 
                 product_id = self.get_product_id(symbol)
 
-            live_orders = self.get_live_orders(product_id)
+            res = self.cancel_all_orders(product_id)
 
-            if not live_orders:
-                return {"success": True}
+            if res and res.get("success"):
 
-            cancelled = 0
-
-            for order in live_orders:
-
-                if not order.get("stop_order_type"):
-                    continue
-
-                order_id = order.get("id")
-
-                res = self.cancel_order(
-                    order_id,
-                    product_id
+                self.send_telegram(
+                    f"BRACKET CANCELLED for {symbol or product_id}",
+                    key=f"cancel_bracket_{product_id}"
                 )
 
-                if res and res.get("success"):
-                    cancelled += 1
+                return {"success": True}
 
-            self.send_telegram(
-                f"BRACKET CANCELLED\n"
-                f"Cancelled: {cancelled}",
-                key=f"cancel_bracket_{product_id}"
-            )
+            print(f"cancel_bracket_order failed: {res}")
 
-            return {
-                "success": True,
-                "cancelled": cancelled
-            }
+            return {"success": False}
 
         except Exception as e:
 
@@ -332,6 +316,8 @@ class OrderManager:
 
             return None
 
+    # FIX 2: Any open order for this product means bracket is still active
+    # Old code checked stop_order_type which was always None → always False
     def has_open_bracket_order(self, product_id):
 
         try:
@@ -340,12 +326,7 @@ class OrderManager:
                 product_id=product_id
             )
 
-            for order in live_orders:
-
-                if order.get("stop_order_type"):
-                    return True
-
-            return False
+            return len(live_orders) > 0
 
         except Exception as e:
 
@@ -353,23 +334,31 @@ class OrderManager:
 
             return False
 
+    # FIX 3: Call client directly for GET with query params
+    # Old _request() was sending params as body payload for GET → wrong results
     def get_live_orders(self, product_id=None):
 
         try:
 
-            endpoint = "/v2/orders"
-
-            params = "?state=open"
+            endpoint = "/v2/orders?state=open"
 
             if product_id:
-                params += f"&product_id={product_id}"
+                endpoint += f"&product_id={product_id}"
 
-            res = self._request(
+            response = self.client.request(
                 "GET",
-                endpoint + params
+                endpoint,
+                None,
+                auth=True
             )
 
-            if not res:
+            res = (
+                response.json()
+                if hasattr(response, "json")
+                else response
+            )
+
+            if not res or not res.get("success"):
                 return []
 
             return res.get("result", [])
@@ -409,11 +398,13 @@ class OrderManager:
                 "product_id": product_id
             }
 
-            return self._request(
+            res = self._request(
                 "DELETE",
                 "/v2/orders/all",
                 payload
             )
+
+            return res
 
         except Exception as e:
 
@@ -438,7 +429,18 @@ class OrderManager:
             if not res:
                 return []
 
-            return res.get("result", [])
+            result = res.get("result", [])
+
+            # Handle case where result is a single dict instead of a list
+            if isinstance(result, dict):
+                result = [result]
+
+            # Add product_id to each position if missing
+            for pos in result:
+                if "product_id" not in pos and product_id:
+                    pos["product_id"] = product_id
+
+            return result
 
         except Exception as e:
 
@@ -446,7 +448,6 @@ class OrderManager:
 
             return []
 
-    # FIX ADDED
     def get_position(self, product_id):
 
         try:
@@ -460,26 +461,30 @@ class OrderManager:
 
             for pos in positions:
 
-                if int(pos["product_id"]) != int(product_id):
+                # Guard against malformed response
+                if not isinstance(pos, dict):
+                    print(f"Unexpected position format: {pos}")
                     continue
 
-                size = abs(float(
-                    pos.get("size")
-                    or pos.get("qty")
-                    or 0
-                ))
+                # Guard against missing product_id
+                if "product_id" not in pos:
+                    print(f"Position missing product_id: {pos}")
+                    continue
+
+                # Get size - handle both 'size' and 'qty' keys
+                size_value = float(pos.get("size") or pos.get("qty") or 0)
+                size = abs(size_value)
 
                 if size <= 0:
                     continue
 
+                # Determine side from size sign
+                side = "buy" if size_value > 0 else "sell"
+
                 return {
                     "product_id": product_id,
-                    "side": (
-                        "long"
-                        if float(pos.get("size", 0)) > 0
-                        else "short"
-                    ),
-                    "qty": size
+                    "side": side,
+                    "size": size
                 }
 
             return None

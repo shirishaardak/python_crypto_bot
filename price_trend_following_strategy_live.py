@@ -117,7 +117,7 @@ def calculate_trendline(df):
         if (
             not np.isnan(last_high_fractal)
             and prev_close <= last_high_fractal
-            and current_close > last_high_fractal            
+            and current_close > last_high_fractal
             and current_close > trendline
             and not np.isnan(last_low_fractal)
         ):
@@ -126,7 +126,7 @@ def calculate_trendline(df):
         elif (
             not np.isnan(last_low_fractal)
             and prev_close >= last_low_fractal
-            and current_close < last_low_fractal            
+            and current_close < last_low_fractal
             and current_close < trendline
             and not np.isnan(last_high_fractal)
         ):
@@ -143,54 +143,93 @@ def close_position(symbol, pos):
 
     try:
 
+        # Validate required keys in pos
+        required_keys = ["product_id", "side", "qty"]
+        for key in required_keys:
+            if key not in pos:
+                raise ValueError(f"Missing required key in pos: '{key}'")
+
         product_id = pos["product_id"]
 
+        # Cancel bracket orders if any exist
         if orders.has_open_bracket_order(product_id):
 
             utils.log(
-                f"🧹 Cancelling bracket → {symbol}",
+                f"Cancelling bracket order for {symbol}",
                 tg=True
             )
 
-            orders.cancel_bracket_order(
+            cancel_res = orders.cancel_bracket_order(
                 product_id=product_id
             )
 
-            time.sleep(1)
+            if not cancel_res or not cancel_res.get("success"):
+                utils.log(
+                    f"EXIT FAILED: Bracket cancel failed for {symbol}",
+                    tg=True
+                )
+                return {"success": False, "error": "bracket_cancel_failed"}
 
-        exit_side = (
-            "sell"
-            if pos["side"] == "long"
-            else "buy"
-        )
+            # Give exchange 2 seconds to process cancellation
+            time.sleep(2)
 
+        # Fetch live position to confirm it still exists
+        live_pos = orders.get_position(product_id)
+
+        if live_pos is None:
+            # Position already closed (likely by SL/TP on exchange)
+            utils.log(
+                f"Position already closed on exchange for {symbol}",
+                tg=True
+            )
+            return {"success": True, "already_closed": True}
+
+        # Determine exit side from live position
+        pos_side = live_pos["side"]
+
+        if pos_side == "buy":
+            exit_side = "sell"
+        elif pos_side == "sell":
+            exit_side = "buy"
+        else:
+            raise ValueError(f"Unknown position side: '{pos_side}'")
+
+        # FIX 3: Use "market" not "market_order" — place_order maps "market" → "market_order"
+        # Passing "market_order" directly hits the else branch → sends "limit_order" → 400 error
         res = orders.place_order(
-            size=pos["qty"],
+            size=live_pos["size"],
             side=exit_side,
             product_id=product_id,
+            order_type="market",   # ← was "market_order", caused 400 Bad Request
             reduce_only=True
         )
 
-        if res:
+        if res and res.get("success"):
 
             utils.log(
-                f"✅ EXIT COMPLETE → {symbol}",
+                f"EXIT COMPLETE for {symbol}",
                 tg=True
             )
+
+            return {"success": True}
 
         else:
 
             utils.log(
-                f"❌ EXIT FAILED → {symbol}",
+                f"EXIT FAILED for {symbol} | Response: {res}",
                 tg=True
             )
+
+            return {"success": False, "error": "place_order_failed", "response": res}
 
     except Exception as e:
 
         utils.log(
-            f"❌ EXIT ERROR → {e}",
+            f"EXIT ERROR for {symbol} | {e}",
             tg=True
         )
+
+        return {"success": False, "error": str(e)}
 
 
 def process_symbol(
@@ -258,14 +297,31 @@ def process_symbol(
 
         if exit_trade:
 
-            close_position(
-                symbol,
-                pos
-            )
+            # FIX 2: Only clear state if exit succeeded
+            # Previously state was always cleared even on failed exits
+            # causing orphaned positions with no management
+            result = close_position(symbol, pos)
 
-            state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
+            if result.get("success"):
 
+                state["daily_pnl"] += live_pnl
+                state["position"] = None
+                state["last_exit_candle"] = df.index[-1]
+
+                utils.log(
+                    f"📊 Daily PnL: {state['daily_pnl']:.2f}",
+                    tg=True
+                )
+
+            else:
+
+                utils.log(
+                    f"⚠️ Exit failed for {symbol}, will retry next loop | "
+                    f"Error: {result.get('error')}",
+                    tg=True
+                )
+
+            # Always return — never enter a new trade while exit is pending
             return
 
     if not pos and is_new_candle:
@@ -284,8 +340,7 @@ def process_symbol(
         if not product_id:
             return
 
-        if ( prev.HA_close <= prev.up_Trendline
-            and last.HA_close > last.up_Trendline ):
+        if last.HA_close > last.Trendline:
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -293,7 +348,7 @@ def process_symbol(
                 product_id=product_id
             )
 
-            if entry:
+            if entry and entry.get("success"):
 
                 orders.place_bracket_order(
                     product_id=product_id,
@@ -314,8 +369,7 @@ def process_symbol(
                     tg=True
                 )
 
-        elif (prev.HA_close >= prev.down_Trendline
-            and last.HA_close < last.down_Trendline):
+        elif last.HA_close < last.Trendline:
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -323,7 +377,7 @@ def process_symbol(
                 product_id=product_id
             )
 
-            if entry:
+            if entry and entry.get("success"):
 
                 orders.place_bracket_order(
                     product_id=product_id,
