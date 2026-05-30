@@ -117,7 +117,7 @@ def calculate_trendline(df):
         if (
             not np.isnan(last_high_fractal)
             and prev_close <= last_high_fractal
-            and current_close > last_high_fractal
+            and current_close > last_high_fractal            
             and current_close > trendline
             and not np.isnan(last_low_fractal)
         ):
@@ -126,7 +126,7 @@ def calculate_trendline(df):
         elif (
             not np.isnan(last_low_fractal)
             and prev_close >= last_low_fractal
-            and current_close < last_low_fractal
+            and current_close < last_low_fractal            
             and current_close < trendline
             and not np.isnan(last_high_fractal)
         ):
@@ -141,30 +141,47 @@ def close_position(symbol, pos):
 
     try:
 
-        live_pos = orders.get_position(pos["product_id"])
+        product_id = pos["product_id"]
 
-        if not live_pos or float(live_pos.get("qty", 0)) <= 0:
-            return True
+        if orders.has_open_bracket_order(product_id):
+
+            utils.log(
+                f"🧹 Cancelling bracket → {symbol}",
+                tg=True
+            )
+
+            orders.cancel_bracket_order(
+                product_id=product_id
+            )
+
+            time.sleep(1)
 
         exit_side = (
             "sell"
-            if live_pos["side"] == "long"
+            if pos["side"] == "long"
             else "buy"
         )
 
-        orders.place_order(
-            size=live_pos["qty"],
+        res = orders.place_order(
+            size=pos["qty"],
             side=exit_side,
-            product_id=pos["product_id"],
+            product_id=product_id,
             reduce_only=True
         )
 
-        utils.log(
-            f"🧹 Closing position → {symbol}",
-            tg=True
-        )
+        if res:
 
-        return False
+            utils.log(
+                f"✅ EXIT COMPLETE → {symbol}",
+                tg=True
+            )
+
+        else:
+
+            utils.log(
+                f"❌ EXIT FAILED → {symbol}",
+                tg=True
+            )
 
     except Exception as e:
 
@@ -172,8 +189,6 @@ def close_position(symbol, pos):
             f"❌ EXIT ERROR → {e}",
             tg=True
         )
-
-        return False
 
 
 def process_symbol(
@@ -192,23 +207,6 @@ def process_symbol(
     prev = ha.iloc[-3]
 
     pos = state["position"]
-
-    # sync local state with exchange
-    if pos:
-
-        live_pos = orders.get_position(pos["product_id"])
-
-        if not live_pos or float(live_pos.get("qty", 0)) <= 0:
-
-            utils.log(
-                f"✅ Position closed → {symbol}",
-                tg=True
-            )
-
-            state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
-
-            pos = None
 
     now = datetime.now()
 
@@ -263,6 +261,9 @@ def process_symbol(
                 pos
             )
 
+            state["position"] = None
+            state["last_exit_candle"] = df.index[-1]
+
             return
 
     if not pos and is_new_candle:
@@ -281,10 +282,8 @@ def process_symbol(
         if not product_id:
             return
 
-        if (
-            prev.HA_close <= prev.Trendline
-            and last.HA_close > last.Trendline
-        ):
+        if ( prev.HA_close <= prev.Trendline
+            and last.HA_close > last.Trendline ):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
@@ -313,10 +312,8 @@ def process_symbol(
                     tg=True
                 )
 
-        elif (
-            prev.HA_close >= prev.Trendline
-            and last.HA_close < last.Trendline
-        ):
+        elif (prev.HA_close >= prev.Trendline
+            and last.HA_close < last.Trendline):
 
             entry = orders.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
