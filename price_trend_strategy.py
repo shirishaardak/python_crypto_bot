@@ -157,8 +157,8 @@ def calculate_trendline(df):
             trendline = last_high_fractal
 
         ha.loc[i, "Trendline"] = trendline
-        ha.loc[i, "up_Trendline"] = trendline + 100
-        ha.loc[i, "down_Trendline"] = trendline - 100
+        ha.loc[i, "up_Trendline"] = trendline + 50
+        ha.loc[i, "down_Trendline"] = trendline - 50
 
     return ha
 
@@ -250,7 +250,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             and (
                 price <= pos["sl"]
                 or price >= pos["entry"] + TP[symbol]
-                or price < last.down_Trendline
+                or price < last.Trendline
             )
         ):
 
@@ -262,7 +262,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             and (
                 price >= pos["sl"]
                 or price <= pos["entry"] - TP[symbol]
-                or price > last.up_Trendline
+                or price > last.Trendline
             )
         ):
 
@@ -326,8 +326,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             return
 
         if (
-            prev.HA_close <= prev.Trendline
-            and last.HA_close > last.Trendline
+            prev.HA_close <= prev.up_Trendline
+            and last.HA_close > last.up_Trendline
         ):
 
             state["position"] = {
@@ -344,8 +344,8 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             )
 
         elif (
-            prev.HA_close >= prev.Trendline
-            and last.HA_close < last.Trendline
+            prev.HA_close >= prev.down_Trendline
+            and last.HA_close < last.down_Trendline
         ):
 
             state["position"] = {
