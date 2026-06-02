@@ -424,13 +424,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     if not pos and is_new_candle:
 
-        # ================= SESSION FILTER =================
-
-        # if not is_volatile_session():
-        #     return
-
-        # ================= TRADING ENABLED =================
-
         if not state["trading_enabled"]:
             return
 

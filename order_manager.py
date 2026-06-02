@@ -1,496 +1,264 @@
 import os
 import time
+import hmac
+import json
+import hashlib
 import requests
 
-from delta_rest_client import DeltaRestClient
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
+# ================= CONFIG =================
+
+# Production (Delta India). For testnet use:
+#   https://cdn-ind.testnet.deltaex.org
+BASE_URL = os.getenv("DELTA_BASE_URL", "https://api.india.delta.exchange")
+
+API_KEY = os.getenv("DELTA_API_KEY")
+API_SECRET = os.getenv("DELTA_API_SECRET")
+
+# Telegram (reuse your existing bot token + chat id)
+TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Symbol -> Delta product_id. Orders API requires product_id.
+# 27 is BTCUSD on Delta. VERIFY against /v2/products before live trading.
+PRODUCT_IDS = {
+    "BTCUSD": 27,
+}
+
+# How long to wait for the HTTP response. (connect, read) seconds.
+# Keep read tight so a hung order fails fast instead of blocking the loop.
+ORDER_TIMEOUT = (3, 5)
+
+# Retries on transient network/5xx errors only (never on a clean reject).
+MAX_RETRIES = 2
+
+
 class OrderManager:
+    """
+    Fast, self-contained order layer for Delta Exchange.
+
+    Public method used by the strategy:
+        place_order(size, side, symbol, reduce_only=False)
+
+    Returns a dict:
+        {"success": True,  "order_id": ..., "state": ..., "filled": ...,
+         "avg_price": ..., "raw": {...}}
+        {"success": False, "error": "<code/message>", "raw": {...}}
+    """
 
     def __init__(self):
+        # Persistent session = reused TCP/TLS connection = much faster orders.
+        self.session = requests.Session()
 
-        api_key = os.getenv("DELTA_API_KEY")
-        api_secret = os.getenv("DELTA_API_SECRET")
+        # A small connection pool keyed to the host.
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=4,
+            pool_maxsize=4,
+            max_retries=0,   # we handle retries ourselves, selectively
+        )
+        self.session.mount("https://", adapter)
 
-        if not api_key or not api_secret:
-            raise ValueError("Missing API credentials")
+        # Static headers; per-request we add timestamp + signature.
+        self.session.headers.update({
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "py-trend-bot",  # REQUIRED by Delta or you get 4xx
+        })
 
-        self.client = DeltaRestClient(
-            base_url="https://api.india.delta.exchange",
-            api_key=api_key,
-            api_secret=api_secret
+        if not API_KEY or not API_SECRET:
+            self._tg("⚠️ OrderManager: API key/secret missing in env")
+
+    # ================= TELEGRAM =================
+
+    def _tg(self, text):
+        """Fire-and-forget Telegram message. Never blocks trading on failure."""
+        if not TG_TOKEN or not TG_CHAT_ID:
+            print(text)
+            return
+        try:
+            self.session.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": TG_CHAT_ID, "text": text},
+                timeout=(2, 3),
+            )
+        except Exception:
+            # A failed alert must never crash or slow the order path.
+            print(text)
+
+    # ================= SIGNING =================
+
+    def _signature(self, method, path, query, body, timestamp):
+        # Delta prehash: method + timestamp + path + query + body
+        message = method + timestamp + path + query + body
+        return hmac.new(
+            API_SECRET.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _signed_headers(self, method, path, query, body):
+        # Timestamp must be fresh: Delta rejects signatures older than 5s.
+        timestamp = str(int(time.time()))
+        sig = self._signature(method, path, query, body, timestamp)
+        return {
+            "api-key": API_KEY,
+            "timestamp": timestamp,
+            "signature": sig,
+        }
+
+    # ================= CORE REQUEST =================
+
+    def _post(self, path, payload):
+        """
+        Signed POST with selective retry. Returns parsed JSON dict, or
+        {"success": False, "error": "..."} on hard failure.
+        """
+        body = json.dumps(payload, separators=(",", ":"))  # compact, stable
+        url = BASE_URL + path
+
+        last_err = None
+
+        for attempt in range(MAX_RETRIES + 1):
+            # Re-sign every attempt: the timestamp must stay within 5s.
+            headers = self._signed_headers("POST", path, "", body)
+            try:
+                resp = self.session.post(
+                    url,
+                    data=body,
+                    headers=headers,
+                    timeout=ORDER_TIMEOUT,
+                )
+            except requests.exceptions.RequestException as e:
+                # Network-level failure: worth a retry.
+                last_err = f"network: {e}"
+                time.sleep(0.2 * (attempt + 1))
+                continue
+
+            # Try to parse JSON regardless of status code.
+            try:
+                data = resp.json()
+            except ValueError:
+                last_err = f"bad_json http={resp.status_code} body={resp.text[:200]}"
+                # 5xx with no JSON: retry. 4xx: don't.
+                if 500 <= resp.status_code < 600:
+                    time.sleep(0.2 * (attempt + 1))
+                    continue
+                return {"success": False, "error": last_err}
+
+            if data.get("success"):
+                return data
+
+            # Clean rejection from Delta (e.g. insufficient_margin). Don't retry.
+            err = data.get("error", {})
+            code = err.get("code") if isinstance(err, dict) else err
+            ctx = err.get("context") if isinstance(err, dict) else None
+
+            # Rate limit (429) is the one reject worth a brief retry.
+            if resp.status_code == 429:
+                last_err = f"rate_limited {code}"
+                time.sleep(0.3 * (attempt + 1))
+                continue
+
+            return {
+                "success": False,
+                "error": code or "unknown_error",
+                "context": ctx,
+                "raw": data,
+            }
+
+        return {"success": False, "error": last_err or "max_retries_exhausted"}
+
+    # ================= PLACE ORDER =================
+
+    def place_order(self, size, side, symbol, reduce_only=False):
+        """
+        Place a MARKET order and confirm it actually went through.
+
+        size        : integer number of contracts
+        side        : "buy" or "sell"
+        symbol      : e.g. "BTCUSD"
+        reduce_only : True for exits (won't flip into a new position)
+        """
+        product_id = PRODUCT_IDS.get(symbol)
+        if product_id is None:
+            msg = f"❌ No product_id mapped for {symbol}"
+            self._tg(msg)
+            return {"success": False, "error": "no_product_id"}
+
+        payload = {
+            "product_id": product_id,
+            "size": int(size),
+            "side": side,                 # "buy" / "sell"
+            "order_type": "market_order",
+            "time_in_force": "ioc",       # fill now or cancel; no resting order
+            "reduce_only": bool(reduce_only),
+        }
+
+        t0 = time.time()
+        result = self._post("/v2/orders", payload)
+        elapsed_ms = (time.time() - t0) * 1000
+
+        tag = "EXIT" if reduce_only else "ENTRY"
+
+        if not result.get("success"):
+            err = result.get("error")
+            ctx = result.get("context")
+            self._tg(
+                f"🚨 ORDER FAILED [{tag}] {symbol} {side.upper()} {size}\n"
+                f"reason: {err}" + (f"\nctx: {ctx}" if ctx else "")
+            )
+            return {"success": False, "error": err, "raw": result}
+
+        # ---- Confirm the fill from the returned order object ----
+        order = result.get("result", {}) or {}
+        order_id = order.get("id")
+        state = order.get("state")
+        size_req = int(order.get("size", size) or size)
+        unfilled = int(order.get("unfilled_size", 0) or 0)
+        filled = size_req - unfilled
+
+        # avg fill price field name can vary; try common ones.
+        avg_price = (
+            order.get("average_fill_price")
+            or order.get("avg_fill_price")
+            or order.get("limit_price")
         )
 
-        self.tg_token = os.getenv("BOT_TOKEN")
-        self.tg_chat_id = os.getenv("CHAT_ID")
-
-        self._last_tg = {}
-        self.product_cache = {}
-
-    def send_telegram(self, msg, key=None, cooldown=20):
-
-        try:
-
-            if not self.tg_token:
-                return
-
-            if not self.tg_chat_id:
-                return
-
-            now = time.time()
-
-            if key:
-
-                last = self._last_tg.get(key)
-
-                if last and now - last < cooldown:
-                    return
-
-                self._last_tg[key] = now
-
-            requests.post(
-                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
-                json={
-                    "chat_id": self.tg_chat_id,
-                    "text": msg
-                },
-                timeout=5
+        # A market/IOC order should be closed (fully filled) or partially filled.
+        if state == "closed" and unfilled == 0:
+            self._tg(
+                f"✅ {tag} FILLED {symbol} {side.upper()} {filled} "
+                f"@ {avg_price} | id={order_id} | {elapsed_ms:.0f}ms"
             )
-
-        except Exception as e:
-            print(f"Telegram error: {e}")
-
-    def _request(self, method, endpoint, payload=None, retries=3):
-
-        for i in range(retries):
-
-            try:
-
-                response = self.client.request(
-                    method,
-                    endpoint,
-                    payload,
-                    auth=True
-                )
-
-                res = (
-                    response.json()
-                    if hasattr(response, "json")
-                    else response
-                )
-
-                if res:
-
-                    if res.get("success"):
-                        return res
-
-                    error_code = (
-                        res.get("error", {}).get("code")
-                    )
-
-                    if error_code == "bracket_order_position_exists":
-                        print("Bracket already exists on position")
-                        return {"success": True, "result": res}
-
-                    print(f"API error [{method} {endpoint}]: {res}")
-
-            except Exception as e:
-
-                msg = str(e)
-
-                if "bracket_order_position_exists" in msg:
-                    print("Bracket already exists on position")
-                    return {"success": True}
-
-                print(f"Retry {i+1}/{retries}: {method} {endpoint} -> {e}")
-
-            time.sleep(1)
-
-        return None
-
-    def get_product_id(self, symbol):
-
-        try:
-
-            if symbol in self.product_cache:
-                return self.product_cache[symbol]
-
-            res = self._request(
-                "GET",
-                f"/v2/products/{symbol}"
+        elif filled > 0:
+            self._tg(
+                f"⚠️ {tag} PARTIAL {symbol} {side.upper()} "
+                f"{filled}/{size_req} @ {avg_price} | id={order_id} "
+                f"| state={state} | {elapsed_ms:.0f}ms"
             )
-
-            if not res:
-                return None
-
-            product_id = res["result"]["id"]
-
-            self.product_cache[symbol] = product_id
-
-            return product_id
-
-        except Exception as e:
-            print(f"Product lookup error: {e}")
-            return None
-
-    def place_order(
-        self,
-        size,
-        side,
-        symbol=None,
-        product_id=None,
-        order_type="market",
-        limit_price=None,
-        reduce_only=False
-    ):
-
-        try:
-
-            if not product_id:
-
-                if not symbol:
-                    raise ValueError(
-                        "Either symbol or product_id required"
-                    )
-
-                product_id = self.get_product_id(symbol)
-
-            payload = {
-                "product_id": product_id,
-                "size": int(size),
-                "side": side,
-                "reduce_only": "true" if reduce_only else "false",
-                "order_type": (
-                    "market_order"
-                    if order_type == "market"
-                    else "limit_order"
-                )
+        else:
+            # Accepted but nothing filled (rare for IOC market — flag it loudly).
+            self._tg(
+                f"❗ {tag} NOT FILLED {symbol} {side.upper()} {size_req} "
+                f"| state={state} | id={order_id} | {elapsed_ms:.0f}ms"
+            )
+            return {
+                "success": False,
+                "error": f"not_filled state={state}",
+                "order_id": order_id,
+                "raw": result,
             }
 
-            if order_type == "limit":
-
-                if limit_price is None:
-                    raise ValueError("limit_price required")
-
-                payload["limit_price"] = str(limit_price)
-
-            res = self._request(
-                "POST",
-                "/v2/orders",
-                payload
-            )
-
-            if res:
-                self.send_telegram(
-                    f"ORDER {side.upper()} {size} {symbol or product_id}",
-                    key="order"
-                )
-
-            return res
-
-        except Exception as e:
-
-            msg = f"ORDER ERROR: {e}"
-            print(msg)
-
-            self.send_telegram(
-                msg,
-                key="order_error"
-            )
-
-            return None
-
-    def place_bracket_order(
-        self,
-        symbol=None,
-        product_id=None,
-        stop_loss_price=None,
-        take_profit_price=None,
-        trigger="mark_price"
-    ):
-
-        try:
-
-            if not product_id:
-
-                if not symbol:
-                    raise ValueError(
-                        "Either symbol or product_id required"
-                    )
-
-                product_id = self.get_product_id(symbol)
-
-            payload = {
-                "product_id": product_id,
-                "bracket_stop_trigger_method": trigger
-            }
-
-            if stop_loss_price is not None:
-
-                payload["stop_loss_order"] = {
-                    "order_type": "market_order",
-                    "stop_price": str(round(stop_loss_price, 1))
-                }
-
-            if take_profit_price is not None:
-
-                payload["take_profit_order"] = {
-                    "order_type": "market_order",
-                    "stop_price": str(round(take_profit_price, 1))
-                }
-
-            res = self._request(
-                "POST",
-                "/v2/orders/bracket",
-                payload
-            )
-
-            if res:
-
-                self.send_telegram(
-                    f"BRACKET SET\n"
-                    f"Symbol : {symbol or product_id}\n"
-                    f"SL     : {stop_loss_price}\n"
-                    f"TP     : {take_profit_price}",
-                    key=f"bracket_{product_id}"
-                )
-
-            return res
-
-        except Exception as e:
-
-            msg = f"BRACKET ORDER ERROR: {e}"
-
-            print(msg)
-
-            self.send_telegram(
-                msg,
-                key="bracket_error"
-            )
-
-            return None
-
-    # FIX 1: Use cancel_all_orders instead of filtering by stop_order_type
-    # which was always None for bracket orders, causing nothing to be cancelled
-    def cancel_bracket_order(self, symbol=None, product_id=None):
-
-        try:
-
-            if not product_id:
-
-                if not symbol:
-                    raise ValueError(
-                        "Either symbol or product_id required"
-                    )
-
-                product_id = self.get_product_id(symbol)
-
-            res = self.cancel_all_orders(product_id)
-
-            if res and res.get("success"):
-
-                self.send_telegram(
-                    f"BRACKET CANCELLED for {symbol or product_id}",
-                    key=f"cancel_bracket_{product_id}"
-                )
-
-                return {"success": True}
-
-            print(f"cancel_bracket_order failed: {res}")
-
-            return {"success": False}
-
-        except Exception as e:
-
-            msg = f"CANCEL BRACKET ERROR: {e}"
-
-            print(msg)
-
-            self.send_telegram(
-                msg,
-                key="cancel_bracket_error"
-            )
-
-            return None
-
-    # FIX 2: Any open order for this product means bracket is still active
-    # Old code checked stop_order_type which was always None → always False
-    def has_open_bracket_order(self, product_id):
-
-        try:
-
-            live_orders = self.get_live_orders(
-                product_id=product_id
-            )
-
-            return len(live_orders) > 0
-
-        except Exception as e:
-
-            print(f"Bracket check error: {e}")
-
-            return False
-
-    # FIX 3: Call client directly for GET with query params
-    # Old _request() was sending params as body payload for GET → wrong results
-    def get_live_orders(self, product_id=None):
-
-        try:
-
-            endpoint = "/v2/orders?state=open"
-
-            if product_id:
-                endpoint += f"&product_id={product_id}"
-
-            response = self.client.request(
-                "GET",
-                endpoint,
-                None,
-                auth=True
-            )
-
-            res = (
-                response.json()
-                if hasattr(response, "json")
-                else response
-            )
-
-            if not res or not res.get("success"):
-                return []
-
-            return res.get("result", [])
-
-        except Exception as e:
-
-            print(f"Live orders error: {e}")
-
-            return []
-
-    def cancel_order(self, order_id, product_id):
-
-        try:
-
-            payload = {
-                "id": order_id,
-                "product_id": product_id
-            }
-
-            return self._request(
-                "DELETE",
-                "/v2/orders",
-                payload
-            )
-
-        except Exception as e:
-
-            print(f"Cancel error: {e}")
-
-            return None
-
-    def cancel_all_orders(self, product_id):
-
-        try:
-
-            payload = {
-                "product_id": product_id
-            }
-
-            res = self._request(
-                "DELETE",
-                "/v2/orders/all",
-                payload
-            )
-
-            return res
-
-        except Exception as e:
-
-            print(f"Cancel all error: {e}")
-
-            return None
-
-    def get_positions(self, product_id=None):
-
-        try:
-
-            endpoint = "/v2/positions"
-
-            if product_id:
-                endpoint += f"?product_id={product_id}"
-
-            res = self._request(
-                "GET",
-                endpoint
-            )
-
-            if not res:
-                return []
-
-            result = res.get("result", [])
-
-            # Handle case where result is a single dict instead of a list
-            if isinstance(result, dict):
-                result = [result]
-
-            # Add product_id to each position if missing
-            for pos in result:
-                if "product_id" not in pos and product_id:
-                    pos["product_id"] = product_id
-
-            return result
-
-        except Exception as e:
-
-            print(f"Position fetch error: {e}")
-
-            return []
-
-    def get_position(self, product_id):
-
-        try:
-
-            positions = self.get_positions(
-                product_id=product_id
-            )
-
-            if not positions:
-                return None
-
-            for pos in positions:
-
-                # Guard against malformed response
-                if not isinstance(pos, dict):
-                    print(f"Unexpected position format: {pos}")
-                    continue
-
-                # Guard against missing product_id
-                if "product_id" not in pos:
-                    print(f"Position missing product_id: {pos}")
-                    continue
-
-                # Get size - handle both 'size' and 'qty' keys
-                size_value = float(pos.get("size") or pos.get("qty") or 0)
-                size = abs(size_value)
-
-                if size <= 0:
-                    continue
-
-                # Determine side from size sign
-                side = "buy" if size_value > 0 else "sell"
-
-                return {
-                    "product_id": product_id,
-                    "side": side,
-                    "size": size
-                }
-
-            return None
-
-        except Exception as e:
-
-            print(f"Get position error: {e}")
-
-            return None
+        return {
+            "success": True,
+            "order_id": order_id,
+            "state": state,
+            "filled": filled,
+            "avg_price": float(avg_price) if avg_price else None,
+            "elapsed_ms": elapsed_ms,
+            "raw": result,
+        }
