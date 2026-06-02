@@ -1,18 +1,28 @@
 import os
 import time
+import pandas as pd
 import numpy as np
-import pandas_ta as ta
-import traceback
 
-from datetime import datetime
+from datetime import datetime, UTC
+from datetime import time as dt_time
+
+from zoneinfo import ZoneInfo
+
+import pandas_ta as ta
+
 from dotenv import load_dotenv
+
+import traceback
+import subprocess
 
 from utils import TradingUtils
 from order_manager import OrderManager
 
 load_dotenv()
 
-BOT_NAME = "price_trend_following_strategy"
+# ================= CONFIG =================
+
+BOT_NAME = "price_trend_following_strategy_live"
 
 SYMBOLS = ["BTCUSD"]
 
@@ -24,31 +34,86 @@ CONTRACT_SIZE = {
     "BTCUSD": 0.001
 }
 
+STOPLOSS = {
+    "BTCUSD": 500
+}
+
 TP = {
     "BTCUSD": 300
 }
 
 TAKER_FEE = 0.0005
+
 TIMEFRAME = "5m"
+
 DAYS = 15
+
 MIN_BALANCE = 1000
 
+# ================= TARGET / LOSS =================
+
 DAILY_TARGET = 500
+
 MAX_DAILY_LOSS = None
 
+# ================= INIT UTILS =================
 
 utils = TradingUtils(
     contract_size=CONTRACT_SIZE,
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("price_trend_following_strategy_live_bot"),
+    telegram_token=os.getenv("price_trend_following_strategy_live"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
-orders = OrderManager()
+# ================= INIT ORDER MANAGER =================
 
+order_manager = OrderManager()
+
+BASE_DIR = os.getcwd()
+
+SAVE_DIR = os.path.join(
+    BASE_DIR,
+    "data",
+    "price_trend_following_strategy_live"
+)
+
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+# ================= SAVE DATA =================
+
+def save_processed_data(data, symbol):
+
+    path = os.path.join(
+        SAVE_DIR,
+        f"{symbol}_processed.csv"
+    )
+
+    out = pd.DataFrame({
+        "time": data.index,
+        "HA_open": data["HA_open"],
+        "HA_high": data["HA_high"],
+        "HA_low": data["HA_low"],
+        "HA_close": data["HA_close"],
+        "trendline": data["Trendline"],
+    })
+
+    out.to_csv(path, index=False)
+
+# ================= PAPER ORDER =================
+
+def place_market_order(symbol, side, qty):
+
+    utils.log(
+        f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}",
+        tg=True
+    )
+
+    return {"success": True}
+
+# ================= DAILY RESET =================
 
 def reset_daily_state(state):
 
@@ -57,7 +122,9 @@ def reset_daily_state(state):
     if state["last_reset_day"] != today:
 
         state["daily_pnl"] = 0
+
         state["trading_enabled"] = True
+
         state["last_reset_day"] = today
 
         utils.log(
@@ -68,6 +135,8 @@ def reset_daily_state(state):
 
 def calculate_trendline(df):
 
+    # ================= HEIKIN ASHI =================
+
     ha = ta.ha(
         df["Open"],
         df["High"],
@@ -75,35 +144,50 @@ def calculate_trendline(df):
         df["Close"]
     ).reset_index(drop=True)
 
+   
+    # ================= FRACTALS =================
+
     ha["high_fractal"] = np.nan
     ha["low_fractal"] = np.nan
 
+    # NON-REPAINTING FRACTALS
+
     for i in range(2, len(ha) - 2):
 
-        if (
-            ha.loc[i, "HA_high"] > ha.loc[i-1, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i-2, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i+1, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i+2, "HA_high"]
-        ):
-            ha.loc[i+2, "high_fractal"] = ha.loc[i, "HA_high"]
+        is_high = (
+            ha.loc[i, "HA_high"] > ha.loc[i - 1, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i - 2, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i + 1, "HA_high"]
+            and ha.loc[i, "HA_high"] > ha.loc[i + 2, "HA_high"]
+        )
 
-        if (
-            ha.loc[i, "HA_low"] < ha.loc[i-1, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i-2, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i+1, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i+2, "HA_low"]
-        ):
-            ha.loc[i+2, "low_fractal"] = ha.loc[i, "HA_low"]
+        is_low = (
+            ha.loc[i, "HA_low"] < ha.loc[i - 1, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i - 2, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i + 1, "HA_low"]
+            and ha.loc[i, "HA_low"] < ha.loc[i + 2, "HA_low"]
+        )
+
+        # CONFIRM AFTER 2 CANDLES
+
+        if is_high:
+            ha.loc[i + 2, "high_fractal"] = ha.loc[i, "HA_high"]
+
+        if is_low:
+            ha.loc[i + 2, "low_fractal"] = ha.loc[i, "HA_low"]
+
+    # ================= TRENDLINE =================
 
     ha["Trendline"] = np.nan
-
-    trendline = ha.loc[0, "HA_close"]
 
     last_high_fractal = np.nan
     last_low_fractal = np.nan
 
+    trendline = ha.loc[0, "HA_close"]
+
     for i in range(1, len(ha)):
+
+        # UPDATE FRACTALS
 
         if not np.isnan(ha.loc[i, "high_fractal"]):
             last_high_fractal = ha.loc[i, "high_fractal"]
@@ -112,7 +196,10 @@ def calculate_trendline(df):
             last_low_fractal = ha.loc[i, "low_fractal"]
 
         current_close = ha.loc[i, "HA_close"]
-        prev_close = ha.loc[i-1, "HA_close"]
+
+        prev_close = ha.loc[i - 1, "HA_close"]
+
+        # ================= BULLISH BREAK =================
 
         if (
             not np.isnan(last_high_fractal)
@@ -121,7 +208,10 @@ def calculate_trendline(df):
             and current_close > trendline
             and not np.isnan(last_low_fractal)
         ):
+
             trendline = last_low_fractal
+
+        # ================= BEARISH BREAK =================
 
         elif (
             not np.isnan(last_low_fractal)
@@ -130,6 +220,7 @@ def calculate_trendline(df):
             and current_close < trendline
             and not np.isnan(last_high_fractal)
         ):
+
             trendline = last_high_fractal
 
         ha.loc[i, "Trendline"] = trendline
@@ -138,122 +229,33 @@ def calculate_trendline(df):
 
     return ha
 
+# ================= STRATEGY =================
 
-def close_position(symbol, pos):
-
-    try:
-
-        # Validate required keys in pos
-        required_keys = ["product_id", "side", "qty"]
-        for key in required_keys:
-            if key not in pos:
-                raise ValueError(f"Missing required key in pos: '{key}'")
-
-        product_id = pos["product_id"]
-
-        # Cancel bracket orders if any exist
-        if orders.has_open_bracket_order(product_id):
-
-            utils.log(
-                f"Cancelling bracket order for {symbol}",
-                tg=True
-            )
-
-            cancel_res = orders.cancel_bracket_order(
-                product_id=product_id
-            )
-
-            if not cancel_res or not cancel_res.get("success"):
-                utils.log(
-                    f"EXIT FAILED: Bracket cancel failed for {symbol}",
-                    tg=True
-                )
-                return {"success": False, "error": "bracket_cancel_failed"}
-
-            # Give exchange 2 seconds to process cancellation
-            time.sleep(2)
-
-        # Fetch live position to confirm it still exists
-        live_pos = orders.get_position(product_id)
-
-        if live_pos is None:
-            # Position already closed (likely by SL/TP on exchange)
-            utils.log(
-                f"Position already closed on exchange for {symbol}",
-                tg=True
-            )
-            return {"success": True, "already_closed": True}
-
-        # Determine exit side from live position
-        pos_side = live_pos["side"]
-
-        if pos_side == "buy":
-            exit_side = "sell"
-        elif pos_side == "sell":
-            exit_side = "buy"
-        else:
-            raise ValueError(f"Unknown position side: '{pos_side}'")
-
-        # FIX 3: Use "market" not "market_order" — place_order maps "market" → "market_order"
-        # Passing "market_order" directly hits the else branch → sends "limit_order" → 400 error
-        res = orders.place_order(
-            size=live_pos["size"],
-            side=exit_side,
-            product_id=product_id,
-            order_type="market",   # ← was "market_order", caused 400 Bad Request
-            reduce_only=True
-        )
-
-        if res and res.get("success"):
-
-            utils.log(
-                f"EXIT COMPLETE for {symbol}",
-                tg=True
-            )
-
-            return {"success": True}
-
-        else:
-
-            utils.log(
-                f"EXIT FAILED for {symbol} | Response: {res}",
-                tg=True
-            )
-
-            return {"success": False, "error": "place_order_failed", "response": res}
-
-    except Exception as e:
-
-        utils.log(
-            f"EXIT ERROR for {symbol} | {e}",
-            tg=True
-        )
-
-        return {"success": False, "error": str(e)}
-
-
-def process_symbol(
-    symbol,
-    df,
-    price,
-    state,
-    is_new_candle
-):
+def process_symbol(symbol, df, price, state, is_new_candle):
 
     reset_daily_state(state)
 
     ha = calculate_trendline(df)
 
+    # save_processed_data(ha, symbol)
+
     last = ha.iloc[-2]
+
     prev = ha.iloc[-3]
 
     pos = state["position"]
 
     now = datetime.now()
 
+    # ================= EXIT =================
+
     if pos:
 
         exit_trade = False
+
+        pnl = 0
+
+        # ================= LIVE PNL =================
 
         if pos["side"] == "long":
 
@@ -271,11 +273,23 @@ def process_symbol(
                 * pos["qty"]
             )
 
+        # ================= DAILY TARGET FORCE EXIT =================
+
         if (
             DAILY_TARGET is not None
             and state["daily_pnl"] + live_pnl >= DAILY_TARGET
         ):
+
+            pnl = live_pnl
+
             exit_trade = True
+
+            utils.log(
+                "🎯 DAILY TARGET REACHED DURING LIVE TRADE",
+                tg=True
+            )
+
+        # ================= LONG EXIT =================
 
         elif (
             pos["side"] == "long"
@@ -284,7 +298,12 @@ def process_symbol(
                 or price >= pos["entry"] + TP[symbol]
             )
         ):
+
+            pnl = live_pnl
+
             exit_trade = True
+
+        # ================= SHORT EXIT =================
 
         elif (
             pos["side"] == "short"
@@ -293,113 +312,230 @@ def process_symbol(
                 or price <= pos["entry"] - TP[symbol]
             )
         ):
+
+            pnl = live_pnl
+
             exit_trade = True
+
+        # ================= FINAL EXIT =================
 
         if exit_trade:
 
-            # FIX 2: Only clear state if exit succeeded
-            # Previously state was always cleared even on failed exits
-            # causing orphaned positions with no management
-            result = close_position(symbol, pos)
+            # ================= LIVE EXIT ORDER =================
 
-            if result.get("success"):
+            exit_side = "sell" if pos["side"] == "long" else "buy"
 
-                state["daily_pnl"] += live_pnl
-                state["position"] = None
-                state["last_exit_candle"] = df.index[-1]
+            order_manager.place_order(
+                size=pos["qty"],
+                side=exit_side,
+                symbol=symbol,
+                reduce_only=True
+            )
+
+            entry_fee = utils.commission(
+                pos["entry"],
+                pos["qty"],
+                symbol
+            )
+
+            exit_fee = utils.commission(
+                price,
+                pos["qty"],
+                symbol
+            )
+
+            total_fee = entry_fee + exit_fee
+
+            net = pnl - total_fee
+
+            # UPDATE BALANCE
+
+            state["balance"] += net
+
+            # UPDATE DAILY PNL
+
+            state["daily_pnl"] += net
+
+            utils.save_trade({
+                "symbol": symbol,
+                "side": pos["side"],
+                "entry_price": pos["entry"],
+                "exit_price": price,
+                "qty": pos["qty"],
+                "net_pnl": round(net, 6),
+                "entry_time": pos["entry_time"],
+                "exit_time": now
+            })
+
+            emoji = "🟢" if net > 0 else "🔴"
+
+            utils.log(
+                f"{emoji} {symbol} EXIT @ {price} | "
+                f"PNL: {round(net, 6)}",
+                tg=True
+            )
+
+            utils.log(
+                f"💰 Balance: {round(state['balance'], 2)}",
+                tg=True
+            )
+
+            utils.log(
+                f"📊 Daily PNL: {round(state['daily_pnl'], 2)}",
+                tg=True
+            )
+
+            # ================= DAILY TARGET =================
+
+            if (
+                DAILY_TARGET is not None
+                and state["daily_pnl"] >= DAILY_TARGET
+            ):
+
+                state["trading_enabled"] = False
 
                 utils.log(
-                    f"📊 Daily PnL: {state['daily_pnl']:.2f}",
+                    f"🎯 DAILY TARGET HIT: "
+                    f"{round(state['daily_pnl'], 2)}",
                     tg=True
                 )
 
-            else:
+            # ================= DAILY LOSS =================
+
+            if (
+                MAX_DAILY_LOSS is not None
+                and state["daily_pnl"] <= MAX_DAILY_LOSS
+            ):
+
+                state["trading_enabled"] = False
 
                 utils.log(
-                    f"⚠️ Exit failed for {symbol}, will retry next loop | "
-                    f"Error: {result.get('error')}",
+                    "🛑 MAX DAILY LOSS HIT",
                     tg=True
                 )
 
-            # Always return — never enter a new trade while exit is pending
+            state["position"] = None
+
+            state["last_exit_candle"] = df.index[-1]
+
             return
 
+    # ================= ENTRY =================
+
     if not pos and is_new_candle:
+
+        # ================= SESSION FILTER =================
+
+        # if not is_volatile_session():
+        #     return
+
+        # ================= TRADING ENABLED =================
 
         if not state["trading_enabled"]:
             return
 
-        if state["balance"] < MIN_BALANCE:
-            return
+        # ================= AVOID SAME CANDLE REENTRY =================
 
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
-        product_id = orders.get_product_id(symbol)
+        balance = state["balance"]
 
-        if not product_id:
+        if balance < MIN_BALANCE:
+
+            utils.log(
+                f"⚠️ Balance low: {balance}",
+                tg=True
+            )
+
             return
 
-        if (prev.HA_close <= prev.up_Trendline
-            and last.HA_close > last.up_Trendline):
+        # ================= LONG ENTRY =================
 
-            entry = orders.place_order(
+        if (
+            prev.HA_close <= prev.up_Trendline
+            and last.HA_close > last.up_Trendline
+        ):
+
+            state["position"] = {
+                "side": "long",
+                "entry": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": now,
+                "sl": last.Trendline
+            }
+
+            # ================= LIVE LONG ORDER =================
+
+            order_manager.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
                 side="buy",
-                product_id=product_id
+                symbol=symbol
             )
 
-            if entry and entry.get("success"):
+            utils.log(
+                f"🟢 {symbol} LONG @ {price} | "
+                f"SL: {last.Trendline}",
+                tg=True
+            )
 
-                orders.place_bracket_order(
-                    product_id=product_id,
-                    stop_loss_price=last.down_Trendline,
-                    take_profit_price=price + TP[symbol]
-                )
+        # ================= SHORT ENTRY =================
 
-                state["position"] = {
-                    "side": "long",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now,
-                    "product_id": product_id
-                }
+        elif (
+            prev.HA_close >= prev.down_Trendline
+            and last.HA_close < last.down_Trendline
+        ):
 
-                utils.log(
-                    f"✅ LONG ENTRY → {symbol} @ {price}",
-                    tg=True
-                )
+            state["position"] = {
+                "side": "short",
+                "entry": price,
+                "qty": DEFAULT_CONTRACTS[symbol],
+                "entry_time": now,
+                "sl": last.Trendline
+            }
 
-        elif (prev.HA_close >= prev.down_Trendline
-              and last.HA_close < last.down_Trendline):
+            # ================= LIVE SHORT ORDER =================
 
-            entry = orders.place_order(
+            order_manager.place_order(
                 size=DEFAULT_CONTRACTS[symbol],
                 side="sell",
-                product_id=product_id
+                symbol=symbol
             )
 
-            if entry and entry.get("success"):
+            utils.log(
+                f"🔴 {symbol} SHORT @ {price} | "
+                f"SL: {last.Trendline}",
+                tg=True
+            )
 
-                orders.place_bracket_order(
-                    product_id=product_id,
-                    stop_loss_price=last.up_Trendline,
-                    take_profit_price=price - TP[symbol]
-                )
+# ================= AUTO GIT PUSH =================
 
-                state["position"] = {
-                    "side": "short",
-                    "entry": price,
-                    "qty": DEFAULT_CONTRACTS[symbol],
-                    "entry_time": now,
-                    "product_id": product_id
-                }
+def auto_git_push():
 
-                utils.log(
-                    f"✅ SHORT ENTRY → {symbol} @ {price}",
-                    tg=True
-                )
+    try:
 
+        subprocess.run(
+            ["git", "add", "."],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        subprocess.run(
+            ["git", "commit", "-m", "auto update"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        subprocess.run(
+            ["git", "push"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    except:
+        pass
+
+# ================= MAIN =================
 
 def run():
 
@@ -412,18 +548,30 @@ def run():
             "daily_pnl": 0,
             "last_reset_day": datetime.now().date(),
             "trading_enabled": True
-        }
-        for s in SYMBOLS
+        } for s in SYMBOLS
+    }
+
+    # ================= SESSION STATE =================
+
+    session_state = {
+        "uk_started": False,
+        "uk_ended": False,
+        "us_started": False,
+        "us_ended": False
     }
 
     utils.log(
-        "🚀 LIVE BOT STARTED",
+        "🚀 LIVE BOT STARTED (PAPER MODE)",
         tg=True
     )
 
     while True:
 
         try:
+
+            # ================= SESSION ALERTS =================
+
+            # monitor_sessions(session_state)
 
             for symbol in SYMBOLS:
 
@@ -441,7 +589,9 @@ def run():
 
                 if is_new_candle:
 
-                    state[symbol]["last_candle_time"] = latest_candle_time
+                    state[symbol][
+                        "last_candle_time"
+                    ] = latest_candle_time
 
                 price = utils.fetch_price(symbol)
 
@@ -456,17 +606,22 @@ def run():
                     is_new_candle
                 )
 
+                # auto_git_push()
+
             time.sleep(3)
 
         except Exception as e:
 
             utils.log(
-                f"🚨 Runtime error: {e}\n{traceback.format_exc()}",
+                f"🚨 Runtime error: {e}\n"
+                f"{traceback.format_exc()}",
                 tg=True
             )
 
             time.sleep(5)
 
+# ================= START =================
 
 if __name__ == "__main__":
+
     run()
