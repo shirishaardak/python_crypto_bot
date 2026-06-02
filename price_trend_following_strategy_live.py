@@ -16,7 +16,6 @@ import traceback
 import subprocess
 
 from utils import TradingUtils
-from order_manager import OrderManager
 
 load_dotenv()
 
@@ -63,14 +62,14 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("price_trend_following_strategy_live_bot"),
+    telegram_token=os.getenv("price_trend_following"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
 
 # ================= INIT ORDER MANAGER =================
 
-order_manager = OrderManager()
+
 
 BASE_DIR = os.getcwd()
 
@@ -237,7 +236,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
     ha = calculate_trendline(df)
 
-    # save_processed_data(ha, symbol)
+    save_processed_data(ha, symbol)
 
     last = ha.iloc[-2]
 
@@ -325,12 +324,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             exit_side = "sell" if pos["side"] == "long" else "buy"
 
-            order_manager.place_order(
-                size=pos["qty"],
-                side=exit_side,
-                symbol=symbol,
-                reduce_only=True
-            )
+            
 
             entry_fee = utils.commission(
                 pos["entry"],
@@ -460,11 +454,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             # ================= LIVE LONG ORDER =================
 
-            order_manager.place_order(
-                size=DEFAULT_CONTRACTS[symbol],
-                side="buy",
-                symbol=symbol
-            )
+          
 
             utils.log(
                 f"🟢 {symbol} LONG @ {price} | "
@@ -489,11 +479,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             # ================= LIVE SHORT ORDER =================
 
-            order_manager.place_order(
-                size=DEFAULT_CONTRACTS[symbol],
-                side="sell",
-                symbol=symbol
-            )
+            
 
             utils.log(
                 f"🔴 {symbol} SHORT @ {price} | "
