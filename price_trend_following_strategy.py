@@ -18,7 +18,6 @@ import traceback
 import subprocess
 
 from utils import TradingUtils
-from order_manager import OrderManager
 
 load_dotenv()
 
@@ -85,8 +84,6 @@ utils = TradingUtils(
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME
 )
-
-order_manager = OrderManager()
 
 BASE_DIR = os.getcwd()
 
@@ -264,12 +261,9 @@ def calculate_trendline(df):
 
 
 # ================= STRATEGY =================
-# Core entry/exit logic is unchanged. The ONLY additions are:
-#   - capturing the order_manager.place_order(...) return value
-#   - skipping the position update if the order did not succeed
-#   - using the real average fill price when available
-# These are the minimum changes needed so a failed/rejected order does not
-# create a phantom position in state.
+# Paper-trading version. All live order_manager calls have been removed and
+# replaced with the local place_market_order paper stub. Fills are assumed at
+# the current market price.
 
 def process_symbol(symbol, df, price, state, is_new_candle):
 
@@ -361,31 +355,15 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         if exit_trade:
 
-            # ================= LIVE EXIT ORDER =================
+            # ================= PAPER EXIT ORDER =================
 
             exit_side = "sell" if pos["side"] == "long" else "buy"
 
-            exit_res = order_manager.place_order(
-                size=live_DEFAULT_CONTRACTS[symbol],
-                side=exit_side,
-                symbol=symbol,
-                reduce_only=True
-            )
+            place_market_order(symbol, exit_side, pos["qty"])
 
-            # If the exit order didn't go through, keep the position open and
-            # retry on the next tick rather than booking a fake closed trade.
-            if not exit_res.get("success"):
-                utils.log(
-                    f"🚨 EXIT ORDER FAILED {symbol} "
-                    f"({exit_res.get('error')}) — holding position",
-                    tg=True
-                )
-                return
+            fill_price = price
 
-            # Use the real fill price for PnL when the exchange reports it.
-            fill_price = exit_res.get("avg_price") or price
-
-            # Recompute realised pnl on the actual fill price.
+            # Recompute realised pnl on the fill price.
             if pos["side"] == "long":
                 pnl = (
                     (fill_price - pos["entry"])
@@ -516,24 +494,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             prev.HA_close <= prev.up_Trendline
             and last.HA_close > last.up_Trendline
         ):
-            # ================= LIVE LONG ORDER =================
+            # ================= PAPER LONG ORDER =================
 
-            entry_res = order_manager.place_order(
-                size=live_DEFAULT_CONTRACTS[symbol],
-                side="buy",
-                symbol=symbol
-            )
+            place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
 
-            # Only record the position if the order actually filled.
-            if not entry_res.get("success"):
-                utils.log(
-                    f"🚨 LONG ENTRY FAILED {symbol} "
-                    f"({entry_res.get('error')}) — no position opened",
-                    tg=True
-                )
-                return
-
-            entry_price = entry_res.get("avg_price") or price
+            entry_price = price
 
             state["position"] = {
                 "side": "long",
@@ -555,24 +520,11 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             prev.HA_close >= prev.down_Trendline
             and last.HA_close < last.down_Trendline
         ):
-            # ================= LIVE SHORT ORDER =================
+            # ================= PAPER SHORT ORDER =================
 
-            entry_res = order_manager.place_order(
-                size=live_DEFAULT_CONTRACTS[symbol],
-                side="sell",
-                symbol=symbol
-            )
+            place_market_order(symbol, "sell", DEFAULT_CONTRACTS[symbol])
 
-            # Only record the position if the order actually filled.
-            if not entry_res.get("success"):
-                utils.log(
-                    f"🚨 SHORT ENTRY FAILED {symbol} "
-                    f"({entry_res.get('error')}) — no position opened",
-                    tg=True
-                )
-                return
-
-            entry_price = entry_res.get("avg_price") or price
+            entry_price = price
 
             state["position"] = {
                 "side": "short",
