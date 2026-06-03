@@ -1,6 +1,6 @@
 level_index,price,side,filled
 -1,66993.15784424,long,True
--2,66793.15784424,long,False
+-2,66793.15784424,long,True
 -3,66593.15784424,long,False
 1,67393.15784424,short,False
 2,67593.15784424,short,False
