@@ -2,7 +2,7 @@
 import ccxt, pandas as pd, time
 
 ex = ccxt.binance()
-symbol, tf = "BTC/USDT", "1h"
+symbol, tf = "BTC/USDT", "15m"
 since = ex.parse8601("2017-01-01T00:00:00Z")   # ~2 years back
 rows = []
 while since < ex.milliseconds():

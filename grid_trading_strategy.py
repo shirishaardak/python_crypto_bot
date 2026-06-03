@@ -76,7 +76,13 @@ DAILY_TARGET = 600
 
 # Strongly recommended: set a max daily loss (in points) to halt a
 # runaway trend. None = no loss halt (NOT recommended for a grid).
-MAX_DAILY_LOSS = None
+MAX_DAILY_LOSS = -1000
+
+# If True, when the daily target is reached we force-close any
+# positions that are ALREADY in profit (locking the day in).
+# Positions that are underwater are left to hit their own TP/SL
+# instead of being dumped at a loss.
+FORCE_EXIT_PROFITABLE_ON_TARGET = True
 
 # ================= INIT UTILS =================
 
@@ -255,10 +261,21 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             )
             hit_tp = price <= posn["entry"] - GRID_TP
 
-        # Daily target force-exit while in a live trade.
+        # ----- FIXED FORCE-EXIT LOGIC -----
+        # The old code force-exited EVERY position the moment
+        # daily_pnl + live_pnl >= DAILY_TARGET, even positions that
+        # were underwater or barely positive. That dumped trades at
+        # tiny/negative PnL before they could reach GRID_TP.
+        #
+        # Now: only force-exit on target if THIS position is itself
+        # in profit (gross, before fee). Underwater positions are
+        # left alone to hit their own TP. This locks in the day
+        # without booking scraps/losses.
         force_exit = (
-            DAILY_TARGET is not None
-            and state["daily_pnl"] + live_pnl >= DAILY_TARGET
+            FORCE_EXIT_PROFITABLE_ON_TARGET
+            and DAILY_TARGET is not None
+            and state["daily_pnl"] >= DAILY_TARGET
+            and live_pnl > 0
         )
 
         if not (hit_tp or force_exit):
@@ -293,8 +310,10 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
         emoji = "🟢" if net > 0 else "🔴"
 
+        reason = "TP" if hit_tp else "TARGET-LOCK"
+
         utils.log(
-            f"{emoji} {symbol} GRID EXIT L{posn['level_index']} "
+            f"{emoji} {symbol} GRID EXIT ({reason}) L{posn['level_index']} "
             f"@ {price} | PNL: {round(net, 6)}",
             tg=True
         )
