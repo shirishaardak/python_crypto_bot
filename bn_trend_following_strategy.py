@@ -477,6 +477,7 @@ def daily_reset():
 
 # ================= MAIN LOOP =================
 send_telegram("🚀 BankNifty Option Trend Algo Started")
+print("🚀 BankNifty Option Trend Algo Started")
 
 while True:
     try:
