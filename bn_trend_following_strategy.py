@@ -47,16 +47,24 @@ SPOT_SYMBOL="NSE:NIFTYBANK-INDEX"
 ADX_PERIOD=14
 ADX_THRESHOLD=20
 
+# --- risk config ---
+HARD_SL_POINTS=50      # entry - 50
+TRAIL_TRIGGER=25       # once price >= entry + 25, start trailing
+TRAIL_GAP=25           # keep SL this far below the running high
+
+# --- perf config ---
+INDICATOR_REFRESH_SEC=60   # recompute heavy indicators at most this often
+
 folder="data/Trend_Following"
 os.makedirs(folder,exist_ok=True)
 TRADES_FILE=f"{folder}/live_trades.csv"
 TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
-TELEGRAM_BOT_TOKEN=os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID=os.getenv("price_trend_following_strategy")
+# FIX: these were swapped / pointing at wrong env keys, so every alert failed silently.
+TELEGRAM_BOT_TOKEN=os.getenv("testmyaglostrategy_bot")
+TELEGRAM_CHAT_ID=os.getenv("TELEGRAM_CHAT_ID")
 
-# reuse one TCP connection for telegram (perf)
 _tg_session = requests.Session()
 
 def send_telegram(msg):
@@ -80,6 +88,7 @@ model_load_date=None
 last_exit_time=None
 stop_loss=None
 trail_level=None
+running_high=None      # highest price seen since entry (for trailing)
 
 NSE_HOLIDAYS=set()
 holiday_load_date=None
@@ -87,6 +96,9 @@ holiday_load_date=None
 # expiry cache (perf) - recomputed once per day
 _cached_expiry=None
 _cached_expiry_date=None
+
+# indicator cache (perf): {symbol: (timestamp, computed_df)}
+_indicator_cache={}
 
 # ================= SAFE PRICE =================
 def get_last_price(symbol):
@@ -141,30 +153,43 @@ def is_market_open():
     return True
 
 # ================= EXPIRY =================
-def get_last_thursday(year,month):
+# NSE moved BANKNIFTY monthly expiry from the last THURSDAY to the last
+# TUESDAY of the month, effective Sep 2025 (circular 111/2025). Weekly
+# BankNifty options were discontinued (Nov 2024) — only the monthly series
+# trades. If the last Tuesday is an exchange holiday, expiry shifts to the
+# previous trading day.
+def get_last_tuesday(year,month):
     last_day=date(year,month,1)+timedelta(days=32)
     last_day=last_day.replace(day=1)-timedelta(days=1)
-    while last_day.weekday()!=3:
+    while last_day.weekday()!=1:   # Tuesday == 1
         last_day-=timedelta(days=1)
     return last_day
 
+def _shift_for_holiday(d):
+    # move back to the previous weekday/non-holiday if expiry lands on one
+    guard=0
+    while (d.weekday()>=5 or d in NSE_HOLIDAYS) and guard<10:
+        d-=timedelta(days=1)
+        guard+=1
+    return d
+
 def get_current_monthly_expiry():
-    # cache result for the day (perf); identical logic
     global _cached_expiry, _cached_expiry_date
     today=ist_today()
     if _cached_expiry is not None and _cached_expiry_date==today:
         return _cached_expiry
 
     now=ist_time()
-    expiry=get_last_thursday(today.year,today.month)
+    expiry=_shift_for_holiday(get_last_tuesday(today.year,today.month))
 
+    # once we're past this month's (possibly shifted) expiry, roll to next month
     if today>expiry or (today==expiry and now>=time(15,30)):
         next_month=today.month+1
         next_year=today.year
         if next_month==13:
             next_month=1
             next_year+=1
-        expiry=get_last_thursday(next_year,next_month)
+        expiry=_shift_for_holiday(get_last_tuesday(next_year,next_month))
 
     _cached_expiry=expiry
     _cached_expiry_date=today
@@ -175,7 +200,6 @@ def get_atm_option(option_type, spot=None):
     if not is_market_open():
         return None
 
-    # accept a pre-fetched spot to avoid duplicate quote calls (perf)
     if spot is None:
         spot=get_last_price(SPOT_SYMBOL)
     if spot is None:
@@ -265,9 +289,31 @@ def calculate_trendline(df):
         send_telegram(f"⚠ Trendline Error {e}")
         return pd.DataFrame()
 
+# ================= CACHED INDICATOR FETCH (perf) =================
+def get_indicators(sym, hist_template):
+    """Fetch history + compute indicators, but reuse a cached result if it
+    is younger than INDICATOR_REFRESH_SEC. 5-min candles only change every
+    300s, so recomputing every loop is wasted work."""
+    now=ist_now()
+    cached=_indicator_cache.get(sym)
+    if cached is not None:
+        ts, cdf = cached
+        if (now-ts).total_seconds() < INDICATOR_REFRESH_SEC:
+            return cdf
+
+    h=hist_template.copy()
+    h["symbol"]=sym
+    raw=get_stock_historical_data(h)
+    if raw.empty:
+        return pd.DataFrame()
+    computed=calculate_trendline(raw)
+    if not computed.empty:
+        _indicator_cache[sym]=(now, computed)
+    return computed
+
 # ================= EXIT =================
 def exit_trade(reason):
-    global position_type,last_exit_time,stop_loss,trail_level
+    global position_type,last_exit_time,stop_loss,trail_level,running_high
     global entry_price, entry_time, symbol
 
     price = get_last_price(symbol)
@@ -292,14 +338,39 @@ def exit_trade(reason):
     position_type=None
     stop_loss=None
     trail_level=None
+    running_high=None
     last_exit_time=ist_now()
+
+# ================= SL / TRAILING (perf: price-only, no history) =================
+def update_trailing(price):
+    """Move the stop up as price makes new highs once it clears the trigger.
+    Pure arithmetic on the live price; no API/indicator calls."""
+    global stop_loss, running_high
+    if price is None or stop_loss is None:
+        return
+    if running_high is None or price > running_high:
+        running_high = price
+        # once price has run past entry+TRAIL_TRIGGER, trail the stop
+        if running_high >= entry_price + TRAIL_TRIGGER:
+            new_sl = running_high - TRAIL_GAP
+            if new_sl > stop_loss:
+                stop_loss = new_sl
+
+def check_hard_exits(price):
+    """Returns True if an SL/trail exit fired. Price-only, runs every poll."""
+    if price is None or stop_loss is None:
+        return False
+    if price <= stop_loss:
+        exit_trade("Stop Loss / Trail")
+        return True
+    return False
 
 # ================= STRATEGY =================
 def run_strategy():
     global position_type, entry_price, entry_time
-    global symbol, stop_loss, trail_level
+    global symbol, stop_loss, trail_level, running_high
 
-    if last_exit_time and (ist_now()-last_exit_time).seconds<300:
+    if last_exit_time and (ist_now()-last_exit_time).total_seconds()<300:
         return
 
     # ---------- HISTORY TEMPLATE ----------
@@ -322,37 +393,61 @@ def run_strategy():
     if ce_symbol is None or pe_symbol is None:
         return
 
-    # ---------- INDEX (always needed) ----------
-    hist_index=hist_template.copy()
-    hist_index["symbol"]=SPOT_SYMBOL
+    # ================= EXIT BRANCH (checked first, price-driven) =================
+    if position_type:
 
-    df_index_raw=get_stock_historical_data(hist_index)
-    if df_index_raw.empty:
+        price = get_last_price(symbol)
+
+        # 1) hard SL / trailing — pure price, most responsive
+        update_trailing(price)
+        if check_hard_exits(price):
+            return
+
+        # 2) force time exit (no price dependency)
+        if ist_time() >= time(15,15):
+            exit_trade("Time Exit")
+            return
+
+        if price is None:
+            return
+
+        # 3) supertrend break on the leg we actually hold (cached indicators)
+        if position_type=="CE":
+            df_ce=get_indicators(ce_symbol, hist_template)
+            if df_ce.empty or len(df_ce)<5:
+                return
+            ce_last=df_ce.iloc[-2]
+            if ce_last.HA_Close < ce_last.ST:
+                exit_trade("CE Supertrend Break")
+                return
+
+        if position_type=="PE":
+            df_pe=get_indicators(pe_symbol, hist_template)
+            if df_pe.empty or len(df_pe)<5:
+                return
+            pe_last=df_pe.iloc[-2]
+            if pe_last.HA_Close < pe_last.ST:
+                exit_trade("PE Supertrend Break")
+                return
         return
 
-    df_index=calculate_trendline(df_index_raw)
+    # ================= ENTRY BRANCH =================
+    # Index indicators always needed for entry
+    df_index=get_indicators(SPOT_SYMBOL, hist_template)
     if df_index.empty or len(df_index)<5:
         return
 
     index_last=df_index.iloc[-2]
 
-    # ================= ENTRY BRANCH =================
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if index_last.ADX < ADX_THRESHOLD:
             return
 
-        # Only fetch the leg that could possibly trigger (perf).
-        # Logic is identical: a CE entry requires index above ST,
-        # a PE entry requires index below ST. The other leg is never
-        # consulted in the original entry conditions.
+        # CE entry: index above its supertrend, then confirm the CE option
+        # is itself breaking out upward.
         if index_last.HA_Close > index_last.ST:
-            hist_ce=hist_template.copy()
-            hist_ce["symbol"]=ce_symbol
-            df_ce_raw=get_stock_historical_data(hist_ce)
-            if df_ce_raw.empty:
-                return
-            df_ce=calculate_trendline(df_ce_raw)
+            df_ce=get_indicators(ce_symbol, hist_template)
             if df_ce.empty or len(df_ce)<5:
                 return
             ce_last=df_ce.iloc[-2]
@@ -364,20 +459,16 @@ def run_strategy():
             else:
                 return
 
+        # PE entry: index below its supertrend, then confirm the PE option
+        # is itself breaking out upward (PE price rises as index falls).
         elif index_last.HA_Close < index_last.ST:
-            hist_pe=hist_template.copy()
-            hist_pe["symbol"]=pe_symbol
-            df_pe_raw=get_stock_historical_data(hist_pe)
-            if df_pe_raw.empty:
-                return
-            df_pe=calculate_trendline(df_pe_raw)
+            df_pe=get_indicators(pe_symbol, hist_template)
             if df_pe.empty or len(df_pe)<5:
                 return
             pe_last=df_pe.iloc[-2]
             pe_perv=df_pe.iloc[-3]
 
             if pe_last.HA_Close > pe_last.ST and pe_last.HA_Close > pe_perv.HA_Close and pe_last.HA_Close > pe_perv.HA_Open:
-                symbol=ce_symbol
                 symbol=pe_symbol
                 position_type="PE"
             else:
@@ -394,52 +485,13 @@ def run_strategy():
         entry_price=price
         entry_time=ist_now()
 
-        stop_loss=entry_price-50
-        trail_level=entry_price+25
+        # initialise risk levels
+        stop_loss=entry_price-HARD_SL_POINTS
+        trail_level=entry_price+TRAIL_TRIGGER
+        running_high=entry_price
 
-        send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
+        send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss} | Trail>{trail_level}")
         return
-
-    # ================= EXIT BRANCH =================
-    if position_type:
-
-        # ⛔ FORCE TIME EXIT FIRST (NO PRICE DEPENDENCY)
-        if ist_time() >= time(15,15):
-            exit_trade("Time Exit")
-            return
-
-        price = get_last_price(symbol)
-        if price is None:
-            return
-
-        # Only fetch the leg we actually hold (perf) - logic unchanged.
-        if position_type=="CE":
-            hist_ce=hist_template.copy()
-            hist_ce["symbol"]=ce_symbol
-            df_ce_raw=get_stock_historical_data(hist_ce)
-            if df_ce_raw.empty:
-                return
-            df_ce=calculate_trendline(df_ce_raw)
-            if df_ce.empty or len(df_ce)<5:
-                return
-            ce_last=df_ce.iloc[-2]
-            if ce_last.HA_Close < ce_last.ST:
-                exit_trade("CE Supertrend Break")
-                return
-
-        if position_type=="PE":
-            hist_pe=hist_template.copy()
-            hist_pe["symbol"]=pe_symbol
-            df_pe_raw=get_stock_historical_data(hist_pe)
-            if df_pe_raw.empty:
-                return
-            df_pe=calculate_trendline(df_pe_raw)
-            if df_pe.empty or len(df_pe)<5:
-                return
-            pe_last=df_pe.iloc[-2]
-            if pe_last.HA_Close < pe_last.ST:
-                exit_trade("PE Supertrend Break")
-                return
 
 # ================= AUTH =================
 def load_token():
@@ -447,7 +499,15 @@ def load_token():
     return True
 
 def load_model():
-    token=open(TOKEN_FILE).read().strip()
+    try:
+        with open(TOKEN_FILE) as f:
+            token=f.read().strip()
+    except FileNotFoundError:
+        send_telegram(f"⚠ Token file not found: {TOKEN_FILE}")
+        return None
+    if not token:
+        send_telegram("⚠ Token file is empty")
+        return None
 
     model=fyersModel.FyersModel(
         client_id=CLIENT_ID,
@@ -463,7 +523,8 @@ def load_model():
 def daily_reset():
     global position_type, entry_price, entry_time
     global symbol, last_exit_time
-    global stop_loss, trail_level
+    global stop_loss, trail_level, running_high
+    global _indicator_cache, _cached_expiry, _cached_expiry_date
 
     position_type=None
     entry_price=0
@@ -472,6 +533,10 @@ def daily_reset():
     last_exit_time=None
     stop_loss=None
     trail_level=None
+    running_high=None
+    _indicator_cache={}
+    _cached_expiry=None
+    _cached_expiry_date=None
 
     send_telegram("🔄 Daily Reset Completed")
 
@@ -488,7 +553,9 @@ while True:
             daily_reset()
             last_reset_date = today
 
-        if time(8,55)<=now<time(9,0) and holiday_load_date!=today:
+        # Load holidays at 8:55, OR immediately if the bot started late and
+        # hasn't loaded them yet today (otherwise holidays look like open days).
+        if holiday_load_date!=today and (time(8,55)<=now<time(9,0) or now>=time(9,0)):
             fetch_nse_holidays()
             holiday_load_date=today
 
@@ -499,16 +566,19 @@ while True:
 
         if time(9,0)<=now<time(15,30):
             if model_load_date!=today:
-                fyers=load_model()
-                model_load_date=today
+                m=load_model()
+                if m is not None:
+                    fyers=m
+                    model_load_date=today
+                # if login failed, leave model_load_date unset so we retry next loop
 
         if time(9,20)<=now<=time(15,30) and model_load_date==today:
             if is_market_open():
                 run_strategy()
 
-        # Adaptive sleep (perf): poll fast while holding a position so the
-        # time/SL/supertrend exit stays responsive, slower while idle since
-        # 5-min candles only update every 300s. No trading logic changes.
+        # Adaptive sleep: poll fast while holding a position so SL/trail/time
+        # exits stay responsive; slower while idle. Heavy indicator work is
+        # throttled separately by INDICATOR_REFRESH_SEC inside get_indicators.
         t.sleep(2 if position_type else 20)
 
     except Exception as e:
