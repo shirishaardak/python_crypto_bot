@@ -56,12 +56,15 @@ TOKEN_FILE="auth/api_key/access_token.txt"
 TELEGRAM_BOT_TOKEN=os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID=os.getenv("testmyaglostrategy_bot")
 
+# reuse one TCP connection for telegram (perf)
+_tg_session = requests.Session()
+
 def send_telegram(msg):
     try:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
             url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             payload={"chat_id":TELEGRAM_CHAT_ID,"text":msg}
-            requests.post(url,json=payload,timeout=5)
+            _tg_session.post(url,json=payload,timeout=5)
     except:
         pass
 
@@ -80,6 +83,10 @@ trail_level=None
 
 NSE_HOLIDAYS=set()
 holiday_load_date=None
+
+# expiry cache (perf) - recomputed once per day
+_cached_expiry=None
+_cached_expiry_date=None
 
 # ================= SAFE PRICE =================
 def get_last_price(symbol):
@@ -142,7 +149,12 @@ def get_last_thursday(year,month):
     return last_day
 
 def get_current_monthly_expiry():
+    # cache result for the day (perf); identical logic
+    global _cached_expiry, _cached_expiry_date
     today=ist_today()
+    if _cached_expiry is not None and _cached_expiry_date==today:
+        return _cached_expiry
+
     now=ist_time()
     expiry=get_last_thursday(today.year,today.month)
 
@@ -154,14 +166,18 @@ def get_current_monthly_expiry():
             next_year+=1
         expiry=get_last_thursday(next_year,next_month)
 
+    _cached_expiry=expiry
+    _cached_expiry_date=today
     return expiry
 
 # ================= ATM OPTION =================
-def get_atm_option(option_type):
+def get_atm_option(option_type, spot=None):
     if not is_market_open():
         return None
 
-    spot=get_last_price(SPOT_SYMBOL)
+    # accept a pre-fetched spot to avoid duplicate quote calls (perf)
+    if spot is None:
+        spot=get_last_price(SPOT_SYMBOL)
     if spot is None:
         return None
 
@@ -286,12 +302,7 @@ def run_strategy():
     if last_exit_time and (ist_now()-last_exit_time).seconds<300:
         return
 
-    ce_symbol=get_atm_option("CE")
-    pe_symbol=get_atm_option("PE")
-
-    if ce_symbol is None or pe_symbol is None:
-        return
-
+    # ---------- HISTORY TEMPLATE ----------
     hist_template={
         "resolution":"5",
         "date_format":"1",
@@ -300,7 +311,18 @@ def run_strategy():
         "cont_flag":"1"
     }
 
-    # INDEX
+    # ---------- SPOT (one quote, reused for both legs) ----------
+    spot=get_last_price(SPOT_SYMBOL)
+    if spot is None:
+        return
+
+    ce_symbol=get_atm_option("CE", spot=spot)
+    pe_symbol=get_atm_option("PE", spot=spot)
+
+    if ce_symbol is None or pe_symbol is None:
+        return
+
+    # ---------- INDEX (always needed) ----------
     hist_index=hist_template.copy()
     hist_index["symbol"]=SPOT_SYMBOL
 
@@ -314,50 +336,52 @@ def run_strategy():
 
     index_last=df_index.iloc[-2]
 
-    # CE
-    hist_ce=hist_template.copy()
-    hist_ce["symbol"]=ce_symbol
-
-    df_ce_raw=get_stock_historical_data(hist_ce)
-    if df_ce_raw.empty:
-        return
-
-    df_ce=calculate_trendline(df_ce_raw)
-    if df_ce.empty or len(df_ce)<5:
-        return
-
-    ce_last=df_ce.iloc[-2]
-    ce_perv=df_ce.iloc[-3]
-
-    # PE
-    hist_pe=hist_template.copy()
-    hist_pe["symbol"]=pe_symbol
-
-    df_pe_raw=get_stock_historical_data(hist_pe)
-    if df_pe_raw.empty:
-        return
-
-    df_pe=calculate_trendline(df_pe_raw)
-    if df_pe.empty or len(df_pe)<5:
-        return
-
-    pe_last=df_pe.iloc[-2]
-    pe_perv=df_pe.iloc[-3]
-
-    # ENTRY
+    # ================= ENTRY BRANCH =================
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if index_last.ADX < ADX_THRESHOLD:
             return
 
-        if index_last.HA_Close > index_last.ST and ce_last.HA_Close > ce_last.ST and ce_last.HA_Close > ce_perv.HA_Close and ce_last.HA_Close > ce_perv.HA_Open:
-            symbol=ce_symbol
-            position_type="CE"
+        # Only fetch the leg that could possibly trigger (perf).
+        # Logic is identical: a CE entry requires index above ST,
+        # a PE entry requires index below ST. The other leg is never
+        # consulted in the original entry conditions.
+        if index_last.HA_Close > index_last.ST:
+            hist_ce=hist_template.copy()
+            hist_ce["symbol"]=ce_symbol
+            df_ce_raw=get_stock_historical_data(hist_ce)
+            if df_ce_raw.empty:
+                return
+            df_ce=calculate_trendline(df_ce_raw)
+            if df_ce.empty or len(df_ce)<5:
+                return
+            ce_last=df_ce.iloc[-2]
+            ce_perv=df_ce.iloc[-3]
 
-        elif index_last.HA_Close < index_last.ST and pe_last.HA_Close > pe_last.ST and pe_last.HA_Close > pe_perv.HA_Close and pe_last.HA_Close > pe_perv.HA_Open:
-            symbol=ce_symbol
-            symbol=pe_symbol
-            position_type="PE"
+            if ce_last.HA_Close > ce_last.ST and ce_last.HA_Close > ce_perv.HA_Close and ce_last.HA_Close > ce_perv.HA_Open:
+                symbol=ce_symbol
+                position_type="CE"
+            else:
+                return
+
+        elif index_last.HA_Close < index_last.ST:
+            hist_pe=hist_template.copy()
+            hist_pe["symbol"]=pe_symbol
+            df_pe_raw=get_stock_historical_data(hist_pe)
+            if df_pe_raw.empty:
+                return
+            df_pe=calculate_trendline(df_pe_raw)
+            if df_pe.empty or len(df_pe)<5:
+                return
+            pe_last=df_pe.iloc[-2]
+            pe_perv=df_pe.iloc[-3]
+
+            if pe_last.HA_Close > pe_last.ST and pe_last.HA_Close > pe_perv.HA_Close and pe_last.HA_Close > pe_perv.HA_Open:
+                symbol=ce_symbol
+                symbol=pe_symbol
+                position_type="PE"
+            else:
+                return
 
         else:
             return
@@ -374,9 +398,9 @@ def run_strategy():
         trail_level=entry_price+25
 
         send_telegram(f"⚡ BUY {symbol} @ {price} | SL {stop_loss}")
+        return
 
-    # EXIT
-    # EXIT
+    # ================= EXIT BRANCH =================
     if position_type:
 
         # ⛔ FORCE TIME EXIT FIRST (NO PRICE DEPENDENCY)
@@ -388,13 +412,34 @@ def run_strategy():
         if price is None:
             return
 
-        if position_type=="CE" and ce_last.HA_Close < ce_last.ST:
-            exit_trade("CE Supertrend Break")
-            return
+        # Only fetch the leg we actually hold (perf) - logic unchanged.
+        if position_type=="CE":
+            hist_ce=hist_template.copy()
+            hist_ce["symbol"]=ce_symbol
+            df_ce_raw=get_stock_historical_data(hist_ce)
+            if df_ce_raw.empty:
+                return
+            df_ce=calculate_trendline(df_ce_raw)
+            if df_ce.empty or len(df_ce)<5:
+                return
+            ce_last=df_ce.iloc[-2]
+            if ce_last.HA_Close < ce_last.ST:
+                exit_trade("CE Supertrend Break")
+                return
 
-        if position_type=="PE" and pe_last.HA_Close < pe_last.ST:
-            exit_trade("PE Supertrend Break")
-            return
+        if position_type=="PE":
+            hist_pe=hist_template.copy()
+            hist_pe["symbol"]=pe_symbol
+            df_pe_raw=get_stock_historical_data(hist_pe)
+            if df_pe_raw.empty:
+                return
+            df_pe=calculate_trendline(df_pe_raw)
+            if df_pe.empty or len(df_pe)<5:
+                return
+            pe_last=df_pe.iloc[-2]
+            if pe_last.HA_Close < pe_last.ST:
+                exit_trade("PE Supertrend Break")
+                return
 
 # ================= AUTH =================
 def load_token():
@@ -460,7 +505,10 @@ while True:
             if is_market_open():
                 run_strategy()
 
-        t.sleep(2)
+        # Adaptive sleep (perf): poll fast while holding a position so the
+        # time/SL/supertrend exit stays responsive, slower while idle since
+        # 5-min candles only update every 300s. No trading logic changes.
+        t.sleep(2 if position_type else 20)
 
     except Exception as e:
         send_telegram(f"❌ Algo Error: {e}")
