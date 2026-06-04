@@ -54,7 +54,7 @@ TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
 TELEGRAM_BOT_TOKEN=os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID=os.getenv("testmyaglostrategy_bot")
+TELEGRAM_CHAT_ID=os.getenv("price_trend_following_strategy")
 
 # reuse one TCP connection for telegram (perf)
 _tg_session = requests.Session()
