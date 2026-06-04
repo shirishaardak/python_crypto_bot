@@ -63,7 +63,7 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary (600)
 
 ADX_TIMEFRAME = "15m"   # timeframe the ADX is computed on
 ADX_PERIOD = 14         # standard ADX lookback
-ADX_THRESHOLD = 25.0    # the 25 line you asked for
+ADX_THRESHOLD = 35.0    # the 25 line you asked for
 
 # --- Level gate (current ADX vs the fixed threshold) ---
 # "trend" -> ADX > threshold   (your original request)
