@@ -138,6 +138,16 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 def save_processed_data(state, symbol):
     if state["grid"] is None:
         return
+    # Only write when the grid snapshot actually changed (fills/rebuilds),
+    # not every 3s tick. Avoids a disk write + DataFrame build per loop.
+    snapshot = tuple(
+        (lvl["index"], lvl["price"], lvl["side"], lvl["filled"])
+        for lvl in state["grid"]
+    )
+    if state.get("_last_saved_snapshot") == snapshot:
+        return
+    state["_last_saved_snapshot"] = snapshot
+
     path = os.path.join(SAVE_DIR, f"{symbol}_grid.csv")
     rows = [
         {
@@ -160,29 +170,76 @@ def place_market_order(symbol, side, qty):
 
 # ================= ADX =================
 
-def compute_adx(symbol):
-    """
-    Fetch ADX_TIMEFRAME candles and return (adx_now, adx_avg) for the latest
-    CLOSED candle:
-      adx_now -> ADX value of the last closed bar
-      adx_avg -> mean of the last ADX_AVG_PERIOD closed ADX values
-    Returns (None, None) if data is unavailable so the caller can decide.
-    """
+# Cache so we only refetch + recompute ADX when a NEW 15m bar appears, instead
+# of every 3s tick. Keyed per symbol on the latest candle timestamp.
+_adx_cache = {}  # symbol -> {"key": <last bar ts>, "val": (adx_now, adx_avg)}
+
+# Throttle the candle network fetch: don't hit the API more than once every
+# ADX_FETCH_EVERY_SEC. 15m data can't change faster than that anyway.
+_candle_cache = {}  # symbol -> {"ts": <monotonic>, "df": <DataFrame>}
+ADX_FETCH_EVERY_SEC = 60
+
+
+def _fetch_adx_candles(symbol):
+    """Fetch ADX_TIMEFRAME candles, throttled by ADX_FETCH_EVERY_SEC."""
+    cached = _candle_cache.get(symbol)
+    nowm = time.monotonic()
+    if cached is not None and (nowm - cached["ts"]) < ADX_FETCH_EVERY_SEC:
+        return cached["df"]
+
     try:
         df = utils.fetch_candles(symbol, timeframe=ADX_TIMEFRAME)
     except TypeError:
-        # Fallback if fetch_candles doesn't accept a timeframe kwarg.
         df = utils.fetch_candles(symbol)
+
+    _candle_cache[symbol] = {"ts": nowm, "df": df}
+    return df
+
+
+def _col(df, *candidates):
+    """Resolve a column by case-insensitive name, trying each candidate."""
+    lookup = {str(c).lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand in lookup:
+            return df[lookup[cand]]
+    return None
+
+
+def compute_adx(symbol):
+    """
+    Return (adx_now, adx_avg) for the latest CLOSED ADX_TIMEFRAME bar.
+    Cached two ways: candle fetch is throttled, and the TA recompute only
+    runs when a new bar arrives. Most ticks are effectively free.
+    Returns (None, None) if data is unavailable.
+    """
+    df = _fetch_adx_candles(symbol)
 
     if df is None or len(df) < ADX_PERIOD * 2:
         return None, None
 
-    adx_df = ta.adx(
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
-        length=ADX_PERIOD,
-    )
+    # Cache key = timestamp of the most recent bar. If unchanged, reuse.
+    try:
+        bar_key = df.index[-1]
+    except Exception:
+        bar_key = len(df)
+
+    cached = _adx_cache.get(symbol)
+    if cached is not None and cached["key"] == bar_key:
+        return cached["val"]
+
+    high = _col(df, "high", "h")
+    low = _col(df, "low", "l")
+    close = _col(df, "close", "c", "close_price", "last")
+
+    if high is None or low is None or close is None:
+        utils.log(
+            f"⚠️ ADX: OHLC columns not found in candles "
+            f"(got {list(df.columns)}) — skipping ADX this tick",
+            tg=False,
+        )
+        return None, None
+
+    adx_df = ta.adx(high=high, low=low, close=close, length=ADX_PERIOD)
     if adx_df is None or adx_df.empty:
         return None, None
 
@@ -190,18 +247,18 @@ def compute_adx(symbol):
     if col not in adx_df.columns:
         return None, None
 
-    # Drop the still-forming last bar, keep only closed values.
     series = adx_df[col].dropna()
     if len(series) < 2:
         return None, None
-    closed = series.iloc[:-1]  # everything up to and including the last CLOSED bar
+    closed = series.iloc[:-1]  # last CLOSED bar and earlier
 
     adx_now = float(closed.iloc[-1])
-
     n = min(ADX_AVG_PERIOD, len(closed))
     adx_avg = float(closed.iloc[-n:].mean()) if n > 0 else None
 
-    return adx_now, adx_avg
+    val = (adx_now, adx_avg)
+    _adx_cache[symbol] = {"key": bar_key, "val": val}
+    return val
 
 
 def adx_threshold_ok(adx_now):
