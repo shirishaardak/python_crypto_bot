@@ -63,13 +63,13 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary (600)
 
 ADX_TIMEFRAME = "15m"   # timeframe the ADX is computed on
 ADX_PERIOD = 14         # standard ADX lookback
-ADX_THRESHOLD = 35.0    # the 25 line you asked for
+ADX_THRESHOLD = 35.0    # shared calm/trend line for BOTH anchoring and entry
 
 # --- Level gate (current ADX vs the fixed threshold) ---
-# "trend" -> ADX > threshold   (your original request)
-# "range" -> ADX < threshold   (grid-friendly)
+# "trend" -> ADX > threshold   (only trade strong trends)
+# "range" -> ADX < threshold   (grid-friendly: only trade calm/chop)
 # "off"   -> ignore the threshold entirely
-ADX_MODE = "trend"
+ADX_MODE = "range"
 
 # --- Slope gate (current ADX vs its own moving average) ---
 # Compares the latest ADX to the average of the last ADX_AVG_PERIOD values.
@@ -79,6 +79,32 @@ ADX_MODE = "trend"
 # Both gates must pass to enter. Set the one(s) you don't want to "off".
 ADX_SLOPE_MODE = "off"
 ADX_AVG_PERIOD = 5      # how many recent ADX values to average for the slope gate
+
+# --- Anchor gate ---
+# The grid is only ANCHORED/built when the market is calm by the SAME rule as
+# entries (ADX < ADX_THRESHOLD when ADX_MODE="range"). This keeps the levels and
+# the entry condition in one consistent regime: levels are never laid down during
+# a trend only to have entries blocked, and vice-versa. If True and the market is
+# not calm at re-anchor time, anchoring waits until a later tick when it is calm.
+REQUIRE_CALM_TO_ANCHOR = True
+
+# --- Intraday regime handling ---
+# A grid is only valid while ADX stays in the calm regime it was built in.
+#
+# REBUILD_ON_CALM_RETURN:
+#   True  -> rebuild a fresh grid at the current price ANY time calm returns,
+#            not just after US close. The grid only ever lives inside one
+#            continuous calm regime, so levels and entries never drift apart.
+#   False -> only (re)anchor at US close (still calm-gated).
+REBUILD_ON_CALM_RETURN = True
+
+# When ADX LEAVES calm (e.g. rises above the threshold), the grid's regime has
+# expired. We always stop opening new positions and mark the grid inactive.
+# FLATTEN_ON_REGIME_EXIT decides what happens to ALREADY-OPEN positions:
+#   False -> let them run to their own live-price TP (daily loss limit still
+#            protects you). Gentler; default.
+#   True  -> flatten everything immediately at market when calm is lost.
+FLATTEN_ON_REGIME_EXIT = False
 
 # ================= SESSION / RE-ANCHOR =================
 
@@ -178,14 +204,31 @@ def compute_adx(symbol):
     return adx_now, adx_avg
 
 
+def adx_threshold_ok(adx_now):
+    """
+    The level/threshold component, shared by BOTH the entry gate and the
+    anchor gate so levels and entries stay in one regime.
+        "trend" -> adx_now > ADX_THRESHOLD
+        "range" -> adx_now < ADX_THRESHOLD
+        "off"   -> always passes
+    Missing ADX blocks (conservative).
+    """
+    if ADX_MODE == "off":
+        return True
+    if adx_now is None:
+        return False
+    if ADX_MODE == "trend":
+        return adx_now > ADX_THRESHOLD
+    if ADX_MODE == "range":
+        return adx_now < ADX_THRESHOLD
+    return True
+
+
 def adx_allows_entry(adx_now, adx_avg):
     """
     Two independent gates; BOTH must pass.
 
-      Level gate (ADX_MODE):
-        "trend" -> adx_now > ADX_THRESHOLD
-        "range" -> adx_now < ADX_THRESHOLD
-        "off"   -> always passes
+      Level gate (ADX_MODE): see adx_threshold_ok.
 
       Slope gate (ADX_SLOPE_MODE):
         "rising"  -> adx_now > adx_avg   (trend strengthening)
@@ -194,17 +237,8 @@ def adx_allows_entry(adx_now, adx_avg):
 
     Conservative: if a needed value is missing, that gate blocks entry.
     """
-    # ----- level gate -----
-    if ADX_MODE == "off":
-        level_ok = True
-    elif adx_now is None:
-        level_ok = False
-    elif ADX_MODE == "trend":
-        level_ok = adx_now > ADX_THRESHOLD
-    elif ADX_MODE == "range":
-        level_ok = adx_now < ADX_THRESHOLD
-    else:
-        level_ok = True
+    # ----- level gate (shared with anchoring) -----
+    level_ok = adx_threshold_ok(adx_now)
 
     # ----- slope gate -----
     if ADX_SLOPE_MODE == "off":
@@ -309,39 +343,104 @@ def _unrealized(state, symbol, price):
 
 # ================= RE-ANCHOR =================
 
-def maybe_reanchor(state, symbol, price, now):
+def _build_fresh_grid(state, symbol, price, now, anchor_date, adx_now, reason):
+    """Flatten stragglers, lay a fresh grid at price, reset daily counters."""
+    if state["grid"] is not None and state["positions"]:
+        for posn in list(state["positions"]):
+            _close_position(state, symbol, posn, price, now, reason)
+
+    state["anchor"] = price
+    state["grid"] = build_grid(price)
+    state["grid_active"] = True
+    state["trading_enabled"] = True
+    state["last_anchor_date"] = anchor_date
+    # Only reset the daily PnL on the US-close session anchor, NOT on every
+    # intraday calm-return rebuild (otherwise the daily target/loss would keep
+    # resetting through the day).
+    if reason == "SESSION-ANCHOR":
+        state["daily_pnl"] = 0
+
+    adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
+    utils.log(
+        f"🌙 {symbol} GRID BUILT [{reason}] (calm, ADX15m {adx_txt}) @ {price} | "
+        f"levels ±{GRID_STEP}..±{GRID_BOUNDARY}",
+        tg=True,
+    )
+
+
+def maybe_reanchor(state, symbol, price, now, adx_now, adx_avg):
     """
-    Re-anchor after US close, once per session date.
-    Flattens any open positions at the current price BEFORE rebuilding,
-    so no position is orphaned against a stale grid.
+    Decide whether to (re)build the grid this tick. Two triggers, both
+    calm-gated so levels and entries always share one regime:
+
+      1. SESSION-ANCHOR: first run, or once per day after US close.
+      2. CALM-RETURN: the grid was invalidated by a trend and ADX has now
+         dropped back into the calm regime (only if REBUILD_ON_CALM_RETURN).
+
+    Anchoring never happens unless the market is calm right now.
     """
     now_et = datetime.now(US_CLOSE_TZ)
     is_after_close = now_et.time() >= US_CLOSE_TIME
     anchor_date = now_et.date()
 
-    needs_anchor = (
+    calm = adx_threshold_ok(adx_now) if REQUIRE_CALM_TO_ANCHOR else True
+
+    # Trigger 1: daily session anchor (first build or post-US-close).
+    session_due = (
         state["grid"] is None
         or (is_after_close and state["last_anchor_date"] != anchor_date)
     )
-    if not needs_anchor:
+    if session_due:
+        if not calm:
+            return  # wait for calm; last_anchor_date stays unstamped
+        _build_fresh_grid(
+            state, symbol, price, now, anchor_date, adx_now, "SESSION-ANCHOR"
+        )
         return
 
-    # Flatten everything before re-anchoring (skip on very first build).
-    if state["grid"] is not None and state["positions"]:
-        for posn in list(state["positions"]):
-            _close_position(state, symbol, posn, price, now, "RE-ANCHOR")
+    # Trigger 2: intraday rebuild once calm returns to a previously
+    # invalidated (trend-expired) grid.
+    if (
+        REBUILD_ON_CALM_RETURN
+        and not state.get("grid_active", True)
+        and calm
+    ):
+        _build_fresh_grid(
+            state, symbol, price, now, anchor_date, adx_now, "CALM-RETURN"
+        )
 
-    state["anchor"] = price
-    state["grid"] = build_grid(price)
-    state["daily_pnl"] = 0
-    state["trading_enabled"] = True
-    state["last_anchor_date"] = anchor_date
 
-    utils.log(
-        f"🌙 {symbol} GRID RE-ANCHORED after US close @ {price} | "
-        f"levels ±{GRID_STEP}..±{GRID_BOUNDARY}",
-        tg=True,
-    )
+def check_regime(state, symbol, price, now, adx_now):
+    """
+    Invalidate the grid if ADX has LEFT the calm regime. Always stops new
+    entries and marks the grid inactive. Optionally flattens open positions.
+    Returns True if the grid is currently active/tradeable, else False.
+    """
+    if state["grid"] is None:
+        return False
+
+    calm = adx_threshold_ok(adx_now) if REQUIRE_CALM_TO_ANCHOR else True
+
+    if calm:
+        return state.get("grid_active", True)
+
+    # Not calm -> regime expired. Invalidate once (avoid repeat logging).
+    if state.get("grid_active", True):
+        adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
+        utils.log(
+            f"⚠️ {symbol} GRID REGIME EXPIRED (ADX15m {adx_txt} left calm) "
+            f"— no new entries"
+            + (" — flattening open positions" if FLATTEN_ON_REGIME_EXIT else
+               " — open trades run to their own TP"),
+            tg=True,
+        )
+        state["grid_active"] = False
+
+        if FLATTEN_ON_REGIME_EXIT:
+            for posn in list(state["positions"]):
+                _close_position(state, symbol, posn, price, now, "REGIME-EXIT")
+
+    return False
 
 
 # ================= STRATEGY =================
@@ -349,8 +448,15 @@ def maybe_reanchor(state, symbol, price, now):
 def process_symbol(symbol, price, state):
     now = datetime.now()
 
-    maybe_reanchor(state, symbol, price, now)
+    # Compute ADX once per tick; reused for anchoring, regime check, and entry.
+    adx_now, adx_avg = compute_adx(symbol)
+
+    maybe_reanchor(state, symbol, price, now, adx_now, adx_avg)
     save_processed_data(state, symbol)
+
+    # No grid yet (e.g. waiting for first calm window) -> nothing to do.
+    if state["grid"] is None:
+        return
 
     anchor = state["anchor"]
 
@@ -432,8 +538,14 @@ def process_symbol(symbol, price, state):
     if abs(price - anchor) > GRID_BOUNDARY:
         return  # price escaped the grid; don't open new risk
 
-    # ---------- ADX GATE ----------
-    adx_now, adx_avg = compute_adx(symbol)
+    # ---------- REGIME CHECK ----------
+    # Invalidate the grid if ADX has left the calm regime it was built in.
+    # (Open positions were already handled by the exit loop above and, if
+    #  FLATTEN_ON_REGIME_EXIT, are closed inside check_regime.)
+    if not check_regime(state, symbol, price, now, adx_now):
+        return  # grid not active in this regime -> no new entries
+
+    # ---------- ADX ENTRY GATE (threshold + slope) ----------
     if not adx_allows_entry(adx_now, adx_avg):
         return
 
@@ -494,6 +606,7 @@ def run():
         s: {
             "positions": [],
             "grid": None,
+            "grid_active": False,
             "anchor": None,
             "last_candle_time": None,
             "last_anchor_date": None,
@@ -509,6 +622,12 @@ def run():
         f"⚙️ ADX filter: mode={ADX_MODE} slope={ADX_SLOPE_MODE} "
         f"tf={ADX_TIMEFRAME} period={ADX_PERIOD} "
         f"threshold={ADX_THRESHOLD} avg_period={ADX_AVG_PERIOD}",
+        tg=True,
+    )
+    utils.log(
+        f"⚙️ Regime: require_calm_anchor={REQUIRE_CALM_TO_ANCHOR} "
+        f"rebuild_on_calm={REBUILD_ON_CALM_RETURN} "
+        f"flatten_on_exit={FLATTEN_ON_REGIME_EXIT}",
         tg=True,
     )
 
