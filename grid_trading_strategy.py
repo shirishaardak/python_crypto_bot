@@ -338,7 +338,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 tg=True
             )
 
-        # ================= DAILY LOSS =================
+        # ================= DAILY LOSS (REALIZED) =================
 
         if (
             MAX_DAILY_LOSS is not None
@@ -350,6 +350,105 @@ def process_symbol(symbol, df, price, state, is_new_candle):
                 "🛑 MAX DAILY LOSS HIT — stopping for the day",
                 tg=True
             )
+
+    # ================= LIVE (UNREALIZED) DAILY LOSS CHECK =================
+    # daily_pnl only updates on CLOSED trades. In a runaway trend, open
+    # positions can be deep underwater while daily_pnl is still ~0, so the
+    # realized-only check above never halts. Compute live PnL and, if the
+    # combined (realized + unrealized) loss breaches the limit, flatten
+    # EVERYTHING immediately and stop trading for the day.
+
+    unrealized = 0.0
+    for posn in state["positions"]:
+        if posn["side"] == "long":
+            upnl = (
+                (price - posn["entry"])
+                * CONTRACT_SIZE[symbol]
+                * posn["qty"]
+            )
+        else:
+            upnl = (
+                (posn["entry"] - price)
+                * CONTRACT_SIZE[symbol]
+                * posn["qty"]
+            )
+        upnl -= (
+            utils.commission(posn["entry"], posn["qty"], symbol)
+            + utils.commission(price, posn["qty"], symbol)
+        )
+        unrealized += upnl
+
+    if (
+        MAX_DAILY_LOSS is not None
+        and (state["daily_pnl"] + unrealized) <= MAX_DAILY_LOSS
+    ):
+        utils.log(
+            f"🛑 MAX DAILY LOSS HIT (incl. open) "
+            f"{round(state['daily_pnl'] + unrealized, 2)} — FLATTENING ALL",
+            tg=True
+        )
+
+        for posn in list(state["positions"]):
+
+            if posn["side"] == "long":
+                live_pnl = (
+                    (price - posn["entry"])
+                    * CONTRACT_SIZE[symbol]
+                    * posn["qty"]
+                )
+            else:
+                live_pnl = (
+                    (posn["entry"] - price)
+                    * CONTRACT_SIZE[symbol]
+                    * posn["qty"]
+                )
+
+            # NOTE: paper mode. When going live, send the real market-close
+            # order here BEFORE booking PnL to balance:
+            #   place_market_order(symbol, opp_side, posn["qty"])
+            entry_fee = utils.commission(posn["entry"], posn["qty"], symbol)
+            exit_fee = utils.commission(price, posn["qty"], symbol)
+            net = live_pnl - (entry_fee + exit_fee)
+
+            state["balance"] += net
+            state["daily_pnl"] += net
+
+            # Free the grid level.
+            for lvl in state["grid"]:
+                if lvl["index"] == posn["level_index"]:
+                    lvl["filled"] = False
+
+            state["positions"].remove(posn)
+
+            utils.save_trade({
+                "symbol": symbol,
+                "side": posn["side"],
+                "entry_price": posn["entry"],
+                "exit_price": price,
+                "qty": posn["qty"],
+                "net_pnl": round(net, 6),
+                "entry_time": posn["entry_time"],
+                "exit_time": now
+            })
+
+            emoji = "🟢" if net > 0 else "🔴"
+
+            utils.log(
+                f"{emoji} {symbol} FORCE-FLATTEN L{posn['level_index']} "
+                f"@ {price} | PNL: {round(net, 6)}",
+                tg=True
+            )
+
+        state["trading_enabled"] = False
+
+        utils.log(
+            f"💰 Balance: {round(state['balance'], 2)} | "
+            f"📊 Daily PNL: {round(state['daily_pnl'], 2)} "
+            f"— halted for the day (resets after US close)",
+            tg=True
+        )
+
+        return
 
     # ================= ENTRY =================
 
