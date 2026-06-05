@@ -48,9 +48,13 @@ ADX_PERIOD=14
 ADX_THRESHOLD=20
 
 # --- risk config ---
-HARD_SL_POINTS=50      # entry - 50
-TRAIL_TRIGGER=25       # once price >= entry + 25, start trailing
-TRAIL_GAP=25           # keep SL this far below the running high
+HARD_SL_POINTS=60          # entry - 60 (was 50)
+TRAIL_TRIGGER=60           # once price >= entry + 60, start trailing (was 25)
+TRAIL_GAP=40               # keep SL this far below the running high (was 25)
+
+# --- over-trading control ---
+RE_ENTRY_COOLDOWN=600      # seconds to wait after any exit (was 300)
+SAME_STRIKE_BLOCK_SEC=1800 # don't re-enter the SAME strike within this window
 
 # --- perf config ---
 INDICATOR_REFRESH_SEC=60   # recompute heavy indicators at most this often
@@ -61,7 +65,6 @@ TRADES_FILE=f"{folder}/live_trades.csv"
 TOKEN_FILE="auth/api_key/access_token.txt"
 
 # ================= TELEGRAM =================
-# FIX: these were swapped / pointing at wrong env keys, so every alert failed silently.
 TELEGRAM_BOT_TOKEN=os.getenv("testmyaglostrategy_bot")
 TELEGRAM_CHAT_ID=os.getenv("TELEGRAM_CHAT_ID")
 
@@ -89,6 +92,10 @@ last_exit_time=None
 stop_loss=None
 trail_level=None
 running_high=None      # highest price seen since entry (for trailing)
+
+# track the last strike we exited + when, to block instant re-entry on it
+last_exit_symbol=None
+last_exit_symbol_time=None
 
 NSE_HOLIDAYS=set()
 holiday_load_date=None
@@ -315,6 +322,7 @@ def get_indicators(sym, hist_template):
 def exit_trade(reason):
     global position_type,last_exit_time,stop_loss,trail_level,running_high
     global entry_price, entry_time, symbol
+    global last_exit_symbol, last_exit_symbol_time
 
     price = get_last_price(symbol)
     if price is None:
@@ -334,6 +342,10 @@ def exit_trade(reason):
     })
 
     send_telegram(f"🔁 EXIT {symbol} | {reason} | PnL ₹{round(net,2)}")
+
+    # remember which strike we just exited so we don't jump right back in
+    last_exit_symbol=symbol
+    last_exit_symbol_time=ist_now()
 
     position_type=None
     stop_loss=None
@@ -365,12 +377,22 @@ def check_hard_exits(price):
         return True
     return False
 
+# ================= SAME-STRIKE RE-ENTRY GUARD =================
+def blocked_recent_strike(sym):
+    """True if we exited this exact strike inside SAME_STRIKE_BLOCK_SEC.
+    This is what kills the back-to-back churn on the same option."""
+    if last_exit_symbol is None or last_exit_symbol_time is None:
+        return False
+    if sym != last_exit_symbol:
+        return False
+    return (ist_now()-last_exit_symbol_time).total_seconds() < SAME_STRIKE_BLOCK_SEC
+
 # ================= STRATEGY =================
 def run_strategy():
     global position_type, entry_price, entry_time
     global symbol, stop_loss, trail_level, running_high
 
-    if last_exit_time and (ist_now()-last_exit_time).total_seconds()<300:
+    if last_exit_time and (ist_now()-last_exit_time).total_seconds()<RE_ENTRY_COOLDOWN:
         return
 
     # ---------- HISTORY TEMPLATE ----------
@@ -438,37 +460,57 @@ def run_strategy():
         return
 
     index_last=df_index.iloc[-2]
+    index_perv=df_index.iloc[-3]   # previous index candle for confirmation
 
     if position_type is None and time(9,30)<=ist_time()<=time(15,15):
 
         if index_last.ADX < ADX_THRESHOLD:
             return
 
-        # CE entry: index above its supertrend, then confirm the CE option
-        # is itself breaking out upward.
-        if index_last.HA_Close > index_last.ST:
+        # ---------- INDEX CANDLE CONFIRMATION ----------
+        # Bullish (for CE side): close > prev close AND close > prev open
+        index_bullish = (index_last.HA_Close > index_perv.HA_Close
+                         and index_last.HA_Close > index_perv.HA_Open)
+
+        # Bearish (for PE side): close < prev close AND close < prev low
+        index_bearish = (index_last.HA_Close < index_perv.HA_Close
+                         and index_last.HA_Close < index_perv.HA_Low)
+
+        # ---------- CE ENTRY ----------
+        # Index above supertrend + bullish index candle, then confirm the CE
+        # option itself is breaking out upward.
+        if index_last.HA_Close > index_last.ST and index_bullish:
+            if blocked_recent_strike(ce_symbol):
+                return
             df_ce=get_indicators(ce_symbol, hist_template)
             if df_ce.empty or len(df_ce)<5:
                 return
             ce_last=df_ce.iloc[-2]
             ce_perv=df_ce.iloc[-3]
 
-            if ce_last.HA_Close > ce_last.ST and ce_last.HA_Close > ce_perv.HA_Close and ce_last.HA_Close > ce_perv.HA_Open:
+            if (ce_last.HA_Close > ce_last.ST
+                    and ce_last.HA_Close > ce_perv.HA_Close
+                    and ce_last.HA_Close > ce_perv.HA_Open):
                 symbol=ce_symbol
                 position_type="CE"
             else:
                 return
 
-        # PE entry: index below its supertrend, then confirm the PE option
-        # is itself breaking out upward (PE price rises as index falls).
-        elif index_last.HA_Close < index_last.ST:
+        # ---------- PE ENTRY ----------
+        # Index below supertrend + bearish index candle, then confirm the PE
+        # option itself is breaking out upward (PE price rises as index falls).
+        elif index_last.HA_Close < index_last.ST and index_bearish:
+            if blocked_recent_strike(pe_symbol):
+                return
             df_pe=get_indicators(pe_symbol, hist_template)
             if df_pe.empty or len(df_pe)<5:
                 return
             pe_last=df_pe.iloc[-2]
             pe_perv=df_pe.iloc[-3]
 
-            if pe_last.HA_Close > pe_last.ST and pe_last.HA_Close > pe_perv.HA_Close and pe_last.HA_Close > pe_perv.HA_Open:
+            if (pe_last.HA_Close > pe_last.ST
+                    and pe_last.HA_Close > pe_perv.HA_Close
+                    and pe_last.HA_Close > pe_perv.HA_Open):
                 symbol=pe_symbol
                 position_type="PE"
             else:
@@ -525,6 +567,7 @@ def daily_reset():
     global symbol, last_exit_time
     global stop_loss, trail_level, running_high
     global _indicator_cache, _cached_expiry, _cached_expiry_date
+    global last_exit_symbol, last_exit_symbol_time
 
     position_type=None
     entry_price=0
@@ -534,6 +577,8 @@ def daily_reset():
     stop_loss=None
     trail_level=None
     running_high=None
+    last_exit_symbol=None
+    last_exit_symbol_time=None
     _indicator_cache={}
     _cached_expiry=None
     _cached_expiry_date=None

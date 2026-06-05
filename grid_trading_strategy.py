@@ -1,38 +1,36 @@
 """
-price_grid_strategy.py
+price_grid_strategy.py  (paper mode)
 
-Mean-reversion price grid (paper mode) with:
-  - Level-price fills (no market-slippage entries)
-  - Per-level TP and SL tied to the live entry
-  - Clean re-anchor that flattens stale positions
-  - 15m ADX entry filter (configurable)
+A mean-reversion price grid. Plain version — no mode switches.
 
-NOTE ON THE ADX FILTER
-----------------------
-You asked: "enter only when ADX(15m) > 25".
-ADX > 25 = STRONG TREND. A mean-reversion grid generally LOSES in strong
-trends (price marches through levels and never reverts) and WINS in chop.
-So >25 is the opposite of what grids usually want.
+THE WHOLE LOGIC IN ONE PLACE
+----------------------------
+ENTRY (both must be true):
+    1.  ADX(15m) < 35            -> market is calm / ranging, not trending
+    2.  ADX(15m) < its average   -> ADX is falling (trend weakening)
+That's it. A grid wants calm, falling-ADX conditions, nothing more.
 
-This file exposes ADX_MODE so you can choose:
-    "trend"  -> enter only when ADX > ADX_THRESHOLD   (what you requested)
-    "range"  -> enter only when ADX < ADX_THRESHOLD   (theory-favoured for grids)
-    "off"    -> ignore ADX entirely
+GRID:
+    Levels BELOW the anchor  -> BUY  (buy the dip)
+    Levels ABOVE the anchor  -> SHORT (sell the rally)
+    Each filled level gets its own TP and SL, measured from the live entry.
 
-Default is "range" (grid-friendly). Flip to "trend" to backtest the other
-version. I'd strongly suggest comparing both before going live.
+RE-ENTRY:
+    When a level's position exits (TP or SL) the level is freed again.
+    If price later returns to that same level, it FILLS AGAIN. Levels are
+    reusable for as long as the grid is alive and the market is calm.
 
-SESSION ANCHOR (the reset)
---------------------------
-The daily reset is pinned to a FIXED wall-clock time in IST: RESET_TIME in the
-RESET_TZ zone (default 02:30 Asia/Kolkata). It does NOT follow US daylight
-saving — it fires at exactly 02:30 IST every day, year round.
+DAILY TARGET:
+    +$600 realized -> stop trading for the rest of the day.
+    Resets at the next 02:30 IST (fixed wall-clock, no daylight saving).
 
-It works by computing a canonical "session id" = the calendar date (in RESET_TZ)
-of the most recent RESET_TIME that has already passed. That id changes EXACTLY
-once per day, the moment 02:30 IST passes, and is independent of the server's
-own local timezone (datetime.now(tz=RESET_TZ) always converts the absolute
-instant correctly). The daily anchor fires once per new session id.
+ANCHOR / RESET:
+    The grid is (re)built at the current price when:
+      * the bot first starts, or
+      * a new day begins (02:30 IST), or
+      * calm returns after a trend had killed the previous grid.
+    The grid is only ever built while ADX < 35, so levels and entries
+    always live in the same calm regime.
 """
 
 import os
@@ -66,104 +64,44 @@ START_BALANCE = 10000
 
 # ================= GRID CONFIG =================
 
-GRID_STEP = 300                      # spacing between levels, in price points
-GRID_LEVELS = 6                      # levels above and below the anchor
-GRID_TP = GRID_STEP * 1.5            # take profit per grid trade = 450
-GRID_SL = GRID_STEP                  # stop loss per grid trade = 300
-GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary (1800)
+GRID_STEP = 300                          # spacing between levels (price points)
+GRID_LEVELS = 6                          # levels above and below the anchor
+GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
+GRID_SL = GRID_STEP                      # stop loss per trade   = 200
+GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
 
 # ================= ADX ENTRY FILTER =================
+# The only two conditions, both required:
+#     ADX < ADX_THRESHOLD          (calm, not trending)
+#     ADX < average of last N ADX  (ADX falling)
 
-ADX_TIMEFRAME = "15m"   # timeframe the ADX is computed on
-ADX_PERIOD = 14         # standard ADX lookback
-ADX_THRESHOLD = 35.0    # shared calm/trend line for BOTH anchoring and entry
+ADX_TIMEFRAME = "15m"
+ADX_PERIOD = 14
+ADX_THRESHOLD = 25.0     # the calm line; below this = calm, above = trending
+ADX_AVG_PERIOD = 5       # how many recent ADX values to average
 
-# --- Level gate (current ADX vs the fixed threshold) ---
-# "trend" -> ADX > threshold   (only trade strong trends)
-# "range" -> ADX < threshold   (grid-friendly: only trade calm/chop)
-# "off"   -> ignore the threshold entirely
-ADX_MODE = "range"
+# ================= DAILY TARGET =================
 
-# --- Slope gate (current ADX vs its own moving average) ---
-# Compares the latest ADX to the average of the last ADX_AVG_PERIOD values.
-#   "rising"  -> enter only when ADX > its average  (trend strengthening)
-#   "falling" -> enter only when ADX < its average  (trend weakening -> good for grids)
-#   "off"     -> ignore slope
-# Both gates must pass to enter. Set the one(s) you don't want to "off".
-ADX_SLOPE_MODE = "rising"
-ADX_AVG_PERIOD = 5      # how many recent ADX values to average for the slope gate
+DAILY_TARGET = 600       # +$600 realized -> stop for the day
 
-# --- Anchor gate ---
-# The grid is only ANCHORED/built when the market is calm by the SAME rule as
-# entries (ADX < ADX_THRESHOLD when ADX_MODE="range"). This keeps the levels and
-# the entry condition in one consistent regime: levels are never laid down during
-# a trend only to have entries blocked, and vice-versa. If True and the market is
-# not calm at re-anchor time, anchoring waits until a later tick when it is calm.
-REQUIRE_CALM_TO_ANCHOR = True
+# ================= SESSION RESET =================
+# Fixed wall-clock reset at 02:30 IST every day (no daylight saving).
 
-# --- Intraday regime handling ---
-# A grid is only valid while ADX stays in the calm regime it was built in.
-#
-# REBUILD_ON_CALM_RETURN:
-#   True  -> rebuild a fresh grid at the current price ANY time calm returns,
-#            not just after the daily reset. The grid only ever lives inside one
-#            continuous calm regime, so levels and entries never drift apart.
-#   False -> only (re)anchor at the daily reset (still calm-gated).
-REBUILD_ON_CALM_RETURN = True
-
-# When ADX LEAVES calm (e.g. rises above the threshold), the grid's regime has
-# expired. We always stop opening new positions and mark the grid inactive.
-# FLATTEN_ON_REGIME_EXIT decides what happens to ALREADY-OPEN positions:
-#   False -> let them run to their own live-price TP/SL (daily loss limit still
-#            protects you). Gentler; default.
-#   True  -> flatten everything immediately at market when calm is lost.
-FLATTEN_ON_REGIME_EXIT = False
-
-# ================= SESSION / RE-ANCHOR =================
-
-# Daily reset is a FIXED wall-clock time, year round. Default: 02:30 IST.
-# Change RESET_TIME / RESET_TZ here if you ever want a different instant.
 RESET_TZ = ZoneInfo("Asia/Kolkata")
 RESET_TIME = dt_time(2, 30)
 
 
-def current_session_id(now_utc=None):
+def current_session_id():
     """
-    Canonical session identifier = the calendar date (in RESET_TZ) of the most
-    recent RESET_TIME that has ALREADY occurred. With the defaults this is "the
-    date of the last 02:30 IST that passed".
-
-    Properties:
-      * Fixed wall-clock — fires at exactly 02:30 IST every day, NOT following
-        US daylight saving. No seasonal drift.
-      * Deterministic — depends only on the absolute instant, never on the
-        server's own local timezone. datetime.now(tz=RESET_TZ) converts the
-        instant correctly whether the box is set to IST, UTC, JST, anything.
-      * Fires exactly once per day — the id changes the moment 02:30 IST passes
-        and stays constant until the next 02:30 IST.
-
-    Returns a `datetime.date` in RESET_TZ.
-
-    Example (RESET_TIME = 02:30 IST):
-      Tue 02:29 IST -> session id = Monday's date   (today's 02:30 not yet here)
-      Tue 02:30 IST -> session id = Tuesday's date  (new session begins)
-      Tue 14:00 IST -> session id = Tuesday's date
-      Wed 01:00 IST -> session id = Tuesday's date  (Wed 02:30 not yet here)
+    Session id = the calendar date (IST) of the most recent 02:30 IST that has
+    already passed. It changes exactly once per day, the moment 02:30 IST hits,
+    and does not depend on the server's own timezone.
     """
-    now_local = (now_utc.astimezone(RESET_TZ)
-                 if now_utc is not None else datetime.now(RESET_TZ))
-    if now_local.time() >= RESET_TIME:
-        # Today's reset already passed -> this session is keyed to today.
-        return now_local.date()
-    # Today's reset hasn't happened yet -> still in yesterday's session.
-    return (now_local - timedelta(days=1)).date()
+    now = datetime.now(RESET_TZ)
+    if now.time() >= RESET_TIME:
+        return now.date()                      # today's 02:30 already passed
+    return (now - timedelta(days=1)).date()    # still in yesterday's session
 
-
-# ================= TARGET / LOSS =================
-
-DAILY_TARGET = 2000
-MAX_DAILY_LOSS = -1000
-FORCE_EXIT_PROFITABLE_ON_TARGET = True
 
 # ================= INIT =================
 
@@ -177,26 +115,25 @@ utils = TradingUtils(
     bot_name=BOT_NAME,
 )
 
-SAVE_DIR = os.path.join(os.getcwd(), "data", "price_grid_strategy_live")
+SAVE_DIR = os.path.join(os.getcwd(), "data", "price_grid_strategy")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 # ================= PERSISTENCE =================
 
-def save_processed_data(state, symbol):
+def save_grid(state, symbol):
+    """Write the grid snapshot to CSV, but only when it actually changed."""
     if state["grid"] is None:
         return
-    # Only write when the grid snapshot actually changed (fills/rebuilds),
-    # not every 3s tick. Avoids a disk write + DataFrame build per loop.
+
     snapshot = tuple(
         (lvl["index"], lvl["price"], lvl["side"], lvl["filled"])
         for lvl in state["grid"]
     )
-    if state.get("_last_saved_snapshot") == snapshot:
+    if state.get("_last_saved") == snapshot:
         return
-    state["_last_saved_snapshot"] = snapshot
+    state["_last_saved"] = snapshot
 
-    path = os.path.join(SAVE_DIR, f"{symbol}_grid.csv")
     rows = [
         {
             "level_index": lvl["index"],
@@ -206,30 +143,19 @@ def save_processed_data(state, symbol):
         }
         for lvl in state["grid"]
     ]
+    path = os.path.join(SAVE_DIR, f"{symbol}_grid.csv")
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
-# ================= PAPER ORDER =================
-
-def place_market_order(symbol, side, qty):
-    utils.log(f"📝 PAPER ORDER → {symbol} {side.upper()} {qty}", tg=True)
-    return {"success": True}
-
-
 # ================= ADX =================
+# Cached: candle fetch is throttled, and ADX is recomputed only on a new bar.
 
-# Cache so we only refetch + recompute ADX when a NEW 15m bar appears, instead
-# of every 3s tick. Keyed per symbol on the latest candle timestamp.
-_adx_cache = {}  # symbol -> {"key": <last bar ts>, "val": (adx_now, adx_avg)}
-
-# Throttle the candle network fetch: don't hit the API more than once every
-# ADX_FETCH_EVERY_SEC. 15m data can't change faster than that anyway.
-_candle_cache = {}  # symbol -> {"ts": <monotonic>, "df": <DataFrame>}
+_candle_cache = {}            # symbol -> {"ts": monotonic, "df": DataFrame}
+_adx_cache = {}               # symbol -> {"key": bar_ts, "val": (now, avg)}
 ADX_FETCH_EVERY_SEC = 60
 
 
 def _fetch_adx_candles(symbol):
-    """Fetch ADX_TIMEFRAME candles, throttled by ADX_FETCH_EVERY_SEC."""
     cached = _candle_cache.get(symbol)
     nowm = time.monotonic()
     if cached is not None and (nowm - cached["ts"]) < ADX_FETCH_EVERY_SEC:
@@ -244,28 +170,24 @@ def _fetch_adx_candles(symbol):
     return df
 
 
-def _col(df, *candidates):
-    """Resolve a column by case-insensitive name, trying each candidate."""
+def _col(df, *names):
+    """Find a column by case-insensitive name."""
     lookup = {str(c).lower(): c for c in df.columns}
-    for cand in candidates:
-        if cand in lookup:
-            return df[lookup[cand]]
+    for name in names:
+        if name in lookup:
+            return df[lookup[name]]
     return None
 
 
 def compute_adx(symbol):
     """
-    Return (adx_now, adx_avg) for the latest CLOSED ADX_TIMEFRAME bar.
-    Cached two ways: candle fetch is throttled, and the TA recompute only
-    runs when a new bar arrives. Most ticks are effectively free.
-    Returns (None, None) if data is unavailable.
+    Return (adx_now, adx_avg) for the latest CLOSED 15m bar.
+    Returns (None, None) if data is missing.
     """
     df = _fetch_adx_candles(symbol)
-
     if df is None or len(df) < ADX_PERIOD * 2:
         return None, None
 
-    # Cache key = timestamp of the most recent bar. If unchanged, reuse.
     try:
         bar_key = df.index[-1]
     except Exception:
@@ -278,13 +200,7 @@ def compute_adx(symbol):
     high = _col(df, "high", "h")
     low = _col(df, "low", "l")
     close = _col(df, "close", "c", "close_price", "last")
-
     if high is None or low is None or close is None:
-        utils.log(
-            f"⚠️ ADX: OHLC columns not found in candles "
-            f"(got {list(df.columns)}) — skipping ADX this tick",
-            tg=False,
-        )
         return None, None
 
     adx_df = ta.adx(high=high, low=low, close=close, length=ADX_PERIOD)
@@ -298,112 +214,65 @@ def compute_adx(symbol):
     series = adx_df[col].dropna()
     if len(series) < 2:
         return None, None
-    closed = series.iloc[:-1]  # last CLOSED bar and earlier
+    closed = series.iloc[:-1]              # drop the still-forming bar
 
     adx_now = float(closed.iloc[-1])
     n = min(ADX_AVG_PERIOD, len(closed))
-    adx_avg = float(closed.iloc[-n:].mean()) if n > 0 else None
+    adx_avg = float(closed.iloc[-n:].mean())
 
     val = (adx_now, adx_avg)
     _adx_cache[symbol] = {"key": bar_key, "val": val}
     return val
 
 
-def adx_threshold_ok(adx_now):
-    """
-    The level/threshold component, shared by BOTH the entry gate and the
-    anchor gate so levels and entries stay in one regime.
-        "trend" -> adx_now > ADX_THRESHOLD
-        "range" -> adx_now < ADX_THRESHOLD
-        "off"   -> always passes
-    Missing ADX blocks (conservative).
-    """
-    if ADX_MODE == "off":
-        return True
-    if adx_now is None:
-        return False
-    if ADX_MODE == "trend":
-        return adx_now > ADX_THRESHOLD
-    if ADX_MODE == "range":
-        return adx_now < ADX_THRESHOLD
-    return True
+def is_calm(adx_now):
+    """Calm = ADX below the threshold. Missing ADX -> not calm (safe)."""
+    return adx_now is not None and adx_now < ADX_THRESHOLD
 
 
 def adx_allows_entry(adx_now, adx_avg):
     """
-    Two independent gates; BOTH must pass.
-
-      Level gate (ADX_MODE): see adx_threshold_ok.
-
-      Slope gate (ADX_SLOPE_MODE):
-        "rising"  -> adx_now > adx_avg   (trend strengthening)
-        "falling" -> adx_now < adx_avg   (trend weakening; grid-friendly)
-        "off"     -> always passes
-
-    Conservative: if a needed value is missing, that gate blocks entry.
+    The two-condition entry gate:
+        ADX < 35          (calm)
+        ADX < its average (falling)
+    Both required. Missing data blocks entry.
     """
-    # ----- level gate (shared with anchoring) -----
-    level_ok = adx_threshold_ok(adx_now)
-
-    # ----- slope gate -----
-    if ADX_SLOPE_MODE == "off":
-        slope_ok = True
-    elif adx_now is None or adx_avg is None:
-        slope_ok = False
-    elif ADX_SLOPE_MODE == "rising":
-        slope_ok = adx_now > adx_avg
-    elif ADX_SLOPE_MODE == "falling":
-        slope_ok = adx_now < adx_avg
-    else:
-        slope_ok = True
-
-    return level_ok and slope_ok
+    if adx_now is None or adx_avg is None:
+        return False
+    return (adx_now < ADX_THRESHOLD)
 
 
 # ================= GRID BUILD =================
 
 def build_grid(anchor):
-    """
-    Levels BELOW anchor = BUY (buy the dip).
-    Levels ABOVE anchor = SHORT (sell the rally).
-    Each level stores its target fill price.
-    """
+    """Below anchor = BUY levels, above anchor = SHORT levels."""
     grid = []
     for n in range(1, GRID_LEVELS + 1):
-        grid.append({
-            "index": -n,
-            "price": anchor - GRID_STEP * n,
-            "side": "long",
-            "filled": False,
-        })
+        grid.append({"index": -n, "price": anchor - GRID_STEP * n,
+                     "side": "long", "filled": False})
     for n in range(1, GRID_LEVELS + 1):
-        grid.append({
-            "index": n,
-            "price": anchor + GRID_STEP * n,
-            "side": "short",
-            "filled": False,
-        })
+        grid.append({"index": n, "price": anchor + GRID_STEP * n,
+                     "side": "short", "filled": False})
     return grid
 
 
 # ================= POSITION HELPERS =================
 
 def _close_position(state, symbol, posn, exit_price, now, reason):
-    """Book PnL (after fees), free the level, record the trade, log it."""
+    """Book PnL after fees, FREE THE LEVEL (so it can fill again), log it."""
     if posn["side"] == "long":
         gross = (exit_price - posn["entry"]) * CONTRACT_SIZE[symbol] * posn["qty"]
     else:
         gross = (posn["entry"] - exit_price) * CONTRACT_SIZE[symbol] * posn["qty"]
 
-    fees = (
-        utils.commission(posn["entry"], posn["qty"], symbol)
-        + utils.commission(exit_price, posn["qty"], symbol)
-    )
+    fees = (utils.commission(posn["entry"], posn["qty"], symbol)
+            + utils.commission(exit_price, posn["qty"], symbol))
     net = gross - fees
 
     state["balance"] += net
     state["daily_pnl"] += net
 
+    # Free the level -> price returning here later will RE-ENTER.
     for lvl in state["grid"]:
         if lvl["index"] == posn["level_index"]:
             lvl["filled"] = False
@@ -424,32 +293,17 @@ def _close_position(state, symbol, posn, exit_price, now, reason):
 
     emoji = "🟢" if net > 0 else "🔴"
     utils.log(
-        f"{emoji} {symbol} GRID EXIT ({reason}) L{posn['level_index']} "
+        f"{emoji} {symbol} EXIT ({reason}) L{posn['level_index']} "
         f"@ {exit_price} | PNL: {round(net, 6)}",
         tg=True,
     )
     return net
 
 
-def _unrealized(state, symbol, price):
-    total = 0.0
-    for posn in state["positions"]:
-        if posn["side"] == "long":
-            g = (price - posn["entry"]) * CONTRACT_SIZE[symbol] * posn["qty"]
-        else:
-            g = (posn["entry"] - price) * CONTRACT_SIZE[symbol] * posn["qty"]
-        g -= (
-            utils.commission(posn["entry"], posn["qty"], symbol)
-            + utils.commission(price, posn["qty"], symbol)
-        )
-        total += g
-    return total
+# ================= ANCHOR / RESET =================
 
-
-# ================= RE-ANCHOR =================
-
-def _build_fresh_grid(state, symbol, price, now, session_id, adx_now, reason):
-    """Flatten stragglers, lay a fresh grid at price, reset daily counters."""
+def build_fresh_grid(state, symbol, price, now, session_id, adx_now, reason):
+    """Flatten any stragglers, lay a new grid at the current price."""
     if state["grid"] is not None and state["positions"]:
         for posn in list(state["positions"]):
             _close_position(state, symbol, posn, price, now, reason)
@@ -459,97 +313,62 @@ def _build_fresh_grid(state, symbol, price, now, session_id, adx_now, reason):
     state["grid_active"] = True
     state["trading_enabled"] = True
     state["last_session_id"] = session_id
-    # Only reset the daily PnL on the US-close session anchor, NOT on every
-    # intraday calm-return rebuild (otherwise the daily target/loss would keep
-    # resetting through the day).
+
+    # Only the daily reset zeroes the daily PnL — not intraday rebuilds.
     if reason == "SESSION-ANCHOR":
         state["daily_pnl"] = 0
 
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
     utils.log(
-        f"🌙 {symbol} GRID BUILT [{reason}] (calm, ADX15m {adx_txt}) @ {price} | "
+        f"🌙 {symbol} GRID BUILT [{reason}] (ADX15m {adx_txt}) @ {price} | "
         f"levels ±{GRID_STEP}..±{GRID_BOUNDARY} | session={session_id}",
         tg=True,
     )
 
 
-def maybe_reanchor(state, symbol, price, now, adx_now, adx_avg):
+def maybe_reanchor(state, symbol, price, now, adx_now):
     """
-    Decide whether to (re)build the grid this tick. Two triggers, both
-    calm-gated so levels and entries always share one regime:
-
-      1. SESSION-ANCHOR: first run, or once per daily reset (02:30 IST). Driven
-         by the canonical session id, which changes deterministically at each
-         02:30 IST regardless of the server's own timezone.
-      2. CALM-RETURN: the grid was invalidated by a trend and ADX has now
-         dropped back into the calm regime (only if REBUILD_ON_CALM_RETURN).
-
-    Anchoring never happens unless the market is calm right now.
+    Build the grid when:
+      1. it's a new day (or first run), or
+      2. calm has returned after a trend killed the grid.
+    Either way, only while the market is calm right now.
     """
     session_id = current_session_id()
+    calm = is_calm(adx_now)
 
-    calm = adx_threshold_ok(adx_now) if REQUIRE_CALM_TO_ANCHOR else True
-
-    # Trigger 1: daily session anchor.
-    # Fires on first run (no grid yet) OR when the session id has advanced past
-    # the one we last anchored in — i.e. a new 02:30 IST reset has occurred.
-    # Because session_id only changes once per 02:30 IST, this fires exactly
-    # once per session, with no time-of-day window to get wrong.
-    session_due = (
-        state["grid"] is None
-        or state.get("last_session_id") != session_id
-    )
-    if session_due:
-        if not calm:
-            # Wait for calm; DON'T stamp last_session_id, so we retry next tick.
-            return
-        _build_fresh_grid(
-            state, symbol, price, now, session_id, adx_now, "SESSION-ANCHOR"
-        )
+    new_day = state["grid"] is None or state.get("last_session_id") != session_id
+    if new_day:
+        if calm:
+            build_fresh_grid(state, symbol, price, now, session_id,
+                             adx_now, "SESSION-ANCHOR")
+        # If not calm we simply wait; we'll retry next tick.
         return
 
-    # Trigger 2: intraday rebuild once calm returns to a previously
-    # invalidated (trend-expired) grid.
-    if (
-        REBUILD_ON_CALM_RETURN
-        and not state.get("grid_active", True)
-        and calm
-    ):
-        _build_fresh_grid(
-            state, symbol, price, now, session_id, adx_now, "CALM-RETURN"
-        )
+    # Calm returned to a grid that a trend had switched off.
+    if calm and not state.get("grid_active", True):
+        build_fresh_grid(state, symbol, price, now, session_id,
+                         adx_now, "CALM-RETURN")
 
 
-def check_regime(state, symbol, price, now, adx_now):
+def check_regime(state, symbol, adx_now):
     """
-    Invalidate the grid if ADX has LEFT the calm regime. Always stops new
-    entries and marks the grid inactive. Optionally flattens open positions.
-    Returns True if the grid is currently active/tradeable, else False.
+    If ADX has left calm, switch the grid OFF (no new entries). Open positions
+    keep running to their own TP/SL. Returns True if the grid is tradeable.
     """
     if state["grid"] is None:
         return False
 
-    calm = adx_threshold_ok(adx_now) if REQUIRE_CALM_TO_ANCHOR else True
-
-    if calm:
+    if is_calm(adx_now):
         return state.get("grid_active", True)
 
-    # Not calm -> regime expired. Invalidate once (avoid repeat logging).
     if state.get("grid_active", True):
         adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
         utils.log(
-            f"⚠️ {symbol} GRID REGIME EXPIRED (ADX15m {adx_txt} left calm) "
-            f"— no new entries"
-            + (" — flattening open positions" if FLATTEN_ON_REGIME_EXIT else
-               " — open trades run to their own TP/SL"),
+            f"⚠️ {symbol} GRID OFF (ADX15m {adx_txt} left calm) — no new entries; "
+            f"open trades run to their own TP/SL",
             tg=True,
         )
         state["grid_active"] = False
-
-        if FLATTEN_ON_REGIME_EXIT:
-            for posn in list(state["positions"]):
-                _close_position(state, symbol, posn, price, now, "REGIME-EXIT")
-
     return False
 
 
@@ -557,55 +376,34 @@ def check_regime(state, symbol, price, now, adx_now):
 
 def process_symbol(symbol, price, state):
     now = datetime.now()
-
-    # Compute ADX once per tick; reused for anchoring, regime check, and entry.
     adx_now, adx_avg = compute_adx(symbol)
 
-    maybe_reanchor(state, symbol, price, now, adx_now, adx_avg)
-    save_processed_data(state, symbol)
+    maybe_reanchor(state, symbol, price, now, adx_now)
+    save_grid(state, symbol)
 
-    # No grid yet (e.g. waiting for first calm window) -> nothing to do.
     if state["grid"] is None:
         return
 
     anchor = state["anchor"]
 
-    # ---------- EXIT OPEN POSITIONS (TP, SL, or target-lock) ----------
+    # ---------- EXIT OPEN POSITIONS (TP / SL / target-lock) ----------
     for posn in list(state["positions"]):
-        # TP/SL are the fixed level-anchored targets captured at entry. Fall
-        # back to entry±GRID_TP / entry∓GRID_SL for any legacy position.
         if posn["side"] == "long":
             live_pnl = (price - posn["entry"]) * CONTRACT_SIZE[symbol] * posn["qty"]
-            tp_target = posn.get("tp_price", posn["entry"] + GRID_TP)
-            sl_target = posn.get("sl_price", posn["entry"] - GRID_SL)
-            hit_tp = price >= tp_target
-            hit_sl = price <= sl_target
+            hit_tp = price >= posn["tp_price"]
+            hit_sl = price <= posn["sl_price"]
         else:
             live_pnl = (posn["entry"] - price) * CONTRACT_SIZE[symbol] * posn["qty"]
-            tp_target = posn.get("tp_price", posn["entry"] - GRID_TP)
-            sl_target = posn.get("sl_price", posn["entry"] + GRID_SL)
-            hit_tp = price <= tp_target
-            hit_sl = price >= sl_target
+            hit_tp = price <= posn["tp_price"]
+            hit_sl = price >= posn["sl_price"]
 
-        # Only force-exit on target if THIS position is itself in profit,
-        # so we lock the day without dumping underwater trades.
-        force_exit = (
-            FORCE_EXIT_PROFITABLE_ON_TARGET
-            and DAILY_TARGET is not None
-            and state["daily_pnl"] >= DAILY_TARGET
-            and live_pnl > 0
-        )
+        # Once the daily target is hit, close any position that's in profit.
+        force_exit = (state["daily_pnl"] >= DAILY_TARGET and live_pnl > 0)
 
         if not (hit_tp or hit_sl or force_exit):
             continue
 
-        if hit_tp:
-            reason = "TP"
-        elif hit_sl:
-            reason = "SL"
-        else:
-            reason = "TARGET-LOCK"
-
+        reason = "TP" if hit_tp else "SL" if hit_sl else "TARGET-LOCK"
         _close_position(state, symbol, posn, price, now, reason)
         utils.log(
             f"💰 Balance: {round(state['balance'], 2)} | "
@@ -613,43 +411,13 @@ def process_symbol(symbol, price, state):
             tg=True,
         )
 
-        if DAILY_TARGET is not None and state["daily_pnl"] >= DAILY_TARGET:
+        if state["daily_pnl"] >= DAILY_TARGET:
             state["trading_enabled"] = False
             utils.log(
                 f"🎯 DAILY TARGET HIT: {round(state['daily_pnl'], 2)} "
                 f"— stopping for the day (resets after 02:30 IST)",
                 tg=True,
             )
-
-        if MAX_DAILY_LOSS is not None and state["daily_pnl"] <= MAX_DAILY_LOSS:
-            state["trading_enabled"] = False
-            utils.log("🛑 MAX DAILY LOSS HIT — stopping for the day", tg=True)
-
-    # ---------- LIVE (REALIZED + UNREALIZED) LOSS HALT ----------
-    # Gate on having OPEN positions. Once everything is already flat, the
-    # realized daily_pnl alone (which can sit below MAX_DAILY_LOSS) must NOT
-    # keep re-triggering "FLATTENING ALL" every tick — there is nothing left to
-    # flatten and the day is already halted via trading_enabled below.
-    if MAX_DAILY_LOSS is not None and state["positions"]:
-        unrealized = _unrealized(state, symbol, price)
-        if (state["daily_pnl"] + unrealized) <= MAX_DAILY_LOSS:
-            utils.log(
-                f"🛑 MAX DAILY LOSS HIT (incl. open) "
-                f"{round(state['daily_pnl'] + unrealized, 2)} — FLATTENING ALL",
-                tg=True,
-            )
-            for posn in list(state["positions"]):
-                # When live: place_market_order(symbol, opp_side, posn["qty"]) first.
-                _close_position(state, symbol, posn, price, now, "FORCE-FLATTEN")
-
-            state["trading_enabled"] = False
-            utils.log(
-                f"💰 Balance: {round(state['balance'], 2)} | "
-                f"📊 Daily PNL: {round(state['daily_pnl'], 2)} "
-                f"— halted for the day (resets after 02:30 IST)",
-                tg=True,
-            )
-            return
 
     # ---------- ENTRY GUARDS ----------
     if not state["trading_enabled"]:
@@ -658,18 +426,11 @@ def process_symbol(symbol, price, state):
         utils.log(f"⚠️ Balance low: {state['balance']}", tg=True)
         return
     if abs(price - anchor) > GRID_BOUNDARY:
-        return  # price escaped the grid; don't open new risk
-
-    # ---------- REGIME CHECK ----------
-    # Invalidate the grid if ADX has left the calm regime it was built in.
-    # (Open positions were already handled by the exit loop above and, if
-    #  FLATTEN_ON_REGIME_EXIT, are closed inside check_regime.)
-    if not check_regime(state, symbol, price, now, adx_now):
-        return  # grid not active in this regime -> no new entries
-
-    # ---------- ADX ENTRY GATE (threshold + slope) ----------
+        return                              # price escaped the grid
+    if not check_regime(state, symbol, adx_now):
+        return                              # grid switched off by a trend
     if not adx_allows_entry(adx_now, adx_avg):
-        return
+        return                              # ADX gate: calm AND falling
 
     # ---------- FILL LEVELS ----------
     for lvl in state["grid"]:
@@ -677,23 +438,15 @@ def process_symbol(symbol, price, state):
             continue
 
         if lvl["side"] == "long" and price <= lvl["price"]:
-            should_fill = True
+            pass
         elif lvl["side"] == "short" and price >= lvl["price"]:
-            should_fill = True
+            pass
         else:
-            should_fill = False
-
-        if not should_fill:
             continue
 
         lvl["filled"] = True
 
-        # Enter at the LIVE market price (real fill). If price gapped THROUGH
-        # the level, this captures the true worse fill, not the clean level price.
-        #
-        # TP/SL are anchored to the LIVE ENTRY:
-        #   long  -> tp = entry + GRID_TP, sl = entry - GRID_SL
-        #   short -> tp = entry - GRID_TP, sl = entry + GRID_SL
+        # Enter at the live price; TP/SL are measured from that live entry.
         if lvl["side"] == "long":
             tp_price = price + GRID_TP
             sl_price = price - GRID_SL
@@ -703,23 +456,19 @@ def process_symbol(symbol, price, state):
 
         state["positions"].append({
             "side": lvl["side"],
-            "entry": price,                 # live fill, used for PnL
-            "level_price": lvl["price"],    # level reference (info only)
-            "tp_price": tp_price,           # TP measured from the live entry
-            "sl_price": sl_price,           # SL measured from the live entry
+            "entry": price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
             "qty": DEFAULT_CONTRACTS[symbol],
             "entry_time": now,
             "level_index": lvl["index"],
         })
 
         emoji = "🟢" if lvl["side"] == "long" else "🔴"
-        adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
-        avg_txt = f"{adx_avg:.1f}" if adx_avg is not None else "n/a"
         utils.log(
-            f"{emoji} {symbol} GRID {lvl['side'].upper()} L{lvl['index']} "
-            f"@ {price} (lvl {lvl['price']}) | TP→ {tp_price} ({GRID_TP}pt) "
-            f"SL→ {sl_price} ({GRID_SL}pt) | "
-            f"ADX15m: {adx_txt} (avg {avg_txt})",
+            f"{emoji} {symbol} {lvl['side'].upper()} L{lvl['index']} @ {price} "
+            f"(lvl {lvl['price']}) | TP→ {tp_price} SL→ {sl_price} | "
+            f"ADX15m {adx_now:.1f} (avg {adx_avg:.1f})",
             tg=True,
         )
 
@@ -733,8 +482,7 @@ def run():
             "grid": None,
             "grid_active": False,
             "anchor": None,
-            "last_candle_time": None,
-            "last_session_id": None,   # was last_anchor_date; now the canonical id
+            "last_session_id": None,
             "balance": START_BALANCE,
             "daily_pnl": 0,
             "trading_enabled": True,
@@ -742,32 +490,16 @@ def run():
         for s in SYMBOLS
     }
 
-    utils.log("🚀 LIVE GRID BOT STARTED (PAPER MODE)", tg=True)
+    utils.log("🚀 GRID BOT STARTED (PAPER MODE)", tg=True)
     utils.log(
-        f"⚙️ ADX filter: mode={ADX_MODE} slope={ADX_SLOPE_MODE} "
-        f"tf={ADX_TIMEFRAME} period={ADX_PERIOD} "
-        f"threshold={ADX_THRESHOLD} avg_period={ADX_AVG_PERIOD}",
+        f"⚙️ Entry: ADX < {ADX_THRESHOLD} AND ADX < avg({ADX_AVG_PERIOD}) "
+        f"| tf={ADX_TIMEFRAME} period={ADX_PERIOD}",
         tg=True,
     )
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
-        f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY}",
-        tg=True,
-    )
-    utils.log(
-        f"⚙️ Regime: require_calm_anchor={REQUIRE_CALM_TO_ANCHOR} "
-        f"rebuild_on_calm={REBUILD_ON_CALM_RETURN} "
-        f"flatten_on_exit={FLATTEN_ON_REGIME_EXIT}",
-        tg=True,
-    )
-    # Surface the session math at startup so you can verify the reset instant
-    # on the EC2 box no matter what its local clock is set to.
-    _now_reset = datetime.now(RESET_TZ)
-    utils.log(
-        f"🕐 server_local={datetime.now()} | "
-        f"reset_tz={_now_reset.strftime('%Y-%m-%d %H:%M %Z')} "
-        f"| session_id={current_session_id()} "
-        f"| next reset at next {RESET_TIME.strftime('%H:%M')} IST",
+        f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
+        f"| daily_target={DAILY_TARGET}",
         tg=True,
     )
 
@@ -780,10 +512,7 @@ def run():
                 process_symbol(symbol, price, state[symbol])
             time.sleep(3)
         except Exception as e:
-            utils.log(
-                f"🚨 Runtime error: {e}\n{traceback.format_exc()}",
-                tg=True,
-            )
+            utils.log(f"🚨 Runtime error: {e}\n{traceback.format_exc()}", tg=True)
             time.sleep(5)
 
 
