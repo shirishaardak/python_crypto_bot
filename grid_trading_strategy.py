@@ -120,8 +120,6 @@ FLATTEN_ON_REGIME_EXIT = False
 
 # ================= SESSION / RE-ANCHOR =================
 
-# ================= SESSION / RE-ANCHOR =================
-
 # Daily reset is a FIXED wall-clock time, year round. Default: 02:30 IST.
 # Change RESET_TIME / RESET_TZ here if you ever want a different instant.
 RESET_TZ = ZoneInfo("Asia/Kolkata")
@@ -162,8 +160,8 @@ def current_session_id(now_utc=None):
 
 # ================= TARGET / LOSS =================
 
-DAILY_TARGET = 600
-MAX_DAILY_LOSS = -1000
+DAILY_TARGET = 60000
+MAX_DAILY_LOSS = -100000
 FORCE_EXIT_PROFITABLE_ON_TARGET = True
 
 # ================= INIT =================
@@ -619,7 +617,11 @@ def process_symbol(symbol, price, state):
             utils.log("🛑 MAX DAILY LOSS HIT — stopping for the day", tg=True)
 
     # ---------- LIVE (REALIZED + UNREALIZED) LOSS HALT ----------
-    if MAX_DAILY_LOSS is not None:
+    # Gate on having OPEN positions. Once everything is already flat, the
+    # realized daily_pnl alone (which can sit below MAX_DAILY_LOSS) must NOT
+    # keep re-triggering "FLATTENING ALL" every tick — there is nothing left to
+    # flatten and the day is already halted via trading_enabled below.
+    if MAX_DAILY_LOSS is not None and state["positions"]:
         unrealized = _unrealized(state, symbol, price)
         if (state["daily_pnl"] + unrealized) <= MAX_DAILY_LOSS:
             utils.log(
