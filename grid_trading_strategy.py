@@ -65,10 +65,10 @@ START_BALANCE = 10000
 
 # ================= GRID CONFIG =================
 
-GRID_STEP = 300                          # spacing between levels (price points)
+GRID_STEP = 200                          # spacing between levels (price points)
 GRID_LEVELS =3                          # levels above and below the anchor
-GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
-GRID_SL = GRID_STEP                      # stop loss per trade   = 200
+GRID_TP = GRID_STEP              # take profit per trade = 300
+GRID_SL = GRID_STEP  * 1.5                    # stop loss per trade   = 200
 GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
 
 # ================= ADX ENTRY FILTER =================
@@ -78,7 +78,7 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
 
 ADX_TIMEFRAME = "15m"
 ADX_PERIOD = 14
-ADX_THRESHOLD = 20.0     # the calm line; below this = calm, above = trending
+ADX_THRESHOLD = 30.0     # the calm line; below this = calm, above = trending
 ADX_AVG_PERIOD = 5       # how many recent ADX values to average
 
 # ================= DAILY TARGET =================
