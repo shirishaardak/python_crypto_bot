@@ -8,7 +8,7 @@ THE WHOLE LOGIC IN ONE PLACE
 ENTRY (both must be true):
     1.  ADX(15m) < 35            -> market is calm / ranging, not trending
     2.  ADX(15m) < its average   -> ADX is falling (trend weakening)
-That's it. A grid wants calm, falling-ADX conditions, nothing more.
+    That's it. A grid wants calm, falling-ADX conditions, nothing more.
 
 GRID:
     Levels BELOW the anchor  -> BUY  (buy the dip)
@@ -28,8 +28,9 @@ ANCHOR / RESET:
     The grid is (re)built at the current price when:
       * the bot first starts, or
       * a new day begins (02:30 IST), or
-      * calm returns after a trend had killed the previous grid.
-    The grid is only ever built while ADX < 35, so levels and entries
+      * ADX drops back below the threshold after having risen above it
+        (any calm-after-above round-trip re-centers the grid).
+    The grid is only ever built while ADX < threshold, so levels and entries
     always live in the same calm regime.
 """
 
@@ -57,7 +58,7 @@ DEFAULT_CONTRACTS = {"BTCUSD": 1000}
 CONTRACT_SIZE = {"BTCUSD": 0.001}
 
 TAKER_FEE = 0.0005
-TIMEFRAME = "5m"
+TIMEFRAME = "15m"
 DAYS = 15
 MIN_BALANCE = 1000
 START_BALANCE = 10000
@@ -65,7 +66,7 @@ START_BALANCE = 10000
 # ================= GRID CONFIG =================
 
 GRID_STEP = 300                          # spacing between levels (price points)
-GRID_LEVELS = 6                          # levels above and below the anchor
+GRID_LEVELS =3                          # levels above and below the anchor
 GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
 GRID_SL = GRID_STEP                      # stop loss per trade   = 200
 GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
@@ -77,7 +78,7 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
 
 ADX_TIMEFRAME = "15m"
 ADX_PERIOD = 14
-ADX_THRESHOLD = 25.0     # the calm line; below this = calm, above = trending
+ADX_THRESHOLD = 20.0     # the calm line; below this = calm, above = trending
 ADX_AVG_PERIOD = 5       # how many recent ADX values to average
 
 # ================= DAILY TARGET =================
@@ -233,13 +234,13 @@ def is_calm(adx_now):
 def adx_allows_entry(adx_now, adx_avg):
     """
     The two-condition entry gate:
-        ADX < 35          (calm)
+        ADX < threshold   (calm)
         ADX < its average (falling)
     Both required. Missing data blocks entry.
     """
     if adx_now is None or adx_avg is None:
         return False
-    return (adx_now < ADX_THRESHOLD)
+    return (adx_now < ADX_THRESHOLD) and (adx_now < adx_avg)
 
 
 # ================= GRID BUILD =================
@@ -330,7 +331,8 @@ def maybe_reanchor(state, symbol, price, now, adx_now):
     """
     Build the grid when:
       1. it's a new day (or first run), or
-      2. calm has returned after a trend killed the grid.
+      2. ADX has dropped back below the threshold after having been above it
+         (any calm-after-above round-trip re-centers the grid).
     Either way, only while the market is calm right now.
     """
     session_id = current_session_id()
@@ -344,8 +346,10 @@ def maybe_reanchor(state, symbol, price, now, adx_now):
         # If not calm we simply wait; we'll retry next tick.
         return
 
-    # Calm returned to a grid that a trend had switched off.
-    if calm and not state.get("grid_active", True):
+    # ADX came back below the threshold after having been above it.
+    # was_above_threshold is the prior tick's "ADX >= threshold" reading,
+    # so calm + was_above means a fresh round-trip back into calm.
+    if calm and state.get("was_above_threshold", False):
         build_fresh_grid(state, symbol, price, now, session_id,
                          adx_now, "CALM-RETURN")
 
@@ -380,6 +384,11 @@ def process_symbol(symbol, price, state):
 
     maybe_reanchor(state, symbol, price, now, adx_now)
     save_grid(state, symbol)
+
+    # Track whether ADX is currently above the threshold, so the NEXT tick can
+    # detect a back-below-threshold round-trip in maybe_reanchor. Missing ADX
+    # is treated as "not above" so it can't spuriously trigger a re-anchor.
+    state["was_above_threshold"] = (adx_now is not None and adx_now >= ADX_THRESHOLD)
 
     if state["grid"] is None:
         return
@@ -486,6 +495,7 @@ def run():
             "balance": START_BALANCE,
             "daily_pnl": 0,
             "trading_enabled": True,
+            "was_above_threshold": False,
         }
         for s in SYMBOLS
     }
