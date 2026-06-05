@@ -21,12 +21,30 @@ This file exposes ADX_MODE so you can choose:
 
 Default is "trend" (your request). Flip to "range" to backtest the grid-friendly
 version. I'd strongly suggest comparing both before going live.
+
+SESSION ANCHOR FIX (the reset bug)
+----------------------------------
+The previous version triggered the daily reset on the ET *calendar date*
+changing, combined with `now_et.time() >= 16:00`. That had two problems on a
+server running in IST:
+
+  1. The reset instant drifted by an hour between EDT (US close = 01:30 IST)
+     and EST (US close = 02:30 IST), so any "reset at 2:30 AM" assumption broke
+     for half the year.
+  2. The "once per ET date" guard interacted awkwardly with the 16:00->24:00 ET
+     window, making the actual trigger time subtle and TZ-sensitive.
+
+This version computes a single canonical "session id" — the calendar date of
+the most recent US close (16:00 ET) that has already passed. The session
+changes EXACTLY once per US close, deterministically, no matter what timezone
+the server's wall clock is in (datetime.now(tz=ET) is always correct). The
+daily anchor fires once per new session id. No drift, no hidden edge cases.
 """
 
 import os
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
@@ -110,6 +128,39 @@ FLATTEN_ON_REGIME_EXIT = False
 
 US_CLOSE_TZ = ZoneInfo("America/New_York")
 US_CLOSE_TIME = dt_time(16, 0)
+
+
+def current_session_id(now_utc=None):
+    """
+    Canonical session identifier = the calendar date (in ET) of the most recent
+    US close (16:00 ET) that has ALREADY occurred.
+
+    This is the heart of the reset fix. It is:
+      * Deterministic — depends only on the absolute instant, never on the
+        server's local timezone. datetime.now(tz=ET) converts correctly whether
+        the box is in IST, UTC, or anything else.
+      * EDT/EST-proof — it pins to "16:00 ET" as an absolute instant, so the
+        underlying UTC/IST wall-clock moment shifts with DST automatically
+        (01:30 IST in summer, 02:30 IST in winter) WITHOUT changing the logic.
+      * Fires exactly once per US close — the id changes the moment 16:00 ET
+        passes and stays constant until the next 16:00 ET.
+
+    Returns a `datetime.date` in ET.
+
+    Example:
+      Tue 15:59 ET  -> session id = Monday's date   (Tue close hasn't happened)
+      Tue 16:00 ET  -> session id = Tuesday's date  (new session begins)
+      Tue 23:30 ET  -> session id = Tuesday's date
+      Wed 09:00 ET  -> session id = Tuesday's date  (Wed close hasn't happened)
+    """
+    now_et = (now_utc.astimezone(US_CLOSE_TZ)
+              if now_utc is not None else datetime.now(US_CLOSE_TZ))
+    if now_et.time() >= US_CLOSE_TIME:
+        # Today's close already passed -> this session is keyed to today.
+        return now_et.date()
+    # Today's close hasn't happened yet -> still in yesterday's session.
+    return (now_et - timedelta(days=1)).date()
+
 
 # ================= TARGET / LOSS =================
 
@@ -400,7 +451,7 @@ def _unrealized(state, symbol, price):
 
 # ================= RE-ANCHOR =================
 
-def _build_fresh_grid(state, symbol, price, now, anchor_date, adx_now, reason):
+def _build_fresh_grid(state, symbol, price, now, session_id, adx_now, reason):
     """Flatten stragglers, lay a fresh grid at price, reset daily counters."""
     if state["grid"] is not None and state["positions"]:
         for posn in list(state["positions"]):
@@ -410,7 +461,7 @@ def _build_fresh_grid(state, symbol, price, now, anchor_date, adx_now, reason):
     state["grid"] = build_grid(price)
     state["grid_active"] = True
     state["trading_enabled"] = True
-    state["last_anchor_date"] = anchor_date
+    state["last_session_id"] = session_id
     # Only reset the daily PnL on the US-close session anchor, NOT on every
     # intraday calm-return rebuild (otherwise the daily target/loss would keep
     # resetting through the day).
@@ -420,7 +471,7 @@ def _build_fresh_grid(state, symbol, price, now, anchor_date, adx_now, reason):
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
     utils.log(
         f"🌙 {symbol} GRID BUILT [{reason}] (calm, ADX15m {adx_txt}) @ {price} | "
-        f"levels ±{GRID_STEP}..±{GRID_BOUNDARY}",
+        f"levels ±{GRID_STEP}..±{GRID_BOUNDARY} | session={session_id}",
         tg=True,
     )
 
@@ -430,28 +481,33 @@ def maybe_reanchor(state, symbol, price, now, adx_now, adx_avg):
     Decide whether to (re)build the grid this tick. Two triggers, both
     calm-gated so levels and entries always share one regime:
 
-      1. SESSION-ANCHOR: first run, or once per day after US close.
+      1. SESSION-ANCHOR: first run, or once per US close (16:00 ET). Driven by
+         the canonical session id, which changes deterministically at each US
+         close regardless of server timezone or EDT/EST.
       2. CALM-RETURN: the grid was invalidated by a trend and ADX has now
          dropped back into the calm regime (only if REBUILD_ON_CALM_RETURN).
 
     Anchoring never happens unless the market is calm right now.
     """
-    now_et = datetime.now(US_CLOSE_TZ)
-    is_after_close = now_et.time() >= US_CLOSE_TIME
-    anchor_date = now_et.date()
+    session_id = current_session_id()
 
     calm = adx_threshold_ok(adx_now) if REQUIRE_CALM_TO_ANCHOR else True
 
-    # Trigger 1: daily session anchor (first build or post-US-close).
+    # Trigger 1: daily session anchor.
+    # Fires on first run (no grid yet) OR when the session id has advanced past
+    # the one we last anchored in — i.e. a new US close has occurred. Because
+    # session_id only changes once per 16:00 ET, this fires exactly once per
+    # session, with no time-of-day window to get wrong.
     session_due = (
         state["grid"] is None
-        or (is_after_close and state["last_anchor_date"] != anchor_date)
+        or state.get("last_session_id") != session_id
     )
     if session_due:
         if not calm:
-            return  # wait for calm; last_anchor_date stays unstamped
+            # Wait for calm; DON'T stamp last_session_id, so we retry next tick.
+            return
         _build_fresh_grid(
-            state, symbol, price, now, anchor_date, adx_now, "SESSION-ANCHOR"
+            state, symbol, price, now, session_id, adx_now, "SESSION-ANCHOR"
         )
         return
 
@@ -463,7 +519,7 @@ def maybe_reanchor(state, symbol, price, now, adx_now, adx_avg):
         and calm
     ):
         _build_fresh_grid(
-            state, symbol, price, now, anchor_date, adx_now, "CALM-RETURN"
+            state, symbol, price, now, session_id, adx_now, "CALM-RETURN"
         )
 
 
@@ -666,7 +722,7 @@ def run():
             "grid_active": False,
             "anchor": None,
             "last_candle_time": None,
-            "last_anchor_date": None,
+            "last_session_id": None,   # was last_anchor_date; now the canonical id
             "balance": START_BALANCE,
             "daily_pnl": 0,
             "trading_enabled": True,
@@ -685,6 +741,14 @@ def run():
         f"⚙️ Regime: require_calm_anchor={REQUIRE_CALM_TO_ANCHOR} "
         f"rebuild_on_calm={REBUILD_ON_CALM_RETURN} "
         f"flatten_on_exit={FLATTEN_ON_REGIME_EXIT}",
+        tg=True,
+    )
+    # Surface the session math at startup so you can verify the reset instant
+    # on the EC2 box no matter what its local (IST) clock says.
+    _now_et = datetime.now(US_CLOSE_TZ)
+    utils.log(
+        f"🕐 server_local={datetime.now()} | ET={_now_et.strftime('%Y-%m-%d %H:%M %Z')} "
+        f"| session_id={current_session_id()} | next reset at next 16:00 ET",
         tg=True,
     )
 

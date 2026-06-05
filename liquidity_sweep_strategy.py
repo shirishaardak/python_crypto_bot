@@ -5,8 +5,6 @@ import numpy as np
 
 from datetime import datetime
 
-import pandas_ta as ta
-
 from dotenv import load_dotenv
 
 import traceback
@@ -17,16 +15,18 @@ load_dotenv()
 
 # ================= CONFIG =================
 
-BOT_NAME = "price_trend_strategy"
+BOT_NAME = "liquidity_sweep_strategy"
 
-SYMBOLS = ["BTCUSD"]
+SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 DEFAULT_CONTRACTS = {
-    "BTCUSD": 1000
+    "BTCUSD": 1000,
+    "ETHUSD": 1000
 }
 
 CONTRACT_SIZE = {
-    "BTCUSD": 0.001
+    "BTCUSD": 0.001,
+    "ETHUSD": 0.01
 }
 
 TAKER_FEE = 0.0005
@@ -37,18 +37,39 @@ DAYS = 15
 
 MIN_BALANCE = 1000
 
+# ================= STRATEGY PARAMS =================
+
+# Bars on each side that define an "obvious" swing high/low (where stops cluster).
+SWING_LB = {
+    "BTCUSD": 10,
+    "ETHUSD": 10
+}
+
+# Minimum reward:risk required to take a trade. This is the main quality filter
+# and the reason we trade rarely — most candles produce no qualifying setup.
+MIN_RR = {
+    "BTCUSD": 2.0,
+    "ETHUSD": 2.0
+}
+
 # ================= TARGET / LOSS =================
+# NOTE: With the sweep strategy, the STOP and TARGET come from the setup itself
+# (stop = beyond the sweep wick, target = opposing liquidity). TP below is a
+# hard safety cap in points; the structural target usually triggers first.
 
 TP = {
-    "BTCUSD": 500
+    "BTCUSD": 500,
+    "ETHUSD": 40
 }
 
 TRAIL_TRIGGER = {
-    "BTCUSD": 200   # Trail activates only after 200 points in profit
+    "BTCUSD": 200,   # Trail activates only after this many points in profit
+    "ETHUSD": 15
 }
 
 TRAIL_DISTANCE = {
-    "BTCUSD": 100   # SL moves in 100-point steps
+    "BTCUSD": 100,   # SL moves in these point steps
+    "ETHUSD": 8
 }
 
 DAILY_TARGET = 1000
@@ -84,83 +105,114 @@ def reset_daily_state(state):
         )
 
 
-# ================= TRENDLINE =================
+# ================= SWING LEVELS =================
+# Replaces the Heikin-Ashi trendline. Finds the most extreme confirmed swing
+# high and swing low in the lookback window — the levels the crowd watches and
+# where stop orders pile up. Operates on raw OHLC from df (same df you already
+# pass in). Expects columns: "High", "Low" (matching your existing code).
 
-def calculate_trendline(df):
+def swing_levels(df, lb):
+    """Return (swing_high, swing_low) using a fractal-style pivot:
+    a bar is a swing high if its High is the max of the window [i-lb, i+lb]
+    and strictly exceeds the window edges (a real pivot, not a flat shelf).
+    We take the most extreme pivot, since that is the most 'obvious' level."""
 
-    ha = ta.ha(
-        df["Open"],
-        df["High"],
-        df["Low"],
-        df["Close"]
-    ).reset_index(drop=True)
+    highs = df["High"].values
+    lows = df["Low"].values
+    n = len(df)
 
-    ha["high_fractal"] = np.nan
-    ha["low_fractal"] = np.nan
+    swing_high = np.nan
+    swing_low = np.nan
 
-    for i in range(2, len(ha) - 2):
+    found_highs = []
+    found_lows = []
 
-        is_high = (
-            ha.loc[i, "HA_high"] > ha.loc[i - 1, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i - 2, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i + 1, "HA_high"]
-            and ha.loc[i, "HA_high"] > ha.loc[i + 2, "HA_high"]
-        )
+    for i in range(lb, n - lb):
 
-        is_low = (
-            ha.loc[i, "HA_low"] < ha.loc[i - 1, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i - 2, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i + 1, "HA_low"]
-            and ha.loc[i, "HA_low"] < ha.loc[i + 2, "HA_low"]
-        )
+        win_high = highs[i - lb: i + lb + 1]
+        win_low = lows[i - lb: i + lb + 1]
 
-        if is_high:
-            ha.loc[i + 2, "high_fractal"] = ha.loc[i, "HA_high"]
+        h = highs[i]
+        l = lows[i]
 
-        if is_low:
-            ha.loc[i + 2, "low_fractal"] = ha.loc[i, "HA_low"]
+        if h >= win_high.max() and h > win_high.min():
+            found_highs.append(h)
 
-    ha["Trendline"] = np.nan
+        if l <= win_low.min() and l < win_low.max():
+            found_lows.append(l)
 
-    last_high_fractal = np.nan
-    last_low_fractal = np.nan
+    if found_highs:
+        swing_high = max(found_highs)
 
-    trendline = ha.loc[0, "HA_close"]
+    if found_lows:
+        swing_low = min(found_lows)
 
-    for i in range(1, len(ha)):
+    return swing_high, swing_low
 
-        if not np.isnan(ha.loc[i, "high_fractal"]):
-            last_high_fractal = ha.loc[i, "high_fractal"]
 
-        if not np.isnan(ha.loc[i, "low_fractal"]):
-            last_low_fractal = ha.loc[i, "low_fractal"]
+# ================= SIGNAL =================
+# Detects a sweep + rejection on the just-CLOSED candle.
+#
+# SHORT: the closed candle's HIGH pokes ABOVE the swing high (sweeping buy-stops
+#        and trapping breakout longs) but the candle CLOSES back BELOW it.
+# LONG:  the closed candle's LOW pokes BELOW the swing low (sweeping sell-stops
+#        and trapping breakout shorts) but the candle CLOSES back ABOVE it.
+#
+# Levels are computed from history EXCLUDING the trigger candle, so the trigger
+# can't define its own level. Returns a dict or None.
 
-        current_close = ha.loc[i, "HA_close"]
-        prev_close = ha.loc[i - 1, "HA_close"]
+def detect_signal(df, lb, min_rr):
 
-        if (
-            not np.isnan(last_high_fractal)
-            and prev_close <= last_high_fractal
-            and current_close > last_high_fractal
-            and current_close > trendline
-            and not np.isnan(last_low_fractal)
-        ):
-            trendline = last_low_fractal
+    if len(df) < 2 * lb + 3:
+        return None
 
-        elif (
-            not np.isnan(last_low_fractal)
-            and prev_close >= last_low_fractal
-            and current_close < last_low_fractal
-            and current_close < trendline
-            and not np.isnan(last_high_fractal)
-        ):
-            trendline = last_high_fractal
+    # df.iloc[-1] is the forming candle in a live feed; we trade on the just-
+    # CLOSED candle = iloc[-2], exactly like your trendline code used iloc[-2].
+    trigger = df.iloc[-2]
+    history = df.iloc[:-2]   # levels from confirmed history only
 
-        ha.loc[i, "Trendline"] = trendline
-        ha.loc[i, "up_Trendline"] = trendline + 50
-        ha.loc[i, "down_Trendline"] = trendline - 50
+    swing_high, swing_low = swing_levels(history, lb)
 
-    return ha
+    if np.isnan(swing_high) or np.isnan(swing_low):
+        return None
+
+    # ---- SHORT setup ----
+    if trigger["High"] > swing_high and trigger["Close"] < swing_high:
+
+        entry = float(trigger["Close"])
+        sl = float(trigger["High"])          # just beyond the wick that trapped longs
+        target = float(swing_low)            # opposing liquidity pool
+        risk = sl - entry
+        reward = entry - target
+
+        if risk > 0 and reward / risk >= min_rr:
+            return {
+                "side": "short",
+                "entry": entry,
+                "sl": sl,
+                "target": target,
+                "rr": reward / risk
+            }
+
+    # ---- LONG setup ----
+    if trigger["Low"] < swing_low and trigger["Close"] > swing_low:
+
+        entry = float(trigger["Close"])
+        sl = float(trigger["Low"])
+        target = float(swing_high)
+        risk = entry - sl
+        reward = target - entry
+
+        if risk > 0 and reward / risk >= min_rr:
+            return {
+                "side": "long",
+                "entry": entry,
+                "sl": sl,
+                "target": target,
+                "rr": reward / risk
+            }
+
+    return None
 
 
 # ================= STRATEGY =================
@@ -168,11 +220,6 @@ def calculate_trendline(df):
 def process_symbol(symbol, df, price, state, is_new_candle):
 
     reset_daily_state(state)
-
-    ha = calculate_trendline(df)
-
-    last = ha.iloc[-2]
-    prev = ha.iloc[-3]
 
     pos = state["position"]
 
@@ -194,7 +241,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             if profit_points >= TRAIL_TRIGGER[symbol]:
 
-                # How many 100-point steps beyond the trigger has price moved?
                 steps = int((profit_points - TRAIL_TRIGGER[symbol]) / TRAIL_DISTANCE[symbol])
                 new_sl = pos["entry"] + (steps * TRAIL_DISTANCE[symbol])
                 new_sl = max(pos["entry"], new_sl)
@@ -220,7 +266,6 @@ def process_symbol(symbol, df, price, state, is_new_candle):
 
             if profit_points >= TRAIL_TRIGGER[symbol]:
 
-                # How many 100-point steps beyond the trigger has price moved?
                 steps = int((profit_points - TRAIL_TRIGGER[symbol]) / TRAIL_DISTANCE[symbol])
                 new_sl = pos["entry"] - (steps * TRAIL_DISTANCE[symbol])
                 new_sl = min(pos["entry"], new_sl)
@@ -237,6 +282,7 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         exit_trade = False
         pnl = 0
 
+        # 1) Daily target hit
         if (
             DAILY_TARGET is not None
             and state["daily_pnl"] + live_pnl >= DAILY_TARGET
@@ -245,24 +291,26 @@ def process_symbol(symbol, df, price, state, is_new_candle):
             pnl = live_pnl
             exit_trade = True
 
+        # 2) LONG exits: stop, structural target, or hard TP cap
         elif (
             pos["side"] == "long"
             and (
                 price <= pos["sl"]
+                or price >= pos["target"]
                 or price >= pos["entry"] + TP[symbol]
-                or price < last.Trendline
             )
         ):
 
             pnl = live_pnl
             exit_trade = True
 
+        # 3) SHORT exits: stop, structural target, or hard TP cap
         elif (
             pos["side"] == "short"
             and (
                 price >= pos["sl"]
+                or price <= pos["target"]
                 or price <= pos["entry"] - TP[symbol]
-                or price > last.Trendline
             )
         ):
 
@@ -319,45 +367,52 @@ def process_symbol(symbol, df, price, state, is_new_candle):
         if not state["trading_enabled"]:
             return
 
+        # Only evaluate once per newly-closed candle (avoids re-firing intra-candle)
+        if not is_new_candle:
+            return
+
         if state.get("last_exit_candle") == df.index[-1]:
             return
 
         if state["balance"] < MIN_BALANCE:
             return
 
-        if (
-            prev.HA_close <= prev.up_Trendline
-            and last.HA_close > last.up_Trendline
-        ):
+        sig = detect_signal(df, SWING_LB[symbol], MIN_RR[symbol])
+
+        if sig is None:
+            return
+
+        if sig["side"] == "long":
 
             state["position"] = {
                 "side": "long",
-                "entry": price,
+                "entry": price,                       # fill at current price (paper)
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": last.down_Trendline
+                "sl": sig["sl"],
+                "target": sig["target"]
             }
 
             utils.log(
-                f"🟢 {symbol} LONG @ {price} | SL: {last.down_Trendline}",
+                f"🟢 {symbol} LONG @ {price} | SL: {round(sig['sl'], 2)} "
+                f"| TGT: {round(sig['target'], 2)} | RR: {round(sig['rr'], 2)}",
                 tg=True
             )
 
-        elif (
-            prev.HA_close >= prev.down_Trendline
-            and last.HA_close < last.down_Trendline
-        ):
+        elif sig["side"] == "short":
 
             state["position"] = {
                 "side": "short",
                 "entry": price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "sl": last.up_Trendline
+                "sl": sig["sl"],
+                "target": sig["target"]
             }
 
             utils.log(
-                f"🔴 {symbol} SHORT @ {price} | SL: {last.up_Trendline}",
+                f"🔴 {symbol} SHORT @ {price} | SL: {round(sig['sl'], 2)} "
+                f"| TGT: {round(sig['target'], 2)} | RR: {round(sig['rr'], 2)}",
                 tg=True
             )
 
@@ -379,7 +434,7 @@ def run():
     }
 
     utils.log(
-        "🚀 LIVE BOT STARTED (PAPER MODE)",
+        "🚀 LIVE BOT STARTED (PAPER MODE) — Liquidity Sweep",
         tg=True
     )
 
