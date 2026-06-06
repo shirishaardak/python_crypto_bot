@@ -6,7 +6,7 @@ A mean-reversion price grid. Plain version — no mode switches.
 THE WHOLE LOGIC IN ONE PLACE
 ----------------------------
 ENTRY (both must be true):
-    1.  ADX(15m) < 35            -> market is calm / ranging, not trending
+    1.  ADX(15m) < 30            -> market is calm / ranging, not trending
     2.  ADX(15m) < its average   -> ADX is falling (trend weakening)
     That's it. A grid wants calm, falling-ADX conditions, nothing more.
 
@@ -15,8 +15,16 @@ GRID:
     Levels ABOVE the anchor  -> SHORT (sell the rally)
     Each filled level gets its own TP and SL, measured from the live entry.
 
+EXITS (three ways a position closes):
+    1.  TP / SL          -> per-trade take-profit or stop-loss
+    2.  TARGET-LOCK      -> daily target hit, close anything in profit
+    3.  TREND-EXIT       -> ADX crosses the trend threshold (32): flatten
+                            EVERYTHING immediately, regardless of TP/SL.
+    The SL is now a wide last-resort backstop; the TREND-EXIT is the
+    primary defense against a real trend running a position to the floor.
+
 RE-ENTRY:
-    When a level's position exits (TP or SL) the level is freed again.
+    When a level's position exits (any reason) the level is freed again.
     If price later returns to that same level, it FILLS AGAIN. Levels are
     reusable for as long as the grid is alive and the market is calm.
 
@@ -32,6 +40,12 @@ ANCHOR / RESET:
         (any calm-after-above round-trip re-centers the grid).
     The grid is only ever built while ADX < threshold, so levels and entries
     always live in the same calm regime.
+
+REGIME BANDS (the 30 / 32 buffer):
+    ADX < 30            -> CALM     : grid on, new entries allowed
+    30 <= ADX < 32      -> WARNING  : grid OFF (no new entries), open trades
+                                      keep running to their own TP/SL
+    ADX >= 32           -> TREND    : flatten ALL positions (TREND-EXIT)
 """
 
 import os
@@ -66,10 +80,10 @@ START_BALANCE = 10000
 # ================= GRID CONFIG =================
 
 GRID_STEP = 200                          # spacing between levels (price points)
-GRID_LEVELS =3                          # levels above and below the anchor
-GRID_TP = GRID_STEP              # take profit per trade = 300
-GRID_SL = GRID_STEP  * 1.5                    # stop loss per trade   = 200
-GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
+GRID_LEVELS = 3                          # levels above and below the anchor
+GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
+GRID_SL = GRID_STEP * 5                  # stop loss per trade   = 600 (wide backstop)
+GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 600
 
 # ================= ADX ENTRY FILTER =================
 # The only two conditions, both required:
@@ -78,12 +92,17 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 1200
 
 ADX_TIMEFRAME = "15m"
 ADX_PERIOD = 14
-ADX_THRESHOLD = 30.0     # the calm line; below this = calm, above = trending
-ADX_AVG_PERIOD = 5       # how many recent ADX values to average
+ADX_THRESHOLD = 30.0       # the calm line; below = calm, above = grid off
+ADX_AVG_PERIOD = 5         # how many recent ADX values to average
+
+# ADX at/above this -> flatten EVERY open position (trend confirmed).
+# Sits above ADX_THRESHOLD on purpose: 30..32 is a buffer where the grid is
+# off but open trades keep running; only a clearer trend (>=32) flattens all.
+TREND_EXIT_THRESHOLD = 32.0
 
 # ================= DAILY TARGET =================
 
-DAILY_TARGET = 600       # +$600 realized -> stop for the day
+DAILY_TARGET = 1600         # +$600 realized -> stop for the day
 
 # ================= SESSION RESET =================
 # Fixed wall-clock reset at 02:30 IST every day (no daylight saving).
@@ -231,6 +250,11 @@ def is_calm(adx_now):
     return adx_now is not None and adx_now < ADX_THRESHOLD
 
 
+def is_trending(adx_now):
+    """Trend confirmed = ADX at/above the trend-exit line. Missing -> False."""
+    return adx_now is not None and adx_now >= TREND_EXIT_THRESHOLD
+
+
 def adx_allows_entry(adx_now, adx_avg):
     """
     The two-condition entry gate:
@@ -357,7 +381,8 @@ def maybe_reanchor(state, symbol, price, now, adx_now):
 def check_regime(state, symbol, adx_now):
     """
     If ADX has left calm, switch the grid OFF (no new entries). Open positions
-    keep running to their own TP/SL. Returns True if the grid is tradeable.
+    keep running to their own TP/SL (or to a TREND-EXIT). Returns True if the
+    grid is tradeable.
     """
     if state["grid"] is None:
         return False
@@ -376,6 +401,36 @@ def check_regime(state, symbol, adx_now):
     return False
 
 
+def maybe_trend_exit(state, symbol, price, now, adx_now):
+    """
+    Hard risk-off: if ADX has confirmed a trend (>= TREND_EXIT_THRESHOLD),
+    flatten EVERY open position immediately, regardless of TP/SL. This is the
+    primary defense that lets the SL be a wide backstop rather than a tight
+    chop-generator. Returns True if it flattened anything.
+    """
+    if state["grid"] is None or not state["positions"]:
+        return False
+    if not is_trending(adx_now):
+        return False
+
+    adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
+    utils.log(
+        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} >= {TREND_EXIT_THRESHOLD}) "
+        f"— flattening all {len(state['positions'])} position(s)",
+        tg=True,
+    )
+    for posn in list(state["positions"]):
+        _close_position(state, symbol, posn, price, now, "TREND-EXIT")
+
+    state["grid_active"] = False
+    utils.log(
+        f"💰 Balance: {round(state['balance'], 2)} | "
+        f"📊 Daily PNL: {round(state['daily_pnl'], 2)}",
+        tg=True,
+    )
+    return True
+
+
 # ================= STRATEGY =================
 
 def process_symbol(symbol, price, state):
@@ -391,6 +446,11 @@ def process_symbol(symbol, price, state):
     state["was_above_threshold"] = (adx_now is not None and adx_now >= ADX_THRESHOLD)
 
     if state["grid"] is None:
+        return
+
+    # ---------- HARD TREND-EXIT (before anything else) ----------
+    # If a trend is confirmed, flatten everything and stop here for this tick.
+    if maybe_trend_exit(state, symbol, price, now, adx_now):
         return
 
     anchor = state["anchor"]
@@ -509,7 +569,7 @@ def run():
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
         f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
-        f"| daily_target={DAILY_TARGET}",
+        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD}",
         tg=True,
     )
 
