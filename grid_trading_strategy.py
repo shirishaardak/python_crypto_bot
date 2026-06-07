@@ -18,8 +18,9 @@ GRID:
 EXITS (three ways a position closes):
     1.  TP / SL          -> per-trade take-profit or stop-loss
     2.  TARGET-LOCK      -> daily target hit, close anything in profit
-    3.  TREND-EXIT       -> ADX crosses the trend threshold (32): flatten
-                            EVERYTHING immediately, regardless of TP/SL.
+    3.  TREND-EXIT       -> ADX confirms a trend (>=32) OR ADX rises back above
+                            its own average: flatten EVERYTHING immediately,
+                            regardless of TP/SL.
     The SL is now a wide last-resort backstop; the TREND-EXIT is the
     primary defense against a real trend running a position to the floor.
 
@@ -82,7 +83,7 @@ START_BALANCE = 10000
 GRID_STEP = 200                          # spacing between levels (price points)
 GRID_LEVELS = 3                          # levels above and below the anchor
 GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
-GRID_SL = GRID_STEP * 5                  # stop loss per trade   = 600 (wide backstop)
+GRID_SL = GRID_STEP * 3                 # stop loss per trade   = 600 (wide backstop)
 GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 600
 
 # ================= ADX ENTRY FILTER =================
@@ -102,7 +103,7 @@ TREND_EXIT_THRESHOLD = 32.0
 
 # ================= DAILY TARGET =================
 
-DAILY_TARGET = 1600         # +$600 realized -> stop for the day
+DAILY_TARGET = 1200         # +$600 realized -> stop for the day
 
 # ================= SESSION RESET =================
 # Fixed wall-clock reset at 02:30 IST every day (no daylight saving).
@@ -401,21 +402,30 @@ def check_regime(state, symbol, adx_now):
     return False
 
 
-def maybe_trend_exit(state, symbol, price, now, adx_now):
+def maybe_trend_exit(state, symbol, price, now, adx_now, adx_avg):
     """
-    Hard risk-off: if ADX has confirmed a trend (>= TREND_EXIT_THRESHOLD),
-    flatten EVERY open position immediately, regardless of TP/SL. This is the
-    primary defense that lets the SL be a wide backstop rather than a tight
-    chop-generator. Returns True if it flattened anything.
+    Hard risk-off: flatten EVERY open position immediately, regardless of TP/SL,
+    when either
+        1. ADX has confirmed a trend (>= TREND_EXIT_THRESHOLD), or
+        2. ADX is rising (adx_now > adx_avg) -> the calm is ending / a trend is
+           building, the inverse of the entry condition.
+    This is the primary defense that lets the SL be a wide backstop rather than
+    a tight chop-generator. Returns True if it flattened anything.
     """
     if state["grid"] is None or not state["positions"]:
         return False
-    if not is_trending(adx_now):
+
+    trending = is_trending(adx_now)
+    rising = (adx_now is not None and adx_avg is not None and adx_now > adx_avg)
+    if not (trending or rising):
         return False
 
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
+    avg_txt = f"{adx_avg:.1f}" if adx_avg is not None else "n/a"
+    cond = (f"ADX15m {adx_txt} >= {TREND_EXIT_THRESHOLD}" if trending
+            else f"ADX15m {adx_txt} > avg {avg_txt} (rising)")
     utils.log(
-        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} >= {TREND_EXIT_THRESHOLD}) "
+        f"🚨 {symbol} TREND-EXIT ({cond}) "
         f"— flattening all {len(state['positions'])} position(s)",
         tg=True,
     )
@@ -449,8 +459,8 @@ def process_symbol(symbol, price, state):
         return
 
     # ---------- HARD TREND-EXIT (before anything else) ----------
-    # If a trend is confirmed, flatten everything and stop here for this tick.
-    if maybe_trend_exit(state, symbol, price, now, adx_now):
+    # If a trend is confirmed OR ADX is rising, flatten everything and stop.
+    if maybe_trend_exit(state, symbol, price, now, adx_now, adx_avg):
         return
 
     anchor = state["anchor"]
@@ -569,7 +579,8 @@ def run():
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
         f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
-        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD}",
+        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD} "
+        f"or ADX>avg",
         tg=True,
     )
 
