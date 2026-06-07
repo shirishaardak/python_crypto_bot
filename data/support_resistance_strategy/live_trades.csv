@@ -1,0 +1,2 @@
+entry_time,exit_time,symbol,side,entry_price,exit_price,qty,net_pnl
+2026-06-07 11:45:00,2026-06-07 12:00:01,BTCUSD,short,61649.0,61952.5,1000,-365.30075
