@@ -43,7 +43,7 @@ TOUCH_ATR_FRAC = 0.5       # "at the level" tolerance, as a fraction of ATR
 
 # --- risk (the locked-in rules) ---
 ATR_PERIOD = 14
-SL_ATR_MULT = 0.5          # stop gap beyond the level = ATR * 0.5 (tighter)
+SL_ATR_MULT = 1.3         # stop gap beyond the level = ATR * 0.5 (tighter)
 RR = 3.0                   # take-profit = R * RR  -> 1:3
 TSL_ARM_R = 0.5            # arm trailing stop after +0.5R of open profit
 TSL_STEP_ATR_MULT = 0.5    # step-trail: stop moves in chunks of ATR * 0.5,
