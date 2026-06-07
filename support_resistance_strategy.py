@@ -6,9 +6,7 @@ import pandas as pd
 import numpy as np
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from datetime import time as dt_time
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from collections import deque
 
 import websocket  # pip install websocket-client
@@ -45,10 +43,11 @@ TOUCH_ATR_FRAC = 0.5       # "at the level" tolerance, as a fraction of ATR
 
 # --- risk (the locked-in rules) ---
 ATR_PERIOD = 14
-SL_ATR_MULT = 1.0          # stop gap beyond the level = ATR * this
+SL_ATR_MULT = 0.5          # stop gap beyond the level = ATR * 0.5 (tighter)
 RR = 3.0                   # take-profit = R * RR  -> 1:3
-TSL_ARM_R = 1.0            # arm trailing stop after +1R of open profit
-TSL_TRAIL_R = 1.0          # then trail 1R behind the best price seen
+TSL_ARM_R = 0.5            # arm trailing stop after +0.5R of open profit
+TSL_STEP_ATR_MULT = 0.5    # step-trail: stop moves in chunks of ATR * 0.5,
+                           # and only after best price advances a full step
 
 # --- accounting ---
 START_BALANCE = 10000.0
@@ -56,11 +55,6 @@ TAKER_FEE = 0.0005
 MIN_BALANCE = 1000
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01, "SOLUSD": 1.0}
 DEFAULT_CONTRACTS = {"BTCUSD": 1000, "ETHUSD": 1000, "SOLUSD": 1000}
-
-# --- daily target / session reset (02:30 IST, no DST) ---
-DAILY_TARGET = 1600
-RESET_TZ = ZoneInfo("Asia/Kolkata")
-RESET_TIME = dt_time(2, 30)
 
 
 # ----- INDICATORS -----
@@ -228,35 +222,56 @@ class Position:
 
 def update_trailing(pos, ref_price):
     """
-    Arm the TSL once open profit reaches +TSL_ARM_R*R, then trail
-    TSL_TRAIL_R*R behind the best price seen. The stop only ever moves in the
-    favorable direction. `pos` may be a Position or a plain dict with the same
-    keys ("side","entry","R","best","tsl_armed","sl"). Mutates in place.
+    Step-based (chunky) trailing stop.
+
+    Arm the TSL once open profit reaches +TSL_ARM_R*R. Once armed, the stop
+    only moves when the BEST price has advanced by a full `step` beyond where
+    the stop was last placed. Each full step, the stop jumps up (long) / down
+    (short) to sit one `step` behind the best price. Moves less than a full
+    step do NOT move the stop. The stop only ever moves favorably.
+
+    `step` is taken from pos["step"] (set at entry = ATR * TSL_STEP_ATR_MULT).
+    If absent, it falls back to R (so it never crashes on an old position).
+
+    `pos` may be a Position or a plain dict with keys
+    ("side","entry","R","best","tsl_armed","sl"[,"step"]). Mutates in place.
 
     For LIVE use, pass the current price as ref_price.
     For BACKTEST use, pass the bar extreme in the trade's favor
     (high for longs, low for shorts) to model the best intrabar excursion.
     """
     is_dict = isinstance(pos, dict)
-    side = pos["side"] if is_dict else pos.side
-    entry = pos["entry"] if is_dict else pos.entry
-    R = pos["R"] if is_dict else pos.R
-    best = pos["best"] if is_dict else pos.best
-    armed = pos["tsl_armed"] if is_dict else pos.tsl_armed
-    sl = pos["sl"] if is_dict else pos.sl
+
+    def g(k, default=None):
+        return (pos.get(k, default) if is_dict else getattr(pos, k, default))
+
+    side = g("side")
+    entry = g("entry")
+    R = g("R")
+    best = g("best")
+    armed = g("tsl_armed")
+    sl = g("sl")
+    step = g("step") or R          # fall back to R if step missing
+    if not step or step <= 0:
+        step = R
 
     if side == "long":
         best = max(best, ref_price)
         if not armed and (best - entry) >= TSL_ARM_R * R:
             armed = True
         if armed:
-            sl = max(sl, best - TSL_TRAIL_R * R)
+            # how many full steps is the best price above the current stop?
+            steps = int((best - sl) // step)
+            if steps > 1:                       # keep exactly one step behind
+                sl = max(sl, sl + (steps - 1) * step)
     else:
         best = min(best, ref_price)
         if not armed and (entry - best) >= TSL_ARM_R * R:
             armed = True
         if armed:
-            sl = min(sl, best + TSL_TRAIL_R * R)
+            steps = int((sl - best) // step)
+            if steps > 1:
+                sl = min(sl, sl - (steps - 1) * step)
 
     if is_dict:
         pos["best"], pos["tsl_armed"], pos["sl"] = best, armed, sl
@@ -265,33 +280,26 @@ def update_trailing(pos, ref_price):
     return pos
 
 
-# ----- SESSION (02:30 IST daily reset) -----
-def current_session_id(now_ist=None):
-    """Calendar date (IST) of the most recent 02:30 IST that already passed."""
-    now = now_ist or datetime.now(RESET_TZ)
-    if now.time() >= RESET_TIME:
-        return now.date()
-    return (now - timedelta(days=1)).date()
-
-
 # ================= CONFIG =================
 
 BOT_NAME = "support_resistance_strategy"
 
-SYMBOLS = ["BTCUSD"]
+SYMBOLS = ["BTCUSD", "ETHUSD", "SOLUSD"]
 
 # Accounting knobs (formerly pulled from sr_core, now defined above).
-# Narrow the core's multi-symbol dicts down to the symbols this bot trades.
+# Keep the full multi-symbol dicts so all symbols in SYMBOLS are covered.
 CORE_DEFAULT_CONTRACTS = DEFAULT_CONTRACTS
 CORE_CONTRACT_SIZE = CONTRACT_SIZE
 
-DEFAULT_CONTRACTS = {"BTCUSD": CORE_DEFAULT_CONTRACTS["BTCUSD"]}
+DEFAULT_CONTRACTS = {s: CORE_DEFAULT_CONTRACTS[s] for s in SYMBOLS}
 
 live_DEFAULT_CONTRACTS = {
-    "BTCUSD": 1
+    "BTCUSD": 1,
+    "ETHUSD": 1,
+    "SOLUSD": 1,
 }
 
-CONTRACT_SIZE = {"BTCUSD": CORE_CONTRACT_SIZE["BTCUSD"]}
+CONTRACT_SIZE = {s: CORE_CONTRACT_SIZE[s] for s in SYMBOLS}
 
 # TAKER_FEE already defined above in the inlined core.
 
@@ -308,12 +316,6 @@ DAYS = 15
 
 # Bars of history needed before logic is valid (whichever window is longest).
 MIN_BARS = max(TREND_BARS, SR_BARS, ATR_PERIOD) + 5
-
-# ================= TARGET / LOSS =================
-
-# DAILY_TARGET already defined above in the inlined core.
-
-MAX_DAILY_LOSS = None
 
 # ================= WEBSOCKET CONFIG =================
 
@@ -393,26 +395,6 @@ def place_market_order(symbol, side, qty):
     return {"success": True}
 
 
-# ================= DAILY RESET =================
-
-def reset_daily_state(state):
-    """Reset on the strategy session boundary (02:30 IST), not midnight."""
-    sess = current_session_id()
-
-    if state["last_reset_day"] != sess:
-
-        state["daily_pnl"] = 0
-
-        state["trading_enabled"] = True
-
-        state["last_reset_day"] = sess
-
-        utils.log(
-            "🌞 New trading session started",
-            tg=True
-        )
-
-
 # ================= STRATEGY =================
 # Single-timeframe, paper-trading. Levels come from support_resistance
 # on the exec TF; entries come from detect_signal (trend-filtered
@@ -420,8 +402,6 @@ def reset_daily_state(state):
 # Fills assumed at the just-closed candle's close.
 
 def process_symbol(symbol, exec_df, state, is_new_candle):
-
-    reset_daily_state(state)
 
     df = exec_df
 
@@ -455,7 +435,7 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
         H[sr_window], L[sr_window], float(last.Close)
     )
 
-    save_processed_data(df.iloc[:-1], symbol, support, resistance, trend)
+    # save_processed_data(df.iloc[:-1], symbol, support, resistance, trend)
 
     pos = state["position"]
 
@@ -471,7 +451,7 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
         # Don't evaluate an exit on the very same candle we entered on.
         # Wait for the next closed bar so entries/exits can't both fire on
         # one bar (which produced fee-only round-trips at startup).
-        if pos.get("entry_candle") == df.index[-1]:
+        if pos.get("entry_candle") == df.index[-2]:
             return
 
         exit_trade = False
@@ -484,23 +464,9 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
         ref = float(last.High) if pos["side"] == "long" else float(last.Low)
         update_trailing(pos, ref)        # mutates pos["sl"], pos["best"], etc.
 
-        # ----- live (unrealised) pnl on the close -----
-        if pos["side"] == "long":
-            live_pnl = (close_px - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-        else:
-            live_pnl = (pos["entry"] - close_px) * CONTRACT_SIZE[symbol] * pos["qty"]
-
-        # ================= DAILY TARGET FORCE EXIT =================
-        if (
-            DAILY_TARGET is not None
-            and state["daily_pnl"] + live_pnl >= DAILY_TARGET
-        ):
-            exit_trade = True
-            utils.log("🎯 DAILY TARGET REACHED ON CANDLE CLOSE", tg=True)
-
         # ================= LONG EXIT =================
         # TP (R*RR above entry) or SL (trailing / initial stop) hit on close.
-        elif (
+        if (
             pos["side"] == "long"
             and (close_px >= pos["tp"] or close_px <= pos["sl"])
         ):
@@ -533,7 +499,6 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
             net = pnl - total_fee
 
             state["balance"] += net
-            state["daily_pnl"] += net
 
             utils.save_trade({
                 "symbol": symbol,
@@ -549,15 +514,6 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
             emoji = "🟢" if net > 0 else "🔴"
             utils.log(f"{emoji} {symbol} EXIT @ {fill_price} | PNL: {round(net, 6)}", tg=True)
             utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
-            utils.log(f"📊 Daily PNL: {round(state['daily_pnl'], 2)}", tg=True)
-
-            if DAILY_TARGET is not None and state["daily_pnl"] >= DAILY_TARGET:
-                state["trading_enabled"] = False
-                utils.log(f"🎯 DAILY TARGET HIT: {round(state['daily_pnl'], 2)}", tg=True)
-
-            if MAX_DAILY_LOSS is not None and state["daily_pnl"] <= MAX_DAILY_LOSS:
-                state["trading_enabled"] = False
-                utils.log("🛑 MAX DAILY LOSS HIT", tg=True)
 
             state["position"] = None
             state["last_exit_candle"] = df.index[-1]
@@ -566,9 +522,6 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
     # ================= ENTRY =================
 
     if not pos and is_new_candle:
-
-        if not state["trading_enabled"]:
-            return
 
         # Avoid same-candle reentry after an exit.
         if state.get("last_exit_candle") == df.index[-1]:
@@ -612,7 +565,8 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
             "R": R,
             "best": entry_price,
             "tsl_armed": False,
-            "entry_candle": df.index[-1],
+            "step": atr * TSL_STEP_ATR_MULT,   # fixed trail step for this trade
+            "entry_candle": df.index[-2],
         }
 
         emoji = "🟢" if sig["side"] == "long" else "🔴"
@@ -808,9 +762,6 @@ def run():
             "last_candle_time": None,
             "last_exit_candle": None,
             "balance": START_BALANCE,
-            "daily_pnl": 0,
-            "last_reset_day": current_session_id(),
-            "trading_enabled": True
         } for s in SYMBOLS
     }
 
