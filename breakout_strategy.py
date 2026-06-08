@@ -92,20 +92,54 @@ utils = TradingUtils(
 
 def compute_adx(candles, period=ADX_PERIOD):
     """
-    Wilder's ADX from a list of candles.
-    Each candle is expected to expose 'high', 'low', 'close'.
+    Wilder's ADX from candles.
+    Accepts a pandas DataFrame with High/Low/Close columns (capitalized or
+    lowercase) or a list of dicts with those keys.
     Returns a list of ADX values (one per smoothed bar), or [] if not enough
     data.
     """
-    if not candles or len(candles) < 2 * period + 1:
+    def _col(df, *names):
+        """Return the first matching column name present in df, else None."""
+        for nm in names:
+            if nm in df.columns:
+                return nm
+        return None
+
+    # Extract high/low/close into plain lists, DataFrame or list-of-dicts.
+    if hasattr(candles, "columns"):           # pandas DataFrame
+        if candles.empty:
+            return []
+        h_col = _col(candles, "High", "high")
+        l_col = _col(candles, "Low", "low")
+        c_col = _col(candles, "Close", "close")
+        if not (h_col and l_col and c_col):
+            utils.log(
+                f"🚫 ADX: candle columns not found "
+                f"(have {list(candles.columns)})",
+                tg=True,
+            )
+            return []
+        highs  = candles[h_col].tolist()
+        lows   = candles[l_col].tolist()
+        closes = candles[c_col].tolist()
+    else:                                     # list of dicts (or None)
+        if not candles:
+            return []
+        def _get(d, *names):
+            for nm in names:
+                if nm in d:
+                    return d[nm]
+            raise KeyError(names)
+        highs  = [_get(c, "High", "high")  for c in candles]
+        lows   = [_get(c, "Low", "low")    for c in candles]
+        closes = [_get(c, "Close", "close") for c in candles]
+
+    n_bars = len(closes)
+    if n_bars < 2 * period + 1:
         return []
 
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
-    closes = [c["close"] for c in candles]
-
     plus_dm, minus_dm, tr = [], [], []
-    for i in range(1, len(candles)):
+    for i in range(1, n_bars):
         up_move   = highs[i] - highs[i - 1]
         down_move = lows[i - 1] - lows[i]
         plus_dm.append(up_move   if (up_move > down_move and up_move > 0) else 0.0)
@@ -145,14 +179,50 @@ def compute_adx(candles, period=ADX_PERIOD):
     return adx
 
 
+def _fetch_candles(symbol, tf):
+    """
+    Pull candles from utils, trying the call signatures your utils may expose.
+    Returns whatever utils returns (DataFrame expected), or None.
+    """
+    for attempt in (
+        lambda: utils.fetch_candles(symbol, timeframe=tf),
+        lambda: utils.fetch_candles(symbol, tf),
+        lambda: utils.fetch_candles(symbol, resolution=tf),
+        lambda: utils.fetch_candles(symbol),
+    ):
+        try:
+            return attempt()
+        except TypeError:
+            continue
+        except Exception:
+            raise
+    return None
+
+
+# Simple per-symbol cache so we don't refetch 5m candles every tick.
+_adx_cache = {}   # symbol -> {"ts": epoch_seconds, "adx": [...]}
+ADX_REFRESH_SEC = 60   # recompute ADX at most once a minute
+
+
+def _get_adx(symbol):
+    """Return the cached ADX list, refreshing at most once per ADX_REFRESH_SEC."""
+    nowt = time.time()
+    cached = _adx_cache.get(symbol)
+    if cached is not None and (nowt - cached["ts"]) < ADX_REFRESH_SEC:
+        return cached["adx"]
+
+    candles = _fetch_candles(symbol, ADX_TF)
+    adx = compute_adx(candles)
+    _adx_cache[symbol] = {"ts": nowt, "adx": adx}
+    return adx
+
+
 def adx_filter_ok(symbol):
     """
     True only if the latest 5m ADX is >= ADX_MIN AND >= the average of the
     last ADX_AVG_LEN ADX values. Both conditions must hold.
     """
-    # NOTE: adjust this call to your real utils candle interface.
-    candles = utils.fetch_candles(symbol, ADX_TF)
-    adx = compute_adx(candles)
+    adx = _get_adx(symbol)
 
     if len(adx) < ADX_AVG_LEN:
         utils.log("⏳ ADX: not enough data yet — no trade", tg=True)
@@ -168,7 +238,7 @@ def adx_filter_ok(symbol):
         utils.log(f"🚫 ADX {latest:.1f} < avg {avg:.1f} — no trade", tg=True)
         return False
 
-    utils.log(f"✅ ADX {latest:.1f} ≥ {ADX_MIN} and ≥ avg {avg:.1f}", tg=True)
+    utils.log(f"✅ ADX {latest:.1f} >= {ADX_MIN} and >= avg {avg:.1f}", tg=True)
     return True
 
 
