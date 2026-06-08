@@ -82,7 +82,7 @@ utils = TradingUtils(
     taker_fee=TAKER_FEE,
     timeframe=TIMEFRAME,
     days=DAYS,
-    telegram_token=os.getenv("testmyaglostrat"),
+    telegram_token=os.getenv("testmyaglostrategy_bot"),
     telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
     bot_name=BOT_NAME,
 )
@@ -225,20 +225,20 @@ def adx_filter_ok(symbol):
     adx = _get_adx(symbol)
 
     if len(adx) < ADX_AVG_LEN:
-        utils.log("⏳ ADX: not enough data yet — no trade", tg=True)
+        # utils.log("⏳ ADX: not enough data yet — no trade", tg=True)
         return False
 
     latest = adx[-1]
     avg = sum(adx[-ADX_AVG_LEN:]) / ADX_AVG_LEN
 
     if latest < ADX_MIN:
-        utils.log(f"🚫 ADX {latest:.1f} < {ADX_MIN} — no trade", tg=True)
+        # utils.log(f"🚫 ADX {latest:.1f} < {ADX_MIN} — no trade", tg=True)
         return False
     if latest < avg:
-        utils.log(f"🚫 ADX {latest:.1f} < avg {avg:.1f} — no trade", tg=True)
+        # utils.log(f"🚫 ADX {latest:.1f} < avg {avg:.1f} — no trade", tg=True)
         return False
 
-    utils.log(f"✅ ADX {latest:.1f} >= {ADX_MIN} and >= avg {avg:.1f}", tg=True)
+    # utils.log(f"✅ ADX {latest:.1f} >= {ADX_MIN} and >= avg {avg:.1f}", tg=True)
     return True
 
 
