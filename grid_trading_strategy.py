@@ -15,12 +15,8 @@ DESIGN (agreed):
   EXITS:
     1. TP / SL          -> per-trade
     2. TARGET-LOCK      -> daily target hit, close anything in profit
-    3. TREND-EXIT       -> ADX >= 32 (real trend) -> flatten everything
-
-  NOTE: the old noise-based "rising" trend-exit (adx_now > adx_avg) was REMOVED.
-  It fired at ADX ~19 and flushed trades without ever arming a re-anchor, which
-  fought the 30-line design. Trend-exit now fires only on a confirmed trend (>=32);
-  the wide SL is the per-trade backstop in between.
+    3. TREND-EXIT       -> ADX >= 32 (real trend) OR ADX rising (adx_now > adx_avg)
+                           -> flatten everything
 """
 
 import os
@@ -341,18 +337,26 @@ def check_regime(state, symbol, adx_now):
 
 def maybe_trend_exit(state, symbol, price, now, adx_now, adx_avg):
     """
-    Flatten EVERY open position when ADX confirms a real trend (>= 32).
-    The noise-based rising clause was removed on purpose.
+    Flatten EVERY open position when ADX confirms a real trend (>= 32)
+    OR when ADX is rising (adx_now > adx_avg).
     """
     if state["grid"] is None or not state["positions"]:
         return False
 
-    if not is_trending(adx_now):
+    if adx_now is None or adx_avg is None:
         return False
 
+    rising = adx_now > adx_avg
+    trending = is_trending(adx_now)
+
+    if not (trending or rising):
+        return False
+
+    reason_txt = (f">= {TREND_EXIT_THRESHOLD}" if trending
+                  else f"rising (avg {adx_avg:.1f})")
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
     utils.log(
-        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} >= {TREND_EXIT_THRESHOLD}) "
+        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} {reason_txt}) "
         f"— flattening all {len(state['positions'])} position(s)",
         tg=True,
     )
@@ -501,7 +505,7 @@ def run():
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
         f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
-        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD}",
+        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD} or rising",
         tg=True,
     )
 
