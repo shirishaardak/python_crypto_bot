@@ -15,7 +15,7 @@ DESIGN (agreed):
   EXITS:
     1. TP / SL          -> per-trade
     2. TARGET-LOCK      -> daily target hit, close anything in profit
-    3. TREND-EXIT       -> ADX >= 32 (real trend) OR ADX rising (adx_now > adx_avg)
+    3. TREND-EXIT       -> ADX >= 32 (real trend)
                            -> flatten everything
 """
 
@@ -60,15 +60,15 @@ GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 600
 
 ADX_TIMEFRAME = "15m"
 ADX_PERIOD = 14
-ADX_THRESHOLD = 30.0       # the calm line; below = calm, above = grid off
+ADX_THRESHOLD = 28.0       # the calm line; below = calm, above = grid off
 ADX_AVG_PERIOD = 5         # how many recent ADX values to average
 
 # ADX at/above this -> flatten EVERY open position (trend confirmed).
-TREND_EXIT_THRESHOLD = 32.0
+TREND_EXIT_THRESHOLD = 30.0
 
 # ================= DAILY TARGET =================
 
-DAILY_TARGET = 1200         # realized -> stop for the day
+DAILY_TARGET = 1000         # realized -> stop for the day
 
 # ================= SESSION RESET =================
 
@@ -337,23 +337,18 @@ def check_regime(state, symbol, adx_now):
 
 def maybe_trend_exit(state, symbol, price, now, adx_now, adx_avg):
     """
-    Flatten EVERY open position when ADX confirms a real trend (>= 32)
-    OR when ADX is rising (adx_now > adx_avg).
+    Flatten EVERY open position when ADX confirms a real trend (>= 32).
     """
     if state["grid"] is None or not state["positions"]:
         return False
 
-    if adx_now is None or adx_avg is None:
+    if adx_now is None:
         return False
 
-    rising = adx_now > adx_avg
-    trending = is_trending(adx_now)
-
-    if not (trending or rising):
+    if not is_trending(adx_now):
         return False
 
-    reason_txt = (f">= {TREND_EXIT_THRESHOLD}" if trending
-                  else f"rising (avg {adx_avg:.1f})")
+    reason_txt = f">= {TREND_EXIT_THRESHOLD}"
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
     utils.log(
         f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} {reason_txt}) "
@@ -505,7 +500,7 @@ def run():
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
         f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
-        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD} or rising",
+        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD}",
         tg=True,
     )
 

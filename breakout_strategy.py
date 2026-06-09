@@ -65,15 +65,15 @@ START_BALANCE = 10000
 TIMEFRAME = "15m"
 DAYS = 15
 
-STEP = 100          # distance from anchor to each level (upper/lower)
+STEP = 200          # distance from anchor to each level (upper/lower)
 TRAIL = 200         # trailing-stop gap (points)
 DAILY_TARGET = 600  # stop trading for the day once realized PnL hits this
 
 # ADX trend filter (5-minute)
-ADX_TF = "5m"
+ADX_TF = "15m"
 ADX_PERIOD = 14
 ADX_AVG_LEN = 5
-ADX_MIN = 30
+ADX_MIN = 25
 
 # ================= INIT =================
 
