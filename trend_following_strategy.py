@@ -155,9 +155,9 @@ def place_market_order(symbol, side, qty):
 
 # ================= STRATEGY =================
 # 1d Heikin-Ashi, long-only, paper-trading.
-#   ENTRY: HA close (current) > HA close (previous)  -> buy and hold.
-#   EXIT : HA close (current) < HA open (previous)   -> sell and hold flat.
-# Evaluated every loop using the last CLOSED bar (no new-candle gate).
+#   ENTRY: HA close (today, forming) > HA close (yesterday)  -> buy and hold.
+#   EXIT : HA close (today, forming) < HA open (yesterday)   -> sell and hold flat.
+# Evaluated every loop using TODAY's forming bar as current.
 
 def process_symbol(symbol, exec_df, state):
 
@@ -167,22 +167,22 @@ def process_symbol(symbol, exec_df, state):
     if len(df) < MIN_BARS + 2:
         return
 
-    # Build Heikin-Ashi from raw OHLC (use closed bars only; -1 still forms).
-    ha = heikin_ashi(df.iloc[:-1])
+    # Build Heikin-Ashi from raw OHLC, INCLUDING today's forming bar.
+    ha = heikin_ashi(df)
     if len(ha) < 2:
         return
 
     # save_processed_data(ha, symbol)
 
-    cur = ha.iloc[-1]    # last CLOSED HA candle
-    prev = ha.iloc[-2]   # previous HA candle
+    cur = ha.iloc[-1]    # today (forming) HA candle
+    prev = ha.iloc[-2]   # yesterday (closed) HA candle
 
     ha_close_cur = float(cur.HA_Close)
     ha_close_prev = float(prev.HA_Close)
     ha_open_prev = float(prev.HA_Open)
 
-    # Fills assumed at the just-closed raw candle's close.
-    fill_price = float(df.iloc[-2].Close)
+    # Fills assumed at today's (forming) candle close.
+    fill_price = float(df.iloc[-1].Close)
 
     pos = state["position"]
 
@@ -192,10 +192,10 @@ def process_symbol(symbol, exec_df, state):
     if pos:
 
         # Don't exit on the same candle we entered on.
-        if pos.get("entry_candle") == df.index[-2]:
+        if pos.get("entry_candle") == df.index[-1]:
             return
 
-        # EXIT rule: current HA close < previous HA open.
+        # EXIT rule: today's HA close < yesterday's HA open.
         if ha_close_cur < ha_open_prev:
 
             place_market_order(symbol, "sell", pos["qty"])
@@ -225,14 +225,14 @@ def process_symbol(symbol, exec_df, state):
             utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
 
             state["position"] = None
-            state["last_exit_candle"] = df.index[-2]
+            state["last_exit_candle"] = df.index[-1]
         return
 
     # ================= ENTRY =================
     if not pos:
 
         # Avoid same-candle reentry after an exit.
-        if state.get("last_exit_candle") == df.index[-2]:
+        if state.get("last_exit_candle") == df.index[-1]:
             return
 
         balance = state["balance"]
@@ -240,7 +240,7 @@ def process_symbol(symbol, exec_df, state):
             utils.log(f"⚠️ Balance low: {balance}", tg=True)
             return
 
-        # ENTRY rule: current HA close > previous HA close.
+        # ENTRY rule: today's HA close > yesterday's HA close.
         if ha_close_cur > ha_close_prev:
 
             place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
@@ -250,7 +250,7 @@ def process_symbol(symbol, exec_df, state):
                 "entry": fill_price,
                 "qty": DEFAULT_CONTRACTS[symbol],
                 "entry_time": now,
-                "entry_candle": df.index[-2],
+                "entry_candle": df.index[-1],
             }
 
             utils.log(
