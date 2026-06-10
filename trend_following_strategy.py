@@ -157,18 +157,14 @@ def place_market_order(symbol, side, qty):
 # 1d Heikin-Ashi, long-only, paper-trading.
 #   ENTRY: HA close (current) > HA close (previous)  -> buy and hold.
 #   EXIT : HA close (current) < HA open (previous)   -> sell and hold flat.
-# Evaluated once per newly-closed daily candle, using the last CLOSED bar.
+# Evaluated every loop using the last CLOSED bar (no new-candle gate).
 
-def process_symbol(symbol, exec_df, state, is_new_candle):
+def process_symbol(symbol, exec_df, state):
 
     df = exec_df
 
     # Need history + a forming bar.
     if len(df) < MIN_BARS + 2:
-        return
-
-    # Only act when a daily candle has just closed.
-    if not is_new_candle:
         return
 
     # Build Heikin-Ashi from raw OHLC (use closed bars only; -1 still forms).
@@ -229,14 +225,14 @@ def process_symbol(symbol, exec_df, state, is_new_candle):
             utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
 
             state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
+            state["last_exit_candle"] = df.index[-2]
         return
 
     # ================= ENTRY =================
     if not pos:
 
         # Avoid same-candle reentry after an exit.
-        if state.get("last_exit_candle") == df.index[-1]:
+        if state.get("last_exit_candle") == df.index[-2]:
             return
 
         balance = state["balance"]
@@ -345,8 +341,8 @@ def on_error(ws, error):
     utils.log(f"🌐 WS error: {error}", tg=True)
 
 
-def on_close(ws, code, reason):
-    utils.log(f"🌐 WS closed: {code} {reason}", tg=True)
+def on_close(ws, close_status_code, close_msg):
+    utils.log(f"🌐 WS closed: {close_status_code} {close_msg}", tg=True)
 
 
 def on_open(ws):
@@ -433,7 +429,6 @@ def run():
     state = {
         s: {
             "position": None,
-            "last_candle_time": None,
             "last_exit_candle": None,
             "balance": START_BALANCE,
         } for s in SYMBOLS
@@ -442,14 +437,6 @@ def run():
     utils.log("🚀 LIVE BOT STARTED (1d Heikin-Ashi)", tg=True)
 
     _seed_history()
-
-    # Mark the most recent SEEDED bar as "already seen" so the bot does NOT
-    # trade off historical data on startup.
-    with market_lock:
-        for symbol in SYMBOLS:
-            seeded = list(market[symbol]["tf"][EXEC_TF]["candles"])
-            if len(seeded) >= 2:
-                state[symbol]["last_candle_time"] = seeded[-2]["time"]
 
     threading.Thread(target=start_ws, daemon=True).start()
 
@@ -470,14 +457,7 @@ def run():
 
                 exec_df = pd.DataFrame(exec_candles).set_index("time")
 
-                latest_candle_time = exec_df.index[-2]
-                is_new_candle = (
-                    state[symbol]["last_candle_time"] != latest_candle_time
-                )
-                if is_new_candle:
-                    state[symbol]["last_candle_time"] = latest_candle_time
-
-                process_symbol(symbol, exec_df, state[symbol], is_new_candle)
+                process_symbol(symbol, exec_df, state[symbol])
 
             time.sleep(0.2)
 

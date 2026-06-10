@@ -4,18 +4,18 @@ price_grid_strategy.py  (paper mode)
 A mean-reversion price grid.
 
 DESIGN (agreed):
-  RE-ANCHOR (rebuild levels) happens ONLY around the 30 line:
+  RE-ANCHOR (rebuild levels) happens ONLY around the calm line (28):
     1. Every day at 02:30 IST          -> SESSION-ANCHOR
-    2. ADX goes ABOVE 30 then back BELOW 30 -> CALM-RETURN (re-center at new price)
+    2. ADX goes ABOVE 28 then back BELOW 28 -> CALM-RETURN (re-center at new price)
 
   ENTRY (both required):
-    ADX < 30            (calm)
+    ADX < 28            (calm)
     ADX < its average   (falling)
 
   EXITS:
     1. TP / SL          -> per-trade
     2. TARGET-LOCK      -> daily target hit, close anything in profit
-    3. TREND-EXIT       -> ADX >= 32 (real trend)
+    3. TREND-EXIT       -> ADX > 28 AND ADX > its average (above calm line + rising)
                            -> flatten everything
 """
 
@@ -50,10 +50,10 @@ START_BALANCE = 10000
 
 # ================= GRID CONFIG =================
 
-GRID_STEP = 200                          # spacing between levels (price points)
+GRID_STEP = 300                          # spacing between levels (price points)
 GRID_LEVELS = 3                          # levels above and below the anchor
-GRID_TP = GRID_STEP * 1.5                # take profit per trade = 300
-GRID_SL = GRID_STEP * 3                  # stop loss per trade   = 600 (wide backstop)
+GRID_TP = GRID_STEP * 1               # take profit per trade = 300
+GRID_SL = GRID_STEP * 10              # stop loss per trade   = 600 (wide backstop)
 GRID_BOUNDARY = GRID_STEP * GRID_LEVELS  # outer risk boundary   = 600
 
 # ================= ADX ENTRY FILTER =================
@@ -63,8 +63,9 @@ ADX_PERIOD = 14
 ADX_THRESHOLD = 28.0       # the calm line; below = calm, above = grid off
 ADX_AVG_PERIOD = 5         # how many recent ADX values to average
 
-# ADX at/above this -> flatten EVERY open position (trend confirmed).
-TREND_EXIT_THRESHOLD = 30.0
+# TREND-EXIT now uses the calm line (28) + rising condition, so no separate
+# threshold is needed. Flatten EVERY open position when:
+#     ADX > ADX_THRESHOLD  AND  ADX > ADX_avg
 
 # ================= DAILY TARGET =================
 
@@ -205,8 +206,11 @@ def is_calm(adx_now):
     return adx_now is not None and adx_now < ADX_THRESHOLD
 
 
-def is_trending(adx_now):
-    return adx_now is not None and adx_now >= TREND_EXIT_THRESHOLD
+def is_trending(adx_now, adx_avg):
+    """Real trend = above the calm line AND rising."""
+    if adx_now is None or adx_avg is None:
+        return False
+    return (adx_now > ADX_THRESHOLD) and (adx_now > adx_avg)
 
 
 def adx_allows_entry(adx_now, adx_avg):
@@ -298,7 +302,7 @@ def maybe_reanchor(state, symbol, price, now, adx_now):
     """
     Rebuild the grid when:
       1. new day / first run (SESSION-ANCHOR), or
-      2. ADX dropped back below 30 after having been above it (CALM-RETURN).
+      2. ADX dropped back below 28 after having been above it (CALM-RETURN).
     Only while calm right now.
     """
     session_id = current_session_id()
@@ -337,22 +341,20 @@ def check_regime(state, symbol, adx_now):
 
 def maybe_trend_exit(state, symbol, price, now, adx_now, adx_avg):
     """
-    Flatten EVERY open position when ADX confirms a real trend (>= 32).
+    Flatten EVERY open position when ADX confirms a real trend:
+        ADX > 28 AND ADX > its average (above calm line + rising).
     """
     if state["grid"] is None or not state["positions"]:
         return False
 
-    if adx_now is None:
+    if not is_trending(adx_now, adx_avg):
         return False
 
-    if not is_trending(adx_now):
-        return False
-
-    reason_txt = f">= {TREND_EXIT_THRESHOLD}"
     adx_txt = f"{adx_now:.1f}" if adx_now is not None else "n/a"
+    avg_txt = f"{adx_avg:.1f}" if adx_avg is not None else "n/a"
     utils.log(
-        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} {reason_txt}) "
-        f"— flattening all {len(state['positions'])} position(s)",
+        f"🚨 {symbol} TREND-EXIT (ADX15m {adx_txt} > {ADX_THRESHOLD} "
+        f"and > avg {avg_txt}) — flattening all {len(state['positions'])} position(s)",
         tg=True,
     )
     for posn in list(state["positions"]):
@@ -500,7 +502,8 @@ def run():
     utils.log(
         f"⚙️ Grid: levels={GRID_LEVELS} step={GRID_STEP} "
         f"tp={GRID_TP} sl={GRID_SL} boundary={GRID_BOUNDARY} "
-        f"| daily_target={DAILY_TARGET} | trend_exit>={TREND_EXIT_THRESHOLD}",
+        f"| daily_target={DAILY_TARGET} "
+        f"| trend_exit: ADX > {ADX_THRESHOLD} AND ADX > avg",
         tg=True,
     )
 

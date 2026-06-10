@@ -1,8 +1,8 @@
 """
 breakout_strategy.py  (paper mode)
 
-A price-breakout bot with a trailing stop, a daily profit cap, and a 5m ADX
-trend filter.
+A price-breakout bot with a trailing stop, a take-profit, a daily profit cap,
+and a 5m ADX trend filter.
 
 THE WHOLE LOGIC
 ---------------
@@ -23,7 +23,9 @@ ENTRY (only one position at a time):
     Price breaks ABOVE upper  -> BUY  (long)   [if ADX still OK]
     Price breaks BELOW lower   -> SELL (short)  [if ADX still OK]
 
-EXIT (trailing stop only):
+EXIT (take-profit OR trailing stop):
+    TP   : LONG  exits when price >= entry + TP.
+           SHORT exits when price <= entry - TP.
     LONG : SL starts at the lower level. As price makes new highs,
            SL trails 200 points below the highest price reached.
            Exit when price falls back to SL.
@@ -66,14 +68,15 @@ TIMEFRAME = "15m"
 DAYS = 15
 
 STEP = 200          # distance from anchor to each level (upper/lower)
-TRAIL = 200         # trailing-stop gap (points)
+TRAIL = 300         # trailing-stop gap (points)
+TP = 400            # take-profit distance from entry (points)
 DAILY_TARGET = 600  # stop trading for the day once realized PnL hits this
 
 # ADX trend filter (5-minute)
 ADX_TF = "15m"
 ADX_PERIOD = 14
 ADX_AVG_LEN = 5
-ADX_MIN = 25
+ADX_MIN = 30
 
 # ================= INIT =================
 
@@ -295,10 +298,17 @@ def _close_position(state, symbol, exit_price, now, reason):
 
 
 def _open_position(state, symbol, side, price, sl_price, now):
+    # Take-profit target set relative to entry.
+    if side == "long":
+        tp_price = price + TP
+    else:
+        tp_price = price - TP
+
     state["position"] = {
         "side": side,
         "entry": price,
         "sl_price": sl_price,
+        "tp_price": tp_price,      # take-profit target
         "extreme": price,          # highest (long) / lowest (short) seen so far
         "qty": DEFAULT_CONTRACTS[symbol],
         "entry_time": now,
@@ -306,7 +316,7 @@ def _open_position(state, symbol, side, price, sl_price, now):
     emoji = "🟢" if side == "long" else "🔴"
     utils.log(
         f"{emoji} {symbol} {side.upper()} @ {price} | SL→ {sl_price} "
-        f"(trail {TRAIL})",
+        f"(trail {TRAIL}) | TP→ {tp_price}",
         tg=True,
     )
 
@@ -325,24 +335,34 @@ def process_symbol(symbol, price, state):
 
     posn = state["position"]
 
-    # ---------- MANAGE OPEN POSITION (trailing stop) ----------
+    # ---------- MANAGE OPEN POSITION (take-profit + trailing stop) ----------
     if posn is not None:
         if posn["side"] == "long":
-            # Trail the stop up as new highs print.
-            if price > posn["extreme"]:
-                posn["extreme"] = price
-                posn["sl_price"] = max(posn["sl_price"], price - TRAIL)
-            if price <= posn["sl_price"]:
-                _close_position(state, symbol, price, now, "TSL")
+            # Take-profit first.
+            if price >= posn["tp_price"]:
+                _close_position(state, symbol, price, now, "TP")
                 state["anchor"] = None   # re-arm waits for ADX next tick
+            else:
+                # Trail the stop up as new highs print.
+                if price > posn["extreme"]:
+                    posn["extreme"] = price
+                    posn["sl_price"] = max(posn["sl_price"], price - TRAIL)
+                if price <= posn["sl_price"]:
+                    _close_position(state, symbol, price, now, "TSL")
+                    state["anchor"] = None   # re-arm waits for ADX next tick
         else:
-            # Trail the stop down as new lows print.
-            if price < posn["extreme"]:
-                posn["extreme"] = price
-                posn["sl_price"] = min(posn["sl_price"], price + TRAIL)
-            if price >= posn["sl_price"]:
-                _close_position(state, symbol, price, now, "TSL")
+            # Take-profit first.
+            if price <= posn["tp_price"]:
+                _close_position(state, symbol, price, now, "TP")
                 state["anchor"] = None   # re-arm waits for ADX next tick
+            else:
+                # Trail the stop down as new lows print.
+                if price < posn["extreme"]:
+                    posn["extreme"] = price
+                    posn["sl_price"] = min(posn["sl_price"], price + TRAIL)
+                if price >= posn["sl_price"]:
+                    _close_position(state, symbol, price, now, "TSL")
+                    state["anchor"] = None   # re-arm waits for ADX next tick
 
         # After managing, flag if the day's target is now reached.
         if state["daily_pnl"] >= DAILY_TARGET and not state["capped"]:
@@ -408,7 +428,7 @@ def run():
     utils.log("🚀 BREAKOUT BOT STARTED (PAPER MODE)", tg=True)
     utils.log(
         f"⚙️ Breakout: buy > anchor+{STEP}, sell < anchor-{STEP} "
-        f"| trail {TRAIL} | daily cap {DAILY_TARGET} "
+        f"| trail {TRAIL} | TP {TP} | daily cap {DAILY_TARGET} "
         f"| ADX{ADX_PERIOD}@{ADX_TF} >= {ADX_MIN} & >= avg{ADX_AVG_LEN}",
         tg=True,
     )
