@@ -153,11 +153,78 @@ def place_market_order(symbol, side, qty):
     return {"success": True}
 
 
+# ================= TRADE BOOKKEEPING =================
+
+def _close_position(symbol, pos, fill_price, state, now):
+    """Close an open long or short, book PnL, log, and clear the position."""
+
+    close_side = "sell" if pos["side"] == "long" else "buy"
+    place_market_order(symbol, close_side, pos["qty"])
+
+    # Long profits when price rises; short profits when price falls.
+    if pos["side"] == "long":
+        gross = (fill_price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
+    else:  # short
+        gross = (pos["entry"] - fill_price) * CONTRACT_SIZE[symbol] * pos["qty"]
+
+    entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
+    exit_fee = utils.commission(fill_price, pos["qty"], symbol)
+    total_fee = entry_fee + exit_fee
+
+    net = gross - total_fee
+    state["balance"] += net
+
+    utils.save_trade({
+        "symbol": symbol,
+        "side": pos["side"],
+        "entry_price": pos["entry"],
+        "exit_price": fill_price,
+        "qty": pos["qty"],
+        "net_pnl": round(net, 6),
+        "entry_time": pos["entry_time"],
+        "exit_time": now
+    })
+
+    emoji = "🟢" if net > 0 else "🔴"
+    utils.log(f"{emoji} {symbol} EXIT {pos['side'].upper()} @ {fill_price} | PNL: {round(net, 6)}", tg=True)
+    utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
+
+    state["position"] = None
+    return net
+
+
+def _open_position(symbol, side, fill_price, state, now, candle_id):
+    """Open a long or short position."""
+
+    order_side = "buy" if side == "long" else "sell"
+    place_market_order(symbol, order_side, DEFAULT_CONTRACTS[symbol])
+
+    state["position"] = {
+        "side": side,
+        "entry": fill_price,
+        "qty": DEFAULT_CONTRACTS[symbol],
+        "entry_time": now,
+        "entry_candle": candle_id,
+    }
+
+    arrow = "🟢" if side == "long" else "🔻"
+    utils.log(
+        f"{arrow} {symbol} {side.upper()} (HA) @ {round(fill_price, 2)}",
+        tg=True
+    )
+
+
 # ================= STRATEGY =================
-# 1d Heikin-Ashi, long-only, paper-trading.
-#   ENTRY: HA close (today, forming) > HA close (yesterday)  -> buy and hold.
-#   EXIT : HA close (today, forming) < HA open (yesterday)   -> sell and hold flat.
-# Evaluated every loop using TODAY's forming bar as current.
+# 1d Heikin-Ashi, LONG + SHORT, paper-trading.
+# Current = today's forming bar, Previous = yesterday's closed bar.
+#
+#   LONG  entry : today HA close > yesterday HA close
+#   LONG  exit  : today HA close < yesterday HA open
+#   SHORT entry : today HA close < yesterday HA close
+#   SHORT exit  : today HA close > yesterday HA open
+#
+# Flip behavior: if an opposite ENTRY signal fires while in a position,
+# close current and immediately open the opposite side (same loop).
 
 def process_symbol(symbol, exec_df, state):
 
@@ -184,55 +251,58 @@ def process_symbol(symbol, exec_df, state):
     # Fills assumed at today's (forming) candle close.
     fill_price = float(df.iloc[-1].Close)
 
-    pos = state["position"]
-
+    candle_id = df.index[-1]
     now = datetime.now()
 
-    # ================= EXIT =================
+    pos = state["position"]
+
+    long_entry_sig = ha_close_cur > ha_close_prev
+    short_entry_sig = ha_close_cur < ha_close_prev
+    long_exit_sig = ha_close_cur < ha_open_prev
+    short_exit_sig = ha_close_cur > ha_open_prev
+
+    # ================= MANAGE OPEN POSITION =================
     if pos:
 
-        # Don't exit on the same candle we entered on.
-        if pos.get("entry_candle") == df.index[-1]:
+        # Don't act on the same candle we entered on.
+        if pos.get("entry_candle") == candle_id:
             return
 
-        # EXIT rule: today's HA close < yesterday's HA open.
-        if ha_close_cur < ha_open_prev:
+        if pos["side"] == "long":
+            # Flip to short if a short entry signal fires.
+            if short_entry_sig:
+                _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
+                if short_exit_sig:
+                    return  # would immediately exit a fresh short; stay flat
+                _open_position(symbol, "short", fill_price, state, now, candle_id)
+                return
+            # Otherwise plain long exit.
+            if long_exit_sig:
+                _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
+            return
 
-            place_market_order(symbol, "sell", pos["qty"])
+        else:  # short position
+            # Flip to long if a long entry signal fires.
+            if long_entry_sig:
+                _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
+                if long_exit_sig:
+                    return  # would immediately exit a fresh long; stay flat
+                _open_position(symbol, "long", fill_price, state, now, candle_id)
+                return
+            # Otherwise plain short exit.
+            if short_exit_sig:
+                _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
+            return
 
-            pnl = (fill_price - pos["entry"]) * CONTRACT_SIZE[symbol] * pos["qty"]
-
-            entry_fee = utils.commission(pos["entry"], pos["qty"], symbol)
-            exit_fee = utils.commission(fill_price, pos["qty"], symbol)
-            total_fee = entry_fee + exit_fee
-
-            net = pnl - total_fee
-            state["balance"] += net
-
-            utils.save_trade({
-                "symbol": symbol,
-                "side": pos["side"],
-                "entry_price": pos["entry"],
-                "exit_price": fill_price,
-                "qty": pos["qty"],
-                "net_pnl": round(net, 6),
-                "entry_time": pos["entry_time"],
-                "exit_time": now
-            })
-
-            emoji = "🟢" if net > 0 else "🔴"
-            utils.log(f"{emoji} {symbol} EXIT @ {fill_price} | PNL: {round(net, 6)}", tg=True)
-            utils.log(f"💰 Balance: {round(state['balance'], 2)}", tg=True)
-
-            state["position"] = None
-            state["last_exit_candle"] = df.index[-1]
-        return
-
-    # ================= ENTRY =================
+    # ================= FLAT -> LOOK FOR ENTRY =================
     if not pos:
 
         # Avoid same-candle reentry after an exit.
-        if state.get("last_exit_candle") == df.index[-1]:
+        if state.get("last_exit_candle") == candle_id:
             return
 
         balance = state["balance"]
@@ -240,24 +310,10 @@ def process_symbol(symbol, exec_df, state):
             utils.log(f"⚠️ Balance low: {balance}", tg=True)
             return
 
-        # ENTRY rule: today's HA close > yesterday's HA close.
-        if ha_close_cur > ha_close_prev:
-
-            place_market_order(symbol, "buy", DEFAULT_CONTRACTS[symbol])
-
-            state["position"] = {
-                "side": "long",
-                "entry": fill_price,
-                "qty": DEFAULT_CONTRACTS[symbol],
-                "entry_time": now,
-                "entry_candle": df.index[-1],
-            }
-
-            utils.log(
-                f"🟢 {symbol} LONG (HA) @ {round(fill_price, 2)} | "
-                f"HA_close {round(ha_close_cur, 2)} > prev {round(ha_close_prev, 2)}",
-                tg=True
-            )
+        if long_entry_sig:
+            _open_position(symbol, "long", fill_price, state, now, candle_id)
+        elif short_entry_sig:
+            _open_position(symbol, "short", fill_price, state, now, candle_id)
         return
 
 
@@ -434,7 +490,7 @@ def run():
         } for s in SYMBOLS
     }
 
-    utils.log("🚀 LIVE BOT STARTED (1d Heikin-Ashi)", tg=True)
+    utils.log("🚀 LIVE BOT STARTED (1d Heikin-Ashi, LONG+SHORT)", tg=True)
 
     _seed_history()
 
