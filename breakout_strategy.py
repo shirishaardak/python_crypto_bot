@@ -68,7 +68,7 @@ TIMEFRAME = "15m"
 DAYS = 15
 
 STEP = 200          # distance from anchor to each level (upper/lower)
-TRAIL = 300         # trailing-stop gap (points)
+TRAIL = 200         # trailing-stop gap (points)
 TP = 400            # take-profit distance from entry (points)
 DAILY_TARGET = 600  # stop trading for the day once realized PnL hits this
 
