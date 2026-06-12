@@ -1,18 +1,24 @@
 """
 breakout_strategy.py  (paper mode)
 
-A price-breakout bot with a trailing stop, a take-profit, a daily profit cap,
-and a 5m ADX trend filter.
+A price-breakout bot with a trailing stop, a risk-based take-profit (3R),
+a daily profit cap, a 15m ADX trend filter, and a 15m EMA21 direction filter.
 
 THE WHOLE LOGIC
 ---------------
-ADX FILTER (5m, gates everything):
-    Compute ADX (Wilder, period 14) on 5-minute candles.
+ADX FILTER (15m, gates everything):
+    Compute ADX (Wilder, period 14) on 15-minute candles.
     A trade is allowed ONLY when:
-        latest ADX >= 30  AND  latest ADX >= average of last 5 ADX values.
+        latest ADX >= 30
+        AND  latest ADX >= average of last 5 ADX values
+        AND  that 5-value average is RISING (current avg > previous avg).
     This filter gates BOTH:
         - setting the anchor (no levels are placed until ADX qualifies), and
         - the breakout entry itself (re-checked at the moment of breakout).
+
+EMA21 FILTER (15m, direction):
+    LONG  entries allowed only when price > EMA21.
+    SHORT entries allowed only when price < EMA21.
 
 ANCHOR:
     Set only when the ADX filter passes.
@@ -20,17 +26,18 @@ ANCHOR:
     LOWER level  = anchor - STEP   (e.g. 1000 -> 900)
 
 ENTRY (only one position at a time):
-    Price breaks ABOVE upper  -> BUY  (long)   [if ADX still OK]
-    Price breaks BELOW lower   -> SELL (short)  [if ADX still OK]
+    Price breaks ABOVE upper  -> BUY  (long)   [if ADX OK and price > EMA21]
+    Price breaks BELOW lower   -> SELL (short)  [if ADX OK and price < EMA21]
 
 EXIT (take-profit OR trailing stop):
-    TP   : LONG  exits when price >= entry + TP.
-           SHORT exits when price <= entry - TP.
+    TP   : Risk-based. Risk R = STEP (entry to the initial opposite-level SL).
+           LONG  exits when price >= entry + RR_MULT * R.
+           SHORT exits when price <= entry - RR_MULT * R.
     LONG : SL starts at the lower level. As price makes new highs,
-           SL trails 200 points below the highest price reached.
+           SL trails TRAIL points below the highest price reached.
            Exit when price falls back to SL.
     SHORT: SL starts at the upper level. As price makes new lows,
-           SL trails 200 points above the lowest price reached.
+           SL trails TRAIL points above the lowest price reached.
            Exit when price rises back to SL.
 
 DAILY CAP:
@@ -67,16 +74,20 @@ START_BALANCE = 10000
 TIMEFRAME = "15m"
 DAYS = 15
 
-STEP = 200          # distance from anchor to each level (upper/lower)
+STEP = 200          # distance from anchor to each level (upper/lower) = risk R
 TRAIL = 200         # trailing-stop gap (points)
-TP = 400            # take-profit distance from entry (points)
+RR_MULT = 3         # take-profit = RR_MULT * risk (risk = STEP) -> 3R
 DAILY_TARGET = 600  # stop trading for the day once realized PnL hits this
 
-# ADX trend filter (5-minute)
+# ADX trend filter (15-minute)
 ADX_TF = "15m"
 ADX_PERIOD = 14
 ADX_AVG_LEN = 5
 ADX_MIN = 30
+
+# EMA direction filter (15-minute)
+EMA_TF = "15m"
+EMA_PERIOD = 21
 
 # ================= INIT =================
 
@@ -91,7 +102,7 @@ utils = TradingUtils(
 )
 
 
-# ================= ADX (Wilder, 5m) =================
+# ================= ADX (Wilder, 15m) =================
 
 def compute_adx(candles, period=ADX_PERIOD):
     """
@@ -182,6 +193,48 @@ def compute_adx(candles, period=ADX_PERIOD):
     return adx
 
 
+# ================= EMA (15m) =================
+
+def compute_ema(candles, period=EMA_PERIOD):
+    """
+    Standard EMA on close prices.
+    Accepts a pandas DataFrame (Close/close) or list of dicts.
+    Returns the latest EMA value, or None if not enough data.
+    """
+    # Extract closes.
+    if hasattr(candles, "columns"):           # pandas DataFrame
+        if candles.empty:
+            return None
+        c_col = None
+        for nm in ("Close", "close"):
+            if nm in candles.columns:
+                c_col = nm
+                break
+        if c_col is None:
+            return None
+        closes = candles[c_col].tolist()
+    else:                                     # list of dicts (or None)
+        if not candles:
+            return None
+        closes = []
+        for c in candles:
+            if "Close" in c:
+                closes.append(c["Close"])
+            elif "close" in c:
+                closes.append(c["close"])
+            else:
+                return None
+
+    if len(closes) < period:
+        return None
+
+    k = 2.0 / (period + 1)
+    ema = sum(closes[:period]) / period      # seed with SMA
+    for price in closes[period:]:
+        ema = price * k + ema * (1 - k)
+    return ema
+
+
 def _fetch_candles(symbol, tf):
     """
     Pull candles from utils, trying the call signatures your utils may expose.
@@ -202,9 +255,11 @@ def _fetch_candles(symbol, tf):
     return None
 
 
-# Simple per-symbol cache so we don't refetch 5m candles every tick.
+# Simple per-symbol cache so we don't refetch candles every tick.
 _adx_cache = {}   # symbol -> {"ts": epoch_seconds, "adx": [...]}
+_ema_cache = {}   # symbol -> {"ts": epoch_seconds, "ema": float|None}
 ADX_REFRESH_SEC = 60   # recompute ADX at most once a minute
+EMA_REFRESH_SEC = 60   # recompute EMA at most once a minute
 
 
 def _get_adx(symbol):
@@ -220,29 +275,68 @@ def _get_adx(symbol):
     return adx
 
 
+def _get_ema(symbol):
+    """Return the cached EMA21 value, refreshing at most once per EMA_REFRESH_SEC."""
+    nowt = time.time()
+    cached = _ema_cache.get(symbol)
+    if cached is not None and (nowt - cached["ts"]) < EMA_REFRESH_SEC:
+        return cached["ema"]
+
+    candles = _fetch_candles(symbol, EMA_TF)
+    ema = compute_ema(candles)
+    _ema_cache[symbol] = {"ts": nowt, "ema": ema}
+    return ema
+
+
 def adx_filter_ok(symbol):
     """
-    True only if the latest 5m ADX is >= ADX_MIN AND >= the average of the
-    last ADX_AVG_LEN ADX values. Both conditions must hold.
+    True only if:
+        latest ADX >= ADX_MIN
+        AND latest ADX >= average of last ADX_AVG_LEN values
+        AND that average is RISING (current avg > previous avg).
+    All conditions must hold.
     """
     adx = _get_adx(symbol)
 
-    if len(adx) < ADX_AVG_LEN:
+    # Need one extra bar to compare current vs previous average.
+    if len(adx) < ADX_AVG_LEN + 1:
         # utils.log("⏳ ADX: not enough data yet — no trade", tg=True)
         return False
 
     latest = adx[-1]
-    avg = sum(adx[-ADX_AVG_LEN:]) / ADX_AVG_LEN
+    avg_now  = sum(adx[-ADX_AVG_LEN:]) / ADX_AVG_LEN
+    avg_prev = sum(adx[-ADX_AVG_LEN - 1:-1]) / ADX_AVG_LEN
 
     if latest < ADX_MIN:
         # utils.log(f"🚫 ADX {latest:.1f} < {ADX_MIN} — no trade", tg=True)
         return False
-    if latest < avg:
-        # utils.log(f"🚫 ADX {latest:.1f} < avg {avg:.1f} — no trade", tg=True)
+    if latest < avg_now:
+        # utils.log(f"🚫 ADX {latest:.1f} < avg {avg_now:.1f} — no trade", tg=True)
+        return False
+    if avg_now <= avg_prev:
+        # utils.log(f"🚫 ADX avg not rising ({avg_now:.1f} <= {avg_prev:.1f})", tg=True)
         return False
 
-    # utils.log(f"✅ ADX {latest:.1f} >= {ADX_MIN} and >= avg {avg:.1f}", tg=True)
+    # utils.log(f"✅ ADX {latest:.1f} OK, avg rising {avg_prev:.1f}->{avg_now:.1f}", tg=True)
     return True
+
+
+def ema_allows(symbol, side, price):
+    """
+    Direction filter:
+        long  allowed only if price > EMA21
+        short allowed only if price < EMA21
+    If EMA can't be computed yet, block the trade (be conservative).
+    """
+    ema = _get_ema(symbol)
+    if ema is None:
+        # utils.log("⏳ EMA21: not enough data yet — no trade", tg=True)
+        return False
+
+    if side == "long":
+        return price > ema
+    else:
+        return price < ema
 
 
 # ================= ANCHOR =================
@@ -298,17 +392,19 @@ def _close_position(state, symbol, exit_price, now, reason):
 
 
 def _open_position(state, symbol, side, price, sl_price, now):
-    # Take-profit target set relative to entry.
+    # Risk-based take-profit: R = distance from entry to initial SL.
+    risk = abs(price - sl_price)
     if side == "long":
-        tp_price = price + TP
+        tp_price = price + RR_MULT * risk
     else:
-        tp_price = price - TP
+        tp_price = price - RR_MULT * risk
 
     state["position"] = {
         "side": side,
         "entry": price,
         "sl_price": sl_price,
-        "tp_price": tp_price,      # take-profit target
+        "tp_price": tp_price,      # 3R take-profit target
+        "risk": risk,
         "extreme": price,          # highest (long) / lowest (short) seen so far
         "qty": DEFAULT_CONTRACTS[symbol],
         "entry_time": now,
@@ -316,7 +412,8 @@ def _open_position(state, symbol, side, price, sl_price, now):
     emoji = "🟢" if side == "long" else "🔴"
     utils.log(
         f"{emoji} {symbol} {side.upper()} @ {price} | SL→ {sl_price} "
-        f"(trail {TRAIL}) | TP→ {tp_price}",
+        f"(trail {TRAIL}) | R={round(risk,1)} | TP→ {round(tp_price,1)} "
+        f"({RR_MULT}R)",
         tg=True,
     )
 
@@ -397,13 +494,13 @@ def process_symbol(symbol, price, state):
             set_anchor(state, price, "START/RE-ARM")
         return   # nothing to break out of yet this tick
 
-    # ---------- BREAKOUT ENTRY (ADX re-checked) ----------
+    # ---------- BREAKOUT ENTRY (ADX + EMA21 re-checked) ----------
     if price > state["upper"]:
-        if adx_filter_ok(symbol):
+        if adx_filter_ok(symbol) and ema_allows(symbol, "long", price):
             # Buy breakout: initial SL at the lower level.
             _open_position(state, symbol, "long", price, state["lower"], now)
     elif price < state["lower"]:
-        if adx_filter_ok(symbol):
+        if adx_filter_ok(symbol) and ema_allows(symbol, "short", price):
             # Sell breakout: initial SL at the upper level.
             _open_position(state, symbol, "short", price, state["upper"], now)
 
@@ -428,8 +525,9 @@ def run():
     utils.log("🚀 BREAKOUT BOT STARTED (PAPER MODE)", tg=True)
     utils.log(
         f"⚙️ Breakout: buy > anchor+{STEP}, sell < anchor-{STEP} "
-        f"| trail {TRAIL} | TP {TP} | daily cap {DAILY_TARGET} "
-        f"| ADX{ADX_PERIOD}@{ADX_TF} >= {ADX_MIN} & >= avg{ADX_AVG_LEN}",
+        f"| trail {TRAIL} | TP {RR_MULT}R | daily cap {DAILY_TARGET} "
+        f"| ADX{ADX_PERIOD}@{ADX_TF} >= {ADX_MIN} & >= avg{ADX_AVG_LEN} (rising) "
+        f"| EMA{EMA_PERIOD}@{EMA_TF} direction",
         tg=True,
     )
 
