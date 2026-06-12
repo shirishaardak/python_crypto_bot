@@ -1,7 +1,7 @@
 """
 breakout_strategy.py  (paper mode)
 
-A price-breakout bot with a trailing stop, a risk-based take-profit (3R),
+A price-breakout bot with a delayed trailing stop, a risk-based take-profit (3R),
 a daily profit cap, a 15m ADX trend filter, and a 15m EMA21 direction filter.
 
 THE WHOLE LOGIC
@@ -33,12 +33,14 @@ EXIT (take-profit OR trailing stop):
     TP   : Risk-based. Risk R = STEP (entry to the initial opposite-level SL).
            LONG  exits when price >= entry + RR_MULT * R.
            SHORT exits when price <= entry - RR_MULT * R.
-    LONG : SL starts at the lower level. As price makes new highs,
-           SL trails TRAIL points below the highest price reached.
-           Exit when price falls back to SL.
-    SHORT: SL starts at the upper level. As price makes new lows,
-           SL trails TRAIL points above the lowest price reached.
-           Exit when price rises back to SL.
+    TRAILING STOP (delayed activation):
+        The trail does NOT engage at entry. It stays at the wide initial SL
+        (the opposite breakout level) until price is at least TRAIL_ACTIVATE
+        points in profit. Only then does the trail begin, locking the SL to
+        TRAIL points behind the best price reached (extreme). This prevents
+        normal noise from stopping the trade out immediately after entry.
+        LONG : once active, SL = highest_high - TRAIL (ratchets up only).
+        SHORT: once active, SL = lowest_low  + TRAIL (ratchets down only).
 
 DAILY CAP:
     Once realized PnL for the day reaches DAILY_TARGET, stop trading for the
@@ -74,10 +76,11 @@ START_BALANCE = 10000
 TIMEFRAME = "15m"
 DAYS = 15
 
-STEP = 200          # distance from anchor to each level (upper/lower) = risk R
-TRAIL = 200         # trailing-stop gap (points)
-RR_MULT = 3         # take-profit = RR_MULT * risk (risk = STEP) -> 3R
-DAILY_TARGET = 600  # stop trading for the day once realized PnL hits this
+STEP = 200           # distance from anchor to each level (upper/lower) = risk R
+TRAIL = 200          # trailing-stop gap (points) once the trail is active
+TRAIL_ACTIVATE = 200 # only start trailing once price is this far in profit
+RR_MULT = 3          # take-profit = RR_MULT * risk (risk = STEP) -> 3R
+DAILY_TARGET = 600   # stop trading for the day once realized PnL hits this
 
 # ADX trend filter (15-minute)
 ADX_TF = "15m"
@@ -406,14 +409,15 @@ def _open_position(state, symbol, side, price, sl_price, now):
         "tp_price": tp_price,      # 3R take-profit target
         "risk": risk,
         "extreme": price,          # highest (long) / lowest (short) seen so far
+        "trailing": False,         # trail not active until profit threshold hit
         "qty": DEFAULT_CONTRACTS[symbol],
         "entry_time": now,
     }
     emoji = "🟢" if side == "long" else "🔴"
     utils.log(
         f"{emoji} {symbol} {side.upper()} @ {price} | SL→ {sl_price} "
-        f"(trail {TRAIL}) | R={round(risk,1)} | TP→ {round(tp_price,1)} "
-        f"({RR_MULT}R)",
+        f"(trail {TRAIL}, activates +{TRAIL_ACTIVATE}) | R={round(risk,1)} "
+        f"| TP→ {round(tp_price,1)} ({RR_MULT}R)",
         tg=True,
     )
 
@@ -432,7 +436,7 @@ def process_symbol(symbol, price, state):
 
     posn = state["position"]
 
-    # ---------- MANAGE OPEN POSITION (take-profit + trailing stop) ----------
+    # ---------- MANAGE OPEN POSITION (take-profit + delayed trailing stop) ----
     if posn is not None:
         if posn["side"] == "long":
             # Take-profit first.
@@ -440,10 +444,16 @@ def process_symbol(symbol, price, state):
                 _close_position(state, symbol, price, now, "TP")
                 state["anchor"] = None   # re-arm waits for ADX next tick
             else:
-                # Trail the stop up as new highs print.
+                # Track the high.
                 if price > posn["extreme"]:
                     posn["extreme"] = price
-                    posn["sl_price"] = max(posn["sl_price"], price - TRAIL)
+                # Activate the trail only once far enough in profit.
+                if not posn["trailing"] and price >= posn["entry"] + TRAIL_ACTIVATE:
+                    posn["trailing"] = True
+                    utils.log(f"🔓 {symbol} trail activated", tg=True)
+                # Once active, ratchet SL up behind the best price (never down).
+                if posn["trailing"]:
+                    posn["sl_price"] = max(posn["sl_price"], posn["extreme"] - TRAIL)
                 if price <= posn["sl_price"]:
                     _close_position(state, symbol, price, now, "TSL")
                     state["anchor"] = None   # re-arm waits for ADX next tick
@@ -453,10 +463,16 @@ def process_symbol(symbol, price, state):
                 _close_position(state, symbol, price, now, "TP")
                 state["anchor"] = None   # re-arm waits for ADX next tick
             else:
-                # Trail the stop down as new lows print.
+                # Track the low.
                 if price < posn["extreme"]:
                     posn["extreme"] = price
-                    posn["sl_price"] = min(posn["sl_price"], price + TRAIL)
+                # Activate the trail only once far enough in profit.
+                if not posn["trailing"] and price <= posn["entry"] - TRAIL_ACTIVATE:
+                    posn["trailing"] = True
+                    utils.log(f"🔓 {symbol} trail activated", tg=True)
+                # Once active, ratchet SL down behind the best price (never up).
+                if posn["trailing"]:
+                    posn["sl_price"] = min(posn["sl_price"], posn["extreme"] + TRAIL)
                 if price >= posn["sl_price"]:
                     _close_position(state, symbol, price, now, "TSL")
                     state["anchor"] = None   # re-arm waits for ADX next tick
@@ -525,7 +541,8 @@ def run():
     utils.log("🚀 BREAKOUT BOT STARTED (PAPER MODE)", tg=True)
     utils.log(
         f"⚙️ Breakout: buy > anchor+{STEP}, sell < anchor-{STEP} "
-        f"| trail {TRAIL} | TP {RR_MULT}R | daily cap {DAILY_TARGET} "
+        f"| trail {TRAIL} (act +{TRAIL_ACTIVATE}) | TP {RR_MULT}R "
+        f"| daily cap {DAILY_TARGET} "
         f"| ADX{ADX_PERIOD}@{ADX_TF} >= {ADX_MIN} & >= avg{ADX_AVG_LEN} (rising) "
         f"| EMA{EMA_PERIOD}@{EMA_TF} direction",
         tg=True,
