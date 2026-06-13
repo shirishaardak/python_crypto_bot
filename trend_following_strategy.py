@@ -25,7 +25,7 @@ BOT_NAME = "trend_following_strategy"
 SYMBOLS = ["BTCUSD", "ETHUSD", "SOLUSD"]
 
 # --- accounting ---
-START_BALANCE = 100000.0
+START_BALANCE = 10000.0
 TAKER_FEE = 0.0005
 MIN_BALANCE = 1000
 CONTRACT_SIZE = {"BTCUSD": 0.001, "ETHUSD": 0.01, "SOLUSD": 1.0}
@@ -217,15 +217,18 @@ def _open_position(symbol, side, fill_price, state, now, candle_id):
 # ================= STRATEGY =================
 # 1d Heikin-Ashi, LONG + SHORT, paper-trading.
 # Current = today's forming bar, Previous = yesterday's closed bar.
-# ENTRY and EXIT both act IMMEDIATELY on the forming candle (no waiting).
 #
 #   LONG  entry : today HA close > yesterday HA close
 #   LONG  exit  : today HA close < yesterday HA open
 #   SHORT entry : today HA close < yesterday HA close
 #   SHORT exit  : today HA close > yesterday HA open
 #
-# Flip behavior: if an opposite ENTRY signal fires while in a position,
-# close current and immediately open the opposite side (same loop).
+# CHURN FIX: both ENTRY and EXIT act at most ONCE per candle.
+#   - last_entry_candle : blocks a second entry/flip on the same candle
+#   - last_exit_candle  : blocks a second exit on the same candle
+# This removes the enter->exit->enter loop caused by entry and exit
+# conditions overlapping on the same forming candle. Actions still fire
+# immediately the first time their condition is true on a candle.
 
 def process_symbol(symbol, exec_df, state):
 
@@ -260,33 +263,40 @@ def process_symbol(symbol, exec_df, state):
     long_exit_sig = ha_close_cur < ha_open_prev
     short_exit_sig = ha_close_cur > ha_open_prev
 
+    entry_used = state.get("last_entry_candle") == candle_id
+    exit_used = state.get("last_exit_candle") == candle_id
+
     # ================= MANAGE OPEN POSITION =================
     if pos:
 
         if pos["side"] == "long":
-            # Flip to short if a short entry signal fires.
-            if short_entry_sig:
+            # Flip to short: needs a fresh entry slot on this candle.
+            if short_entry_sig and not entry_used:
                 _close_position(symbol, pos, fill_price, state, now)
-                if short_exit_sig:
-                    return  # would immediately exit a fresh short; stay flat
-                _open_position(symbol, "short", fill_price, state, now, candle_id)
+                state["last_exit_candle"] = candle_id
+                if not short_exit_sig:
+                    _open_position(symbol, "short", fill_price, state, now, candle_id)
+                    state["last_entry_candle"] = candle_id
                 return
-            # Otherwise plain long exit.
-            if long_exit_sig:
+            # Plain long exit: at most once per candle.
+            if long_exit_sig and not exit_used:
                 _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
             return
 
         else:  # short position
-            # Flip to long if a long entry signal fires.
-            if long_entry_sig:
+            # Flip to long: needs a fresh entry slot on this candle.
+            if long_entry_sig and not entry_used:
                 _close_position(symbol, pos, fill_price, state, now)
-                if long_exit_sig:
-                    return  # would immediately exit a fresh long; stay flat
-                _open_position(symbol, "long", fill_price, state, now, candle_id)
+                state["last_exit_candle"] = candle_id
+                if not long_exit_sig:
+                    _open_position(symbol, "long", fill_price, state, now, candle_id)
+                    state["last_entry_candle"] = candle_id
                 return
-            # Otherwise plain short exit.
-            if short_exit_sig:
+            # Plain short exit: at most once per candle.
+            if short_exit_sig and not exit_used:
                 _close_position(symbol, pos, fill_price, state, now)
+                state["last_exit_candle"] = candle_id
             return
 
     # ================= FLAT -> LOOK FOR ENTRY =================
@@ -297,10 +307,16 @@ def process_symbol(symbol, exec_df, state):
             utils.log(f"⚠️ Balance low: {balance}", tg=True)
             return
 
+        # Only one entry per candle.
+        if entry_used:
+            return
+
         if long_entry_sig:
             _open_position(symbol, "long", fill_price, state, now, candle_id)
+            state["last_entry_candle"] = candle_id
         elif short_entry_sig:
             _open_position(symbol, "short", fill_price, state, now, candle_id)
+            state["last_entry_candle"] = candle_id
         return
 
 
@@ -472,6 +488,8 @@ def run():
     state = {
         s: {
             "position": None,
+            "last_entry_candle": None,
+            "last_exit_candle": None,
             "balance": START_BALANCE,
         } for s in SYMBOLS
     }
